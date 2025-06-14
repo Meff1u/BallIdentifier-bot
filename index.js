@@ -1,7 +1,7 @@
-const { Client, GatewayIntentBits, Partials, Collection, REST, Routes } = require('discord.js');
-require('dotenv').config();
-const fs = require('fs');
-const path = require('path');
+const { Client, GatewayIntentBits, Partials, Collection, REST, Routes } = require("discord.js");
+require("dotenv").config();
+const fs = require("fs");
+const path = require("path");
 
 const token = process.env.TOKEN;
 
@@ -10,16 +10,18 @@ const client = new Client({
         GatewayIntentBits.DirectMessages,
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.Guilds
+        GatewayIntentBits.Guilds,
     ],
-    partials: [Partials.Channel]
+    partials: [Partials.Channel],
 });
 
 client.slashCommands = new Collection();
 
 // Commands
-const slashCommandsPath = path.join(__dirname, 'commands');
-const slashCommandFiles = fs.readdirSync(slashCommandsPath).filter(file => file.endsWith('-slash.js') || file.endsWith('-context.js'));
+const slashCommandsPath = path.join(__dirname, "commands");
+const slashCommandFiles = fs
+    .readdirSync(slashCommandsPath)
+    .filter((file) => file.endsWith("-slash.js") || file.endsWith("-context.js"));
 const slashCommandsArray = [];
 for (const file of slashCommandFiles) {
     const command = require(path.join(slashCommandsPath, file));
@@ -30,8 +32,8 @@ for (const file of slashCommandFiles) {
 }
 
 // Events
-const eventsPath = path.join(__dirname, 'events');
-const eventFiles = fs.readdirSync(eventsPath).filter(file => file.endsWith('.js'));
+const eventsPath = path.join(__dirname, "events");
+const eventFiles = fs.readdirSync(eventsPath).filter((file) => file.endsWith(".js"));
 for (const file of eventFiles) {
     const event = require(path.join(eventsPath, file));
     if (event.once) {
@@ -41,18 +43,15 @@ for (const file of eventFiles) {
     }
 }
 
-client.once('ready', async () => {
-    const rest = new REST({ version: '10' }).setToken(token);
+client.once("ready", async () => {
+    const rest = new REST({ version: "10" }).setToken(token);
 
     try {
-        console.log('Global commands refreshing...');
-        await rest.put(
-            Routes.applicationCommands(client.user.id),
-            { body: slashCommandsArray }
-        );
-        console.log('Commands registered.');
+        console.log("Global commands refreshing...");
+        await rest.put(Routes.applicationCommands(client.user.id), { body: slashCommandsArray });
+        console.log("Commands registered.");
     } catch (error) {
-        console.error('Error while registering commands:', error);
+        console.error("Error while registering commands:", error);
     }
 });
 
