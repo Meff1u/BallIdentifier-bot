@@ -1,4 +1,15 @@
-const { ContextMenuCommandBuilder, ApplicationCommandType, EmbedBuilder } = require("discord.js");
+const {
+    ContextMenuCommandBuilder,
+    ApplicationCommandType,
+    EmbedBuilder,
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle,
+    ModalBuilder,
+    TextInputBuilder,
+    TextInputStyle,
+    InteractionType,
+} = require("discord.js");
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 const { imageHash } = require("image-hash");
 const sharp = require("sharp");
@@ -42,16 +53,15 @@ module.exports = {
             diff: Infinity,
             country: "",
         };
-        const hashes =
-            message.author.id == "999736048596816014"
-                ? interaction.client.hashes.BD
-                : message.author.id == "1174135035889201173"
-                ? interaction.client.hashes.DD
-                : message.author.id == "1061145299927695400"
-                ? interaction.client.hashes.EB
-                : message.author.id == "1120942938126553190"
-                ? interaction.client.hashes.HD
-                : null;
+        const idMap = {
+            "999736048596816014": { hashes: interaction.client.hashes.BD, dex: "Ballsdex" },
+            "1174135035889201173": { hashes: interaction.client.hashes.DD, dex: "DynastyDex" },
+            1061145299927695400: { hashes: interaction.client.hashes.EB, dex: "Empireballs" },
+            "1120942938126553190": { hashes: interaction.client.hashes.HD, dex: "HistoryDex" },
+        };
+
+        const { hashes, dex } = idMap[message.author.id] || {};
+
         if (message.components[0]?.components[0]?.type == 2) {
             const response = await fetch(message.attachments.first().url);
             const arrayBuffer = await response.arrayBuffer();
@@ -80,12 +90,62 @@ module.exports = {
                 if (diff === 0) break;
             }
 
+            console.log(
+                `${interaction.user.tag} identified a ball: ${compareData.country} with ${compareData.diff} diff`
+            );
+
             const embed = new EmbedBuilder()
                 .setColor("#6839A6")
                 .setTitle(compareData.country)
                 .setDescription(`**Similarity:** ${100 - compareData.diff}%`)
-                .setImage(message.attachments.first().url)
+                .setImage(
+                    `https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets/${dex}/${compareData.country.replace(
+                        / /g,
+                        "%20"
+                    )}.png`
+                )
                 .setFooter({ text: "BallIdentifier tool made by @meffiu" });
+
+            if (compareData.diff >= 16) {
+                const reportButton = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder()
+                        .setCustomId(`report_wrong_answer`)
+                        .setLabel("Wrong answer? - Report")
+                        .setStyle(ButtonStyle.Danger)
+                );
+                await interaction.editReply({
+                    embeds: [embed],
+                    components: [reportButton],
+                    ephemeral: true,
+                });
+
+                const filter = (i) =>
+                    i.customId === "report_wrong_answer" && i.user.id === interaction.user.id;
+                const collector = interaction.channel.createMessageComponentCollector({
+                    filter,
+                    time: 60000,
+                    max: 1,
+                });
+
+                collector.on("collect", async (btnInteraction) => {
+                    interaction.client[message.id] = {
+                        buffer: imageBuffer,
+                        name: message.attachments.first().name || `${message.id}.png`,
+                    };
+                    const modal = new ModalBuilder()
+                        .setCustomId(`rm_${message.id}_${message.channel.id}`)
+                        .setTitle("Report Wrong Answer");
+                    const artLinkInput = new TextInputBuilder()
+                        .setCustomId("art_link")
+                        .setLabel("Link to current spawn art (optional):")
+                        .setStyle(TextInputStyle.Short)
+                        .setRequired(false);
+                    modal.addComponents(new ActionRowBuilder().addComponents(artLinkInput));
+                    await btnInteraction.showModal(modal);
+                });
+            } else {
+                await interaction.editReply({ embeds: [embed], ephemeral: true });
+            }
 
             const dataPath = path.join(__dirname, "../assets/data.json");
             let data;
