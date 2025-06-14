@@ -1,11 +1,15 @@
 const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
 const { version } = require("../package.json");
-const { users } = require("../assets/data.json");
+const fs = require('fs');
+const path = require('path');
 
 module.exports = {
     data: new SlashCommandBuilder().setName("help").setDescription("Useful informations."),
     async execute(interaction) {
         const app = await interaction.client.application.fetch();
+        const dataPath = path.join(__dirname, "../assets/data.json");
+        const data = JSON.parse(fs.readFileSync(dataPath, "utf8"));
+        const users = data.users || {};
         const identifyAmount = Object.values(users).reduce((acc, user) => acc + user.identifyAmount, 0);
 
         const embed = new EmbedBuilder()

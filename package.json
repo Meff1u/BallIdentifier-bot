@@ -1,6 +1,6 @@
 {
   "name": "ballidentifier-bot",
-  "version": "1.0.1",
+  "version": "1.0.1a",
   "description": "Identify balls inside Discord application!",
   "main": "index.js",
   "scripts": {
