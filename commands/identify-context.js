@@ -91,7 +91,7 @@ module.exports = {
             }
 
             console.log(
-                `${interaction.user.tag} identified a ball: ${compareData.country} with ${compareData.diff} diff`
+                `${interaction.user.tag} | ${interaction.guild.name} | ${dex} | ${compareData.country} | ${compareData.diff} diff`
             );
 
             const embed = new EmbedBuilder()
