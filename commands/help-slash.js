@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require("discord.js");
+const { SlashCommandBuilder, EmbedBuilder, MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 const { version } = require("../package.json");
 const fs = require("fs");
 const path = require("path");
@@ -61,6 +61,17 @@ module.exports = {
                 "https://github.com/Meff1u/BallIdentifier-bot/blob/main/assets/tutorial.png?raw=true"
             );
 
-        await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setLabel("Buy me a coffee")
+                .setStyle(ButtonStyle.Link)
+                .setURL("https://buycoffee.to/meffiu"),
+            new ButtonBuilder()
+                .setLabel("Upvote Me")
+                .setStyle(ButtonStyle.Link)
+                .setURL("https://discord.ly/ballidentifier")
+        );
+
+        await interaction.reply({ embeds: [embed], components: [row], flags: MessageFlags.Ephemeral });
     },
 };
