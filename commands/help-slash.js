@@ -1,7 +1,7 @@
 const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
 const { version } = require("../package.json");
-const fs = require('fs');
-const path = require('path');
+const fs = require("fs");
+const path = require("path");
 
 module.exports = {
     data: new SlashCommandBuilder().setName("help").setDescription("Useful informations."),
@@ -10,7 +10,21 @@ module.exports = {
         const dataPath = path.join(__dirname, "../assets/data.json");
         const data = JSON.parse(fs.readFileSync(dataPath, "utf8"));
         const users = data.users || {};
-        const identifyAmount = Object.values(users).reduce((acc, user) => acc + user.identifyAmount, 0);
+        const identifyAmount = Object.values(users).reduce(
+            (acc, user) => acc + user.identifyAmount,
+            0
+        );
+        const uptimeMs = interaction.client.uptime;
+
+        function formatUptime(ms) {
+            const sec = Math.floor((ms / 1000) % 60);
+            const min = Math.floor((ms / (1000 * 60)) % 60);
+            const hr = Math.floor((ms / (1000 * 60 * 60)) % 24);
+            const d = Math.floor(ms / (1000 * 60 * 60 * 24));
+            return `${d > 0 ? d + "d " : ""}${hr > 0 ? hr + "h " : ""}${
+                min > 0 ? min + "m " : ""
+            }${sec}s`;
+        }
 
         const embed = new EmbedBuilder()
             .setTitle("BallIdentifier")
@@ -24,7 +38,12 @@ module.exports = {
                 },
                 {
                     name: "Statistics",
-                    value: `- **Approximate user count:** ${Math.max(app.approximateUserInstallCount, Object.values(users).length)}\n- **Identified balls:** ${identifyAmount}`,
+                    value: `- **Uptime:** ${formatUptime(
+                        uptimeMs
+                    )}\n- **Approximate user count:** ${Math.max(
+                        app.approximateUserInstallCount,
+                        Object.values(users).length
+                    )}\n- **Identified balls:** ${identifyAmount}`,
                     inline: true,
                 },
                 {

@@ -23,7 +23,10 @@ module.exports = {
             const now = Date.now();
             if (cooldown && now - cooldown < 10 * 60 * 1000) {
                 const left = Math.ceil((10 * 60 * 1000 - (now - cooldown)) / 60000);
-                await interaction.reply({ content: `You can send another report in ${left} min.`, ephemeral: true });
+                await interaction.reply({
+                    content: `You can send another report in ${left} min.`,
+                    ephemeral: true,
+                });
                 return;
             }
             const artLink = interaction.fields.getTextInputValue("art_link");
