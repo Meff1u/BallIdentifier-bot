@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
+const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require("discord.js");
 const { version } = require("../package.json");
 const fs = require("fs");
 const path = require("path");
@@ -61,6 +61,6 @@ module.exports = {
                 "https://github.com/Meff1u/BallIdentifier-bot/blob/main/assets/tutorial.png?raw=true"
             );
 
-        await interaction.reply({ embeds: [embed], ephemeral: true });
+        await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     },
 };

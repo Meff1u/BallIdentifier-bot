@@ -1,3 +1,4 @@
+const { MessageFlags } = require("discord.js");
 const FormData = require("form-data");
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
@@ -12,9 +13,9 @@ module.exports = {
             } catch (error) {
                 console.error(`Error executing command ${interaction.commandName}:`, error);
                 if (interaction.replied || interaction.deferred) {
-                    await interaction.followUp({ content: "Error.", ephemeral: true });
+                    await interaction.followUp({ content: "Error.", flags: MessageFlags.Ephemeral });
                 } else {
-                    await interaction.reply({ content: "Error.", ephemeral: true });
+                    await interaction.reply({ content: "Error.", flags: MessageFlags.Ephemeral });
                 }
             }
         } else if (interaction.isModalSubmit() && interaction.customId.startsWith("rm_")) {
@@ -25,7 +26,7 @@ module.exports = {
                 const left = Math.ceil((10 * 60 * 1000 - (now - cooldown)) / 60000);
                 await interaction.reply({
                     content: `You can send another report in ${left} min.`,
-                    ephemeral: true,
+                    flags: MessageFlags.Ephemeral,
                 });
                 return;
             }
@@ -81,11 +82,11 @@ module.exports = {
                         body: JSON.stringify(payload),
                     });
                 }
-                await interaction.reply({ content: "Report sent. Thank you!", ephemeral: true });
+                await interaction.reply({ content: "Report sent. Thank you!", flags: MessageFlags.Ephemeral });
                 client.reportCooldowns.set(interaction.user.id, now);
             } catch (e) {
                 console.error("Error sending report:", e);
-                await interaction.reply({ content: "Failed to send report.", ephemeral: true });
+                await interaction.reply({ content: "Failed to send report.", flags: MessageFlags.Ephemeral });
             }
             return;
         }

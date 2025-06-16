@@ -9,6 +9,7 @@ const {
     TextInputBuilder,
     TextInputStyle,
     InteractionType,
+    MessageFlags
 } = require("discord.js");
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 const { imageHash } = require("image-hash");
@@ -25,13 +26,13 @@ module.exports = {
         if (!message) {
             return interaction.reply({
                 content: "Error while getting message, try again.",
-                ephemeral: true,
+                flags: MessageFlags.Ephemeral,
             });
         }
         if (!message.attachments || message.attachments.size === 0) {
             return interaction.reply({
                 content: "No attachments found in the message.",
-                ephemeral: true,
+                flags: MessageFlags.Ephemeral,
             });
         }
         if (
@@ -45,17 +46,17 @@ module.exports = {
             return interaction.reply({
                 content:
                     "This command can only be used on messages from these bots: Ballsdex, DynastyDex, Empireballs, HistoryDex",
-                ephemeral: true,
+                flags: MessageFlags.Ephemeral,
             });
         }
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         let compareData = {
             diff: Infinity,
             country: "",
         };
         const idMap = {
             "999736048596816014": { hashes: interaction.client.hashes.BD, dex: "Ballsdex" },
-            "1174135035889201173": { hashes: interaction.client.hashes.DD, dex: "DynastyDex" },
+            "1174135035889201173": { hashes: interaction.client.hashes.DD, dex: "Dynastydex" },
             1061145299927695400: { hashes: interaction.client.hashes.EB, dex: "Empireballs" },
             "1120942938126553190": { hashes: interaction.client.hashes.HD, dex: "HistoryDex" },
         };
@@ -116,7 +117,7 @@ module.exports = {
                 await interaction.editReply({
                     embeds: [embed],
                     components: [reportButton],
-                    ephemeral: true,
+                    flags: MessageFlags.Ephemeral,
                 });
 
                 const filter = (i) =>
@@ -144,7 +145,7 @@ module.exports = {
                     await btnInteraction.showModal(modal);
                 });
             } else {
-                await interaction.editReply({ embeds: [embed], ephemeral: true });
+                await interaction.editReply({ embeds: [embed], flags: MessageFlags.Ephemeral });
             }
 
             const dataPath = path.join(__dirname, "../assets/data.json");
@@ -160,7 +161,7 @@ module.exports = {
             data.users[userId].identifyAmount += 1;
             fs.writeFileSync(dataPath, JSON.stringify(data, null, 4));
 
-            return await interaction.editReply({ embeds: [embed], ephemeral: true });
+            return await interaction.editReply({ embeds: [embed], flags: MessageFlags.Ephemeral });
         }
 
         function compareHashes(hash1, hash2) {

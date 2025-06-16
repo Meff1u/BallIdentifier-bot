@@ -1,5 +1,5 @@
+const { SlashCommandBuilder, MessageFlags } = require("discord.js");
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
-const { SlashCommandBuilder } = require("discord.js");
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -10,7 +10,7 @@ module.exports = {
             interaction.guildId !== "379676234566729742" ||
             interaction.user.id !== "334411435633541121"
         ) {
-            return interaction.reply({ content: "No permissions.", ephemeral: true });
+            return interaction.reply({ content: "No permissions.", flags: MessageFlags.Ephemeral });
         }
 
         const urls = {
@@ -33,11 +33,11 @@ module.exports = {
         }
         if (failed.length > 0) {
             await interaction.reply({
-                content: `Hash data refreshed, but failed for: ${failed.join(", ")}`,
-                ephemeral: true,
+                content: `Bot data refreshed, but failed for: ${failed.join(", ")}`,
+                flags: MessageFlags.Ephemeral,
             });
         } else {
-            await interaction.reply({ content: "Hash data refreshed!", ephemeral: true });
+            await interaction.reply({ content: "Bot data refreshed!", flags: MessageFlags.Ephemeral });
         }
     },
 };
