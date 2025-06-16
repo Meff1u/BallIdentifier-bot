@@ -69,7 +69,7 @@ module.exports = {
             new ButtonBuilder()
                 .setLabel("Upvote Me")
                 .setStyle(ButtonStyle.Link)
-                .setURL("https://discord.ly/ballidentifier")
+                .setURL("https://discordbotlist.com/bots/ballidentifier/upvote")
         );
 
         await interaction.reply({ embeds: [embed], components: [row], flags: MessageFlags.Ephemeral });
