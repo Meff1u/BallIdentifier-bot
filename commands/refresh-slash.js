@@ -8,7 +8,7 @@ module.exports = {
     async execute(interaction) {
         if (
             interaction.guildId !== "379676234566729742" ||
-            interaction.member.id !== "334411435633541121"
+            interaction.user.id !== "334411435633541121"
         ) {
             return interaction.reply({ content: "No permissions.", ephemeral: true });
         }
