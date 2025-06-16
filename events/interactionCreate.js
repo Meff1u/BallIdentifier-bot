@@ -27,8 +27,7 @@ module.exports = {
                 return;
             }
             const artLink = interaction.fields.getTextInputValue("art_link");
-            const webhookUrl =
-                "https://discord.com/api/webhooks/1383360719159951420/YqUX42PVUNKpz38bu6TkNThQzmCSoObJ-W1QKYpz-FTItxJlKo3AKAsP3JP18_XQObj2";
+            const webhookUrl = process.env.REPORT_WEBHOOK_URL;
             let fileBuffer = null;
             let fileName = null;
             let messageUrl = null;
