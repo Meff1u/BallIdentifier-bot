@@ -84,8 +84,9 @@ client.sendLog = async (logData) => {
                         title: logData.title || "Log",
                         description: logData.description || null,
                         fields: logData.fields || [],
-                        color: logData.color || 0x6839A6,
+                        color: logData.color || 0x6839a6,
                         timestamp: new Date().toISOString(),
+                        ...(logData.thumbnail ? { thumbnail: { url: logData.thumbnail } } : {}),
                     },
                 ],
             }),
@@ -95,7 +96,7 @@ client.sendLog = async (logData) => {
     }
 };
 
-process.on('unhandledRejection', async (reason, promise) => {
+process.on("unhandledRejection", async (reason, promise) => {
     const webhookUrl = process.env.ERROR_WEBHOOK_URL;
     if (!webhookUrl) return;
     try {
@@ -106,8 +107,10 @@ process.on('unhandledRejection', async (reason, promise) => {
                 embeds: [
                     {
                         title: "Unhandled Rejection",
-                        description: `**Reason:** ${reason instanceof Error ? reason.stack : reason}\n**Promise:** ${promise}`,
-                        color: 0xFF0000,
+                        description: `**Reason:** ${
+                            reason instanceof Error ? reason.stack : reason
+                        }\n**Promise:** ${promise}`,
+                        color: 0xff0000,
                         timestamp: new Date().toISOString(),
                     },
                 ],
@@ -116,7 +119,7 @@ process.on('unhandledRejection', async (reason, promise) => {
     } catch (e) {}
 });
 
-process.on('uncaughtException', async (error) => {
+process.on("uncaughtException", async (error) => {
     const webhookUrl = process.env.ERROR_WEBHOOK_URL;
     if (!webhookUrl) return;
     try {
@@ -128,7 +131,7 @@ process.on('uncaughtException', async (error) => {
                     {
                         title: "Uncaught Exception",
                         description: error.stack || String(error),
-                        color: 0xFF0000,
+                        color: 0xff0000,
                         timestamp: new Date().toISOString(),
                     },
                 ],

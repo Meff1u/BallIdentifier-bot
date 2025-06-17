@@ -9,7 +9,7 @@ const {
     TextInputBuilder,
     TextInputStyle,
     InteractionType,
-    MessageFlags
+    MessageFlags,
 } = require("discord.js");
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 const { imageHash } = require("image-hash");
@@ -91,26 +91,30 @@ module.exports = {
                 if (diff === 0) break;
             }
 
+            const imageUrl = `https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets/${dex}/${compareData.country.replace(
+                / /g,
+                "%20"
+            )}.png`;
             await interaction.client.sendLog({
                 title: "Identify Log",
                 fields: [
-                    { name: "User", value: `${interaction.user.tag} (${interaction.user.id})`, inline: true },
+                    {
+                        name: "User",
+                        value: `${interaction.user.tag} (${interaction.user.id})`,
+                        inline: false,
+                    },
                     { name: "Dex", value: dex, inline: true },
                     { name: "Country", value: compareData.country, inline: true },
                     { name: "Diff", value: String(compareData.diff), inline: true },
                 ],
+                thumbnail: imageUrl,
             });
 
             const embed = new EmbedBuilder()
                 .setColor("#6839A6")
                 .setTitle(compareData.country)
                 .setDescription(`**Similarity:** ${100 - compareData.diff}%`)
-                .setImage(
-                    `https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets/${dex}/${compareData.country.replace(
-                        / /g,
-                        "%20"
-                    )}.png`
-                )
+                .setImage(imageUrl)
                 .setFooter({ text: "BallIdentifier tool made by @meffiu" });
 
             if (compareData.diff >= 16) {
