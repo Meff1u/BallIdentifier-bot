@@ -12,6 +12,25 @@ module.exports = {
                 await command.execute(interaction);
             } catch (error) {
                 console.error(`Error executing command ${interaction.commandName}:`, error);
+                const webhookUrl = process.env.ERROR_WEBHOOK_URL;
+                if (webhookUrl) {
+                    try {
+                        await fetch(webhookUrl, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                embeds: [
+                                    {
+                                        title: `Command Error: ${interaction.commandName}`,
+                                        description: error.stack || String(error),
+                                        color: 0xFF0000,
+                                        timestamp: new Date().toISOString(),
+                                    },
+                                ],
+                            }),
+                        });
+                    } catch (e) {}
+                }
                 if (interaction.replied || interaction.deferred) {
                     await interaction.followUp({ content: "Error.", flags: MessageFlags.Ephemeral });
                 } else {

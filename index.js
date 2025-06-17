@@ -2,6 +2,7 @@ const { Client, GatewayIntentBits, Partials, Collection, REST, Routes } = requir
 require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
+const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
 const token = process.env.TOKEN;
 
@@ -68,6 +69,72 @@ client.once("ready", async () => {
             console.error("Error while registering refresh command for guild:", error);
         }
     }
+});
+
+client.sendLog = async (logData) => {
+    const webhookUrl = process.env.LOG_WEBHOOK_URL;
+    if (!webhookUrl) return;
+    try {
+        await fetch(webhookUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                embeds: [
+                    {
+                        title: logData.title || "Log",
+                        description: logData.description || null,
+                        fields: logData.fields || [],
+                        color: logData.color || 0x6839A6,
+                        timestamp: new Date().toISOString(),
+                    },
+                ],
+            }),
+        });
+    } catch (e) {
+        console.error("Error sending log:", e);
+    }
+};
+
+process.on('unhandledRejection', async (reason, promise) => {
+    const webhookUrl = process.env.ERROR_WEBHOOK_URL;
+    if (!webhookUrl) return;
+    try {
+        await fetch(webhookUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                embeds: [
+                    {
+                        title: "Unhandled Rejection",
+                        description: `**Reason:** ${reason instanceof Error ? reason.stack : reason}\n**Promise:** ${promise}`,
+                        color: 0xFF0000,
+                        timestamp: new Date().toISOString(),
+                    },
+                ],
+            }),
+        });
+    } catch (e) {}
+});
+
+process.on('uncaughtException', async (error) => {
+    const webhookUrl = process.env.ERROR_WEBHOOK_URL;
+    if (!webhookUrl) return;
+    try {
+        await fetch(webhookUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                embeds: [
+                    {
+                        title: "Uncaught Exception",
+                        description: error.stack || String(error),
+                        color: 0xFF0000,
+                        timestamp: new Date().toISOString(),
+                    },
+                ],
+            }),
+        });
+    } catch (e) {}
 });
 
 client.login(token);

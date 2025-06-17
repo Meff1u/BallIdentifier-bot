@@ -91,9 +91,15 @@ module.exports = {
                 if (diff === 0) break;
             }
 
-            console.log(
-                `${interaction.user.tag} | ${dex} | ${compareData.country} | ${compareData.diff} diff`
-            );
+            await interaction.client.sendLog({
+                title: "Identify Log",
+                fields: [
+                    { name: "User", value: `${interaction.user.tag} (${interaction.user.id})`, inline: true },
+                    { name: "Dex", value: dex, inline: true },
+                    { name: "Country", value: compareData.country, inline: true },
+                    { name: "Diff", value: String(compareData.diff), inline: true },
+                ],
+            });
 
             const embed = new EmbedBuilder()
                 .setColor("#6839A6")
