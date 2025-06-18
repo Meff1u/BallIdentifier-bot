@@ -207,18 +207,20 @@ module.exports = {
                     await interaction.editReply({ embeds: [embed], flags: MessageFlags.Ephemeral });
                 }
 
-                const dataPath = path.join(__dirname, "../assets/data.json");
-                let data;
-                try {
-                    data = JSON.parse(fs.readFileSync(dataPath, "utf8"));
-                } catch (e) {
-                    data = { users: {} };
+                if (compareData.diff <= 15) {
+                    const dataPath = path.join(__dirname, "../assets/data.json");
+                    let data;
+                    try {
+                        data = JSON.parse(fs.readFileSync(dataPath, "utf8"));
+                    } catch (e) {
+                        data = { users: {} };
+                    }
+                    const userId = interaction.user.id;
+                    if (!data.users) data.users = {};
+                    if (!data.users[userId]) data.users[userId] = { identifyAmount: 0 };
+                    data.users[userId].identifyAmount += 1;
+                    fs.writeFileSync(dataPath, JSON.stringify(data, null, 4));
                 }
-                const userId = interaction.user.id;
-                if (!data.users) data.users = {};
-                if (!data.users[userId]) data.users[userId] = { identifyAmount: 0 };
-                data.users[userId].identifyAmount += 1;
-                fs.writeFileSync(dataPath, JSON.stringify(data, null, 4));
 
                 return await interaction.editReply({
                     embeds: [embed],
