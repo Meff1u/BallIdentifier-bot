@@ -24,8 +24,8 @@ module.exports = {
         const uptimeMs = interaction.client.uptime;
         let upvoted = "❌";
         if (
-            Array.isArray(interaction.client.upvotes) &&
-            interaction.client.upvotes.some((v) => v.user_id === interaction.user.id)
+            Array.isArray(interaction.client.upvotes.upvotes) &&
+            interaction.client.upvotes.upvotes.some((v) => v.user_id === interaction.user.id)
         ) {
             upvoted = "✅";
         }
@@ -57,7 +57,7 @@ module.exports = {
                     )}\n- **Approximate user count:** ${Math.max(
                         app.approximateUserInstallCount,
                         Object.values(users).length
-                    )}\n- **Identified balls:** ${identifyAmount}\n**Upvoted:** ${upvoted}`,
+                    )}\n- **Identified balls:** ${identifyAmount}\n- **Upvoted:** ${upvoted}`,
                     inline: true,
                 },
                 {
