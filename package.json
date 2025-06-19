@@ -1,6 +1,6 @@
 {
   "name": "ballidentifier-bot",
-  "version": "1.0.6a",
+  "version": "1.1.0",
   "description": "Identify balls inside Discord application!",
   "main": "index.js",
   "scripts": {
@@ -10,6 +10,7 @@
   "license": "MIT",
   "dependencies": {
     "discord.js": "^14.19.3",
+    "discordbotlist": "^1.1.1",
     "dotenv": "^16.4.5",
     "image-hash": "^5.3.2",
     "node-fetch": "^3.3.2",

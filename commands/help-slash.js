@@ -1,4 +1,11 @@
-const { SlashCommandBuilder, EmbedBuilder, MessageFlags, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
+const {
+    SlashCommandBuilder,
+    EmbedBuilder,
+    MessageFlags,
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle,
+} = require("discord.js");
 const { version } = require("../package.json");
 const fs = require("fs");
 const path = require("path");
@@ -15,6 +22,13 @@ module.exports = {
             0
         );
         const uptimeMs = interaction.client.uptime;
+        let upvoted = "❌";
+        if (
+            Array.isArray(interaction.client.upvotes) &&
+            interaction.client.upvotes.some((v) => v.user_id === interaction.user.id)
+        ) {
+            upvoted = "✅";
+        }
 
         function formatUptime(ms) {
             const sec = Math.floor((ms / 1000) % 60);
@@ -43,12 +57,17 @@ module.exports = {
                     )}\n- **Approximate user count:** ${Math.max(
                         app.approximateUserInstallCount,
                         Object.values(users).length
-                    )}\n- **Identified balls:** ${identifyAmount}`,
+                    )}\n- **Identified balls:** ${identifyAmount}\n**Upvoted:** ${upvoted}`,
                     inline: true,
                 },
                 {
-                    name: "More Information",
+                    name: "Links",
                     value: "[GitHub Repository](https://github.com/Meff1u/BallIdentifier-bot)\n[Website](https://ballidentifier.xyz)",
+                    inline: false,
+                },
+                {
+                    name: "Upvote System",
+                    value: "In version 1.1.0 - upvote system was implemented.\nThe user who has upvoted the bot in the last 12 hours - has no restrictions.\nOtherwise the identification function is limited to one use per 10 minutes.\nFor you, it's a moment, a couple of clicks - and it will allow the bot to grow for a wider audience.\n-# Bot is checking for upvotes every 3 minutes.",
                     inline: false,
                 },
                 {
@@ -72,6 +91,10 @@ module.exports = {
                 .setURL("https://discordbotlist.com/bots/ballidentifier/upvote")
         );
 
-        await interaction.reply({ embeds: [embed], components: [row], flags: MessageFlags.Ephemeral });
+        await interaction.reply({
+            embeds: [embed],
+            components: [row],
+            flags: MessageFlags.Ephemeral,
+        });
     },
 };

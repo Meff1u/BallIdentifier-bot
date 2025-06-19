@@ -1,4 +1,5 @@
 const { Client, GatewayIntentBits, Partials, Collection, REST, Routes } = require("discord.js");
+const { createDjsClient } = require("discordbotlist");
 require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
@@ -69,6 +70,33 @@ client.once("ready", async () => {
             console.error("Error while registering refresh command for guild:", error);
         }
     }
+
+    // Listening to votes from Discord Bot List
+    client.dbl = createDjsClient(process.env.DBL_TOKEN, client);
+    client.dbl.startPolling(180000);
+    client.dbl.on("vote", async (vote) => {
+        await client.fetchUpvotes();
+        try {
+            const webhookUrl = process.env.UPVOTE_WEBHOOK_URL;
+            if (!webhookUrl) return;
+            await fetch(webhookUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    embeds: [
+                        {
+                            title: "New Upvote!",
+                            description: `<@${vote.id}> (${vote.username}) just upvoted the bot on DiscordBotList!`,
+                            color: 0x00ff00,
+                            timestamp: vote.time ? new Date(vote.time).toISOString() : new Date().toISOString(),
+                        },
+                    ],
+                }),
+            });
+        } catch (e) {
+            console.error("Error sending upvote notification:", e);
+        }
+    });
 });
 
 client.sendLog = async (logData) => {

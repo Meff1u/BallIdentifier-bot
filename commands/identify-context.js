@@ -27,6 +27,20 @@ module.exports = {
         .setName("Identify")
         .setType(ApplicationCommandType.Message),
     async execute(interaction) {
+        if (!interaction.client.identifyCooldowns) interaction.client.identifyCooldowns = new Map();
+        const isUpvoter = Array.isArray(interaction.client.upvotes) && interaction.client.upvotes.some(v => v.user === interaction.user.id);
+        if (!isUpvoter) {
+            const cooldown = interaction.client.identifyCooldowns.get(interaction.user.id);
+            const now = Date.now();
+            if (cooldown && now - cooldown < 10 * 60 * 1000) {
+                const left = Math.ceil((10 * 60 * 1000 - (now - cooldown)) / 60000);
+                return interaction.reply({
+                    content: `You can use this function again in ${left} min. ([Upvoters](https://discordbotlist.com/bots/ballidentifier/upvote) have no cooldown)`,
+                    flags: MessageFlags.Ephemeral,
+                });
+            }
+            interaction.client.identifyCooldowns.set(interaction.user.id, now);
+        }
         try {
             const message = interaction.targetMessage;
             if (!message) {
@@ -180,7 +194,7 @@ module.exports = {
                                                         value: message.attachments.first().url,
                                                     },
                                                 ],
-                                                image: { url: imageUrl },
+                                                thumbnail: { url: imageUrl },
                                                 timestamp: new Date().toISOString(),
                                             },
                                         ],
