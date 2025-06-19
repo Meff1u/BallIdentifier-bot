@@ -28,7 +28,9 @@ module.exports = {
         .setType(ApplicationCommandType.Message),
     async execute(interaction) {
         if (!interaction.client.identifyCooldowns) interaction.client.identifyCooldowns = new Map();
-        const isUpvoter = Array.isArray(interaction.client.upvotes.upvotes) && interaction.client.upvotes.upvotes.some(v => v.user_id === interaction.user.id);
+        const isUpvoter =
+            Array.isArray(interaction.client.upvotes.upvotes) &&
+            interaction.client.upvotes.upvotes.some((v) => v.user_id === interaction.user.id);
         if (!isUpvoter) {
             const cooldown = interaction.client.identifyCooldowns.get(interaction.user.id);
             const now = Date.now();
@@ -73,6 +75,13 @@ module.exports = {
                 1061145299927695400: { hashes: interaction.client.hashes.EB, dex: "Empireballs" },
                 "1120942938126553190": { hashes: interaction.client.hashes.HD, dex: "HistoryDex" },
             };
+            const dataPath = path.join(__dirname, "../assets/data.json");
+            let data;
+            try {
+                data = JSON.parse(fs.readFileSync(dataPath, "utf8"));
+            } catch (e) {
+                data = { users: {} };
+            }
 
             const { hashes, dex } = idMap[message.author.id] || {};
 
@@ -129,7 +138,7 @@ module.exports = {
                     .setTitle(compareData.country)
                     .setDescription(`**Similarity:** ${100 - compareData.diff}%`)
                     .setImage(imageUrl)
-                    .setFooter({ text: "BallIdentifier tool made by @meffiu" });
+                    .setFooter({ text: `You have identified ${(data.users[interaction.user.id]?.identifyAmount || 0) + 1} balls!` });
 
                 if (compareData.diff >= 16) {
                     const reportButton = new ActionRowBuilder().addComponents(
@@ -222,13 +231,6 @@ module.exports = {
                 }
 
                 if (compareData.diff <= 15) {
-                    const dataPath = path.join(__dirname, "../assets/data.json");
-                    let data;
-                    try {
-                        data = JSON.parse(fs.readFileSync(dataPath, "utf8"));
-                    } catch (e) {
-                        data = { users: {} };
-                    }
                     const userId = interaction.user.id;
                     if (!data.users) data.users = {};
                     if (!data.users[userId]) data.users[userId] = { identifyAmount: 0 };
