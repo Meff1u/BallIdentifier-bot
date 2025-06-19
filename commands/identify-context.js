@@ -28,7 +28,7 @@ module.exports = {
         .setType(ApplicationCommandType.Message),
     async execute(interaction) {
         if (!interaction.client.identifyCooldowns) interaction.client.identifyCooldowns = new Map();
-        const isUpvoter = Array.isArray(interaction.client.upvotes.upvotes) && interaction.client.upvotes.upvotes.some(v => v.user === interaction.user.id);
+        const isUpvoter = Array.isArray(interaction.client.upvotes.upvotes) && interaction.client.upvotes.upvotes.some(v => v.user_id === interaction.user.id);
         if (!isUpvoter) {
             const cooldown = interaction.client.identifyCooldowns.get(interaction.user.id);
             const now = Date.now();
