@@ -1,5 +1,4 @@
 const { Client, GatewayIntentBits, Partials, Collection, REST, Routes } = require("discord.js");
-const { createDjsClient } = require("discordbotlist");
 require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
