@@ -1,10 +1,9 @@
 const { SlashCommandBuilder, MessageFlags } = require("discord.js");
-const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName("refresh")
-        .setDescription("Refreshes bot's hash data (admin only)."),
+        .setDescription("Refreshes bot's hash data, upvotes, and DBL stats (admin only)."),
     async execute(interaction) {
         if (
             interaction.guildId !== "379676234566729742" ||
@@ -13,31 +12,40 @@ module.exports = {
             return interaction.reply({ content: "No permissions.", flags: MessageFlags.Ephemeral });
         }
 
-        const urls = {
-            BD: "https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets/jsons/BallsdexHashes.json",
-            DD: "https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets/jsons/DynastydexHashes.json",
-            EB: "https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets/jsons/EmpireballsHashes.json",
-            HD: "https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets/jsons/HistoryDexHashes.json",
-        };
-        interaction.client.hashes = {};
-        let failed = [];
-        for (const [key, url] of Object.entries(urls)) {
-            try {
-                const response = await fetch(url);
-                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-                const data = await response.json();
-                interaction.client.hashes[key] = data;
-            } catch (error) {
-                failed.push(key);
-            }
+        let content = "Starting refresh...";
+        await interaction.reply({ content, flags: MessageFlags.Ephemeral });
+
+        // Step 1: Refresh Hashes
+        try {
+            await interaction.client.fetchHashes();
+            content += "\n✅ Hashes refreshed.";
+        } catch (err) {
+            content += `\n❌ Failed to refresh hashes: ${err.message}`;
+            await interaction.editReply({ content });
+            return;
         }
-        if (failed.length > 0) {
-            await interaction.reply({
-                content: `Bot data refreshed, but failed for: ${failed.join(", ")}`,
-                flags: MessageFlags.Ephemeral,
-            });
-        } else {
-            await interaction.reply({ content: "Bot data refreshed!", flags: MessageFlags.Ephemeral });
+        await interaction.editReply({ content });
+
+        // Step 2: Refresh Upvotes
+        try {
+            await interaction.client.fetchUpvotes();
+            content += "\n✅ Upvotes refreshed.";
+        } catch (err) {
+            content += `\n❌ Failed to refresh upvotes: ${err.message}`;
+            await interaction.editReply({ content });
+            return;
         }
+        await interaction.editReply({ content });
+
+        // Step 3: Post DBL Stats
+        try {
+            await interaction.client.postDBLStats();
+            content += "\n✅ DBL stats posted.";
+        } catch (err) {
+            content += `\n❌ Failed to post DBL stats: ${err.message}`;
+            await interaction.editReply({ content });
+            return;
+        }
+        await interaction.editReply({ content });
     },
 };
