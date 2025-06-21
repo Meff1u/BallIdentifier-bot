@@ -16,7 +16,6 @@ const client = new Client({
     ],
     partials: [Partials.Channel],
 });
-client.dbl = createDjsClient(process.env.DBL_TOKEN, client);
 
 client.slashCommands = new Collection();
 
@@ -73,6 +72,8 @@ client.once("ready", async () => {
     }
 
     // Listening to votes from Discord Bot List
+    await new Promise((resolve) => setTimeout(resolve, 10000));
+    client.dbl = createDjsClient(process.env.DBL_TOKEN, client);
     client.dbl.startPolling(180000);
     client.dbl.on("vote", async (vote) => {
         await client.fetchUpvotes();
