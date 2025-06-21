@@ -43,7 +43,12 @@ module.exports = {
                 console.error("Error fetching upvotes from DBL:", e);
             }
         };
-        await client.fetchUpvotes();
+
+        async function upvoteLoop() {
+            await client.fetchUpvotes();
+            setTimeout(upvoteLoop, 60 * 60 * 1000);
+        }
+        upvoteLoop();
 
         try {
             const app = await client.application.fetch();
