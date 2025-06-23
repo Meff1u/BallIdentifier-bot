@@ -12,21 +12,26 @@ module.exports = {
 
         client.fetchHashes = async function () {
             const urls = {
-                BD: "https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets/jsons/BallsdexHashes.json",
-                DD: "https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets/jsons/DynastydexHashes.json",
-                EB: "https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets/jsons/EmpireballsHashes.json",
-                HD: "https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets/jsons/HistoryDexHashes.json",
+                BD: "https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets/jsons/Ballsdex",
+                DD: "https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets/jsons/Dynastydex",
+                EB: "https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets/jsons/Empireballs",
+                HD: "https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets/jsons/HistoryDex",
             };
             client.hashes = {};
+            client.rarities = {};
             for (const [key, url] of Object.entries(urls)) {
                 try {
-                    const response = await fetch(url);
-                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-                    const data = await response.json();
-                    client.hashes[key] = data;
-                    console.log(`Fetched ${key} hashes successfully.`);
+                    const response1 = await fetch(`${url}.json`);
+                    if (!response1.ok) throw new Error(`HTTP error! status: ${response1.status}`);
+                    const data1 = await response1.json();
+                    const response2 = await fetch(`${url}Hashes.json`);
+                    if (!response2.ok) throw new Error(`HTTP error! status: ${response2.status}`);
+                    const data2 = await response2.json();
+                    client.hashes[key] = data2;
+                    client.rarities[key] = data1;
+                    console.log(`Fetched ${key} hashes and rarities successfully.`);
                 } catch (error) {
-                    console.error(`Failed to fetch ${key} hashes:`, error);
+                    console.error(`Failed to fetch ${key} hashes/rarities:`, error);
                 }
             }
         };
@@ -70,7 +75,7 @@ module.exports = {
                     app.approximateUserInstallCount,
                     Object.values(users).length
                 );
-                const guildCount = client.guilds.cache.size;
+                const guildCount = client.guilds.cache.size || 0;
                 await client.dbl.postBotStats({ guilds: guildCount, users: userCount });
                 console.log("DBL stats posted.");
             } catch (e) {

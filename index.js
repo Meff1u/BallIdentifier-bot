@@ -87,6 +87,7 @@ client.sendLog = async (logData) => {
                         color: logData.color || 0x6839a6,
                         timestamp: new Date().toISOString(),
                         ...(logData.thumbnail ? { thumbnail: { url: logData.thumbnail } } : {}),
+                        ...(logData.image ? { image: { url: logData.image } } : {}),
                     },
                 ],
             }),

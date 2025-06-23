@@ -19,7 +19,6 @@ const SUPPORTED_BOT_IDS = [
     "1061145299927695400",
     "1120942938126553190",
 ];
-const LOG_COLOR = 0x6839a6;
 const REPORT_COLOR = 0xfee75c;
 
 module.exports = {
@@ -70,10 +69,26 @@ module.exports = {
                 country: "",
             };
             const idMap = {
-                "999736048596816014": { hashes: interaction.client.hashes.BD, dex: "Ballsdex" },
-                "1174135035889201173": { hashes: interaction.client.hashes.DD, dex: "Dynastydex" },
-                1061145299927695400: { hashes: interaction.client.hashes.EB, dex: "Empireballs" },
-                "1120942938126553190": { hashes: interaction.client.hashes.HD, dex: "HistoryDex" },
+                "999736048596816014": {
+                    hashes: interaction.client.hashes.BD,
+                    dex: "Ballsdex",
+                    key: "BD",
+                },
+                "1174135035889201173": {
+                    hashes: interaction.client.hashes.DD,
+                    dex: "Dynastydex",
+                    key: "DD",
+                },
+                1061145299927695400: {
+                    hashes: interaction.client.hashes.EB,
+                    dex: "Empireballs",
+                    key: "EB",
+                },
+                "1120942938126553190": {
+                    hashes: interaction.client.hashes.HD,
+                    dex: "HistoryDex",
+                    dex: "HD",
+                },
             };
             const dataPath = path.join(__dirname, "../assets/data.json");
             let data;
@@ -83,7 +98,7 @@ module.exports = {
                 data = { users: {} };
             }
 
-            const { hashes, dex } = idMap[message.author.id] || {};
+            const { hashes, dex, dKey } = idMap[message.author.id] || {};
 
             if (message.components[0]?.components[0]?.type == 2) {
                 const response = await fetch(message.attachments.first().url);
@@ -113,32 +128,56 @@ module.exports = {
                     if (diff === 0) break;
                 }
 
+                let logColor =
+                    compareData.diff <= 10
+                        ? 0x00ff00
+                        : compareData.diff <= 15
+                        ? 0xfee75c
+                        : 0xff0000;
+
                 const imageUrl = `https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets/${dex}/${compareData.country.replace(
                     / /g,
                     "%20"
                 )}.png`;
+                const logFields = [
+                    {
+                        name: "User",
+                        value: `${interaction.user.tag} (${interaction.user.id})`,
+                        inline: false,
+                    },
+                    { name: "Dex", value: dex, inline: true },
+                    { name: "Country", value: compareData.country, inline: true },
+                    { name: "Diff", value: String(compareData.diff), inline: true },
+                ];
+                if (compareData.diff >= 16) {
+                    logFields.push({ name: "Target Spawn Art", value: "\u200B" });
+                }
                 await interaction.client.sendLog({
                     title: "Identify Log",
-                    fields: [
-                        {
-                            name: "User",
-                            value: `${interaction.user.tag} (${interaction.user.id})`,
-                            inline: false,
-                        },
-                        { name: "Dex", value: dex, inline: true },
-                        { name: "Country", value: compareData.country, inline: true },
-                        { name: "Diff", value: String(compareData.diff), inline: true },
-                    ],
+                    fields: logFields,
                     thumbnail: imageUrl,
-                    color: LOG_COLOR,
+                    image: compareData.diff >= 16 ? message.attachments.first().url : null,
+                    color: logColor,
                 });
 
                 const embed = new EmbedBuilder()
-                    .setColor(LOG_COLOR)
+                    .setColor(0xa020f0)
                     .setTitle(compareData.country)
-                    .setDescription(`**Similarity:** ${100 - compareData.diff}%`)
+                    .setDescription(
+                        `**Similarity:** ${100 - compareData.diff}%\n**Rarity:** ${
+                            interaction.client.rarities[dKey]?.[compareData.country]?.rarity
+                                ? `t${
+                                      interaction.client.rarities[dKey][compareData.country].rarity
+                                  }`
+                                : "Not found"
+                        }`
+                    )
                     .setImage(imageUrl)
-                    .setFooter({ text: `You have identified ${(data.users[interaction.user.id]?.identifyAmount || 0) + 1} balls!` });
+                    .setFooter({
+                        text: `You have identified ${
+                            (data.users[interaction.user.id]?.identifyAmount || 0) + 1
+                        } balls!`,
+                    });
 
                 if (compareData.diff >= 16) {
                     const reportButton = new ActionRowBuilder().addComponents(
