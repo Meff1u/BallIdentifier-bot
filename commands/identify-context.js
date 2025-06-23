@@ -72,17 +72,17 @@ module.exports = {
                 "999736048596816014": {
                     hashes: interaction.client.hashes.BD,
                     dex: "Ballsdex",
-                    dkey: "BD",
+                    dKey: "BD",
                 },
                 "1174135035889201173": {
                     hashes: interaction.client.hashes.DD,
                     dex: "Dynastydex",
-                    dkey: "DD",
+                    dKey: "DD",
                 },
                 1061145299927695400: {
                     hashes: interaction.client.hashes.EB,
                     dex: "Empireballs",
-                    dkey: "EB",
+                    dKey: "EB",
                 },
                 "1120942938126553190": {
                     hashes: interaction.client.hashes.HD,
@@ -159,6 +159,8 @@ module.exports = {
                     image: compareData.diff >= 16 ? message.attachments.first().url : null,
                     color: logColor,
                 });
+
+                console.log(interaction.client.rarities[dKey])
 
                 const embed = new EmbedBuilder()
                     .setColor(0xa020f0)
