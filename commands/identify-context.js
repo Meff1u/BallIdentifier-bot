@@ -72,22 +72,22 @@ module.exports = {
                 "999736048596816014": {
                     hashes: interaction.client.hashes.BD,
                     dex: "Ballsdex",
-                    key: "BD",
+                    dkey: "BD",
                 },
                 "1174135035889201173": {
                     hashes: interaction.client.hashes.DD,
                     dex: "Dynastydex",
-                    key: "DD",
+                    dkey: "DD",
                 },
                 1061145299927695400: {
                     hashes: interaction.client.hashes.EB,
                     dex: "Empireballs",
-                    key: "EB",
+                    dkey: "EB",
                 },
                 "1120942938126553190": {
                     hashes: interaction.client.hashes.HD,
                     dex: "HistoryDex",
-                    dex: "HD",
+                    dKey: "HD",
                 },
             };
             const dataPath = path.join(__dirname, "../assets/data.json");
