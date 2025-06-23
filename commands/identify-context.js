@@ -160,8 +160,6 @@ module.exports = {
                     color: logColor,
                 });
 
-                console.log(interaction.client.rarities[dKey])
-
                 const embed = new EmbedBuilder()
                     .setColor(0xa020f0)
                     .setTitle(compareData.country)
