@@ -148,6 +148,7 @@ module.exports = {
                     { name: "Dex", value: dex, inline: true },
                     { name: "Country", value: compareData.country, inline: true },
                     { name: "Diff", value: String(compareData.diff), inline: true },
+                    { name: "Rarity", value: `t${interaction.client.rarities[dKey]?.[compareData.country]?.rarity || "Not found"}`, inline: true },
                 ];
                 if (compareData.diff >= 16) {
                     logFields.push({ name: "Target Spawn Art", value: "\u200B" });

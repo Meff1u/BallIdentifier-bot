@@ -18,7 +18,7 @@ module.exports = {
         // Step 1: Refresh Hashes
         try {
             await interaction.client.fetchHashes();
-            content += "\n✅ Hashes refreshed.";
+            content += "\n✅ Hashes and rarities refreshed.";
         } catch (err) {
             content += `\n❌ Failed to refresh hashes: ${err.message}`;
             await interaction.editReply({ content });

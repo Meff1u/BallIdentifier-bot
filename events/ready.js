@@ -46,7 +46,32 @@ module.exports = {
                     }
                 );
                 if (upvoteRes.ok) {
-                    client.upvotes = await upvoteRes.json();
+                    const fetchedUpvotes = await upvoteRes.json();
+
+                    const upvotesFilePath = path.join(__dirname, "../assets/upvotes.json");
+                    let existingUpvotes = [];
+                    try {
+                        existingUpvotes = JSON.parse(fs.readFileSync(upvotesFilePath, "utf8"));
+                    } catch (e) {
+                        console.warn("No existing upvotes file found, starting fresh.");
+                    }
+
+                    const fetchedUserIds = new Set(fetchedUpvotes.upvotes.map((u) => u.user_id));
+                    const missingUsers = existingUpvotes.filter(
+                        (u) => !fetchedUserIds.has(u.user_id)
+                    );
+
+                    if (missingUsers.length > 0) {
+                        client.upvoteReminder(missingUsers);
+                        console.log("Users in file but not in fetched data:", missingUsers);
+                    }
+
+                    fs.writeFileSync(
+                        upvotesFilePath,
+                        JSON.stringify(fetchedUpvotes.upvotes, null, 4)
+                    );
+
+                    client.upvotes = fetchedUpvotes;
                     console.log(client.upvotes);
                 } else {
                     client.upvotes = [];
@@ -55,6 +80,31 @@ module.exports = {
             } catch (e) {
                 client.upvotes = [];
                 console.error("Error fetching upvotes from DBL:", e);
+            }
+        };
+
+        client.upvoteReminder = async function (userIds) {
+            const dataPath = path.join(__dirname, "../assets/data.json");
+            let data;
+            try {
+                data = JSON.parse(fs.readFileSync(dataPath, "utf8"));
+            } catch (e) {
+                data = { users: {} };
+            }
+
+            for (const user of userIds) {
+                const userId = user.user_id;
+                if (data.users[userId]?.notifications?.reminder === true) {
+                    try {
+                        const userObject = await client.users.fetch(userId);
+                        await userObject.send(
+                            "Your upvote expired! [Upvote](https://discordbotlist.com/bots/ballidentifier/upvote) again!"
+                        );
+                        console.log(`Reminder sent to user ${userId}`);
+                    } catch (e) {
+                        console.error(`Failed to send reminder to user ${userId}:`, e);
+                    }
+                }
             }
         };
 
@@ -87,6 +137,25 @@ module.exports = {
         client.dbl.on("vote", async (vote) => {
             await client.fetchUpvotes();
             try {
+                const dataPath = path.join(__dirname, "../assets/data.json");
+                let data;
+                try {
+                    data = JSON.parse(fs.readFileSync(dataPath, "utf8"));
+                } catch (e) {
+                    data = { users: {} };
+                }
+
+                const userId = vote.id;
+                if (data.users[userId]?.notifications?.thanks !== false) {
+                    try {
+                        const userObject = await client.users.fetch(userId);
+                        await userObject.send("Thanks for voting!\n-# You can toggle this message in /notifications command");
+                        console.log(`Thanks message sent to user ${userId}`);
+                    } catch (e) {
+                        console.error(`Failed to send thanks message to user ${userId}:`, e);
+                    }
+                }
+
                 const webhookUrl = process.env.UPVOTE_WEBHOOK_URL;
                 if (!webhookUrl) return;
                 await fetch(webhookUrl, {
