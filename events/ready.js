@@ -149,7 +149,7 @@ module.exports = {
                 if (data.users[userId]?.notifications?.thanks !== false) {
                     try {
                         const userObject = await client.users.fetch(userId);
-                        await userObject.send("Thanks for voting!\n-# You can toggle this message in /notifications command");
+                        await userObject.send("Thanks for voting!\n-# You can toggle this message in </notifications:1388927499248996473> command");
                         console.log(`Thanks message sent to user ${userId}`);
                     } catch (e) {
                         console.error(`Failed to send thanks message to user ${userId}:`, e);

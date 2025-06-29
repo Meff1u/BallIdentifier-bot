@@ -14,6 +14,7 @@ module.exports = {
         .setName("notifications")
         .setDescription("Manage your notification preferences."),
     async execute(interaction) {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const dataPath = path.join(__dirname, "../assets/data.json");
         let data;
         try {
@@ -23,7 +24,11 @@ module.exports = {
         }
 
         const userId = interaction.user.id;
-        if (!data.users[userId]) data.users[userId] = { notifications: {} };
+        if (!data.users[userId]) {
+            data.users[userId] = { notifications: {} };
+        } else if (!data.users[userId].notifications) {
+            data.users[userId].notifications = {};
+        }
 
         const embed = new EmbedBuilder()
             .setColor(0x00aaff)
@@ -41,14 +46,21 @@ module.exports = {
                 .setStyle(ButtonStyle.Danger)
         );
 
-        await interaction.reply({ embeds: [embed], components: [row], flags: MessageFlags.Ephemeral });
+        await interaction.editReply({ embeds: [embed], components: [row], flags: MessageFlags.Ephemeral });
 
         const filter = (i) => i.user.id === interaction.user.id;
         const collector = interaction.channel.createMessageComponentCollector({ filter, time: 60000 });
 
         collector.on("collect", async (buttonInteraction) => {
+            await buttonInteraction.deferUpdate();
+
             if (buttonInteraction.customId === "thanks_yes" || buttonInteraction.customId === "thanks_no") {
+                if (!data.users[userId].notifications) {
+                    data.users[userId].notifications = {};
+                }
+
                 data.users[userId].notifications.thanks = buttonInteraction.customId === "thanks_yes";
+
                 fs.writeFileSync(dataPath, JSON.stringify(data, null, 4));
 
                 const thanksStatus = data.users[userId].notifications.thanks ? "✅" : "❌";
@@ -70,7 +82,7 @@ module.exports = {
                         .setStyle(ButtonStyle.Danger)
                 );
 
-                await buttonInteraction.update({ embeds: [embedUpdate], components: [rowUpdate] });
+                await buttonInteraction.editReply({ embeds: [embedUpdate], components: [rowUpdate] });
             } else if (
                 buttonInteraction.customId === "reminder_yes" ||
                 buttonInteraction.customId === "reminder_no"
@@ -88,7 +100,7 @@ module.exports = {
                     )
                     .setFooter({ text: "Settings saved!" });
 
-                await buttonInteraction.update({ embeds: [finalEmbed], components: [] });
+                await buttonInteraction.editReply({ embeds: [finalEmbed], components: [] });
                 collector.stop();
             }
         });
