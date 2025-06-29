@@ -142,13 +142,19 @@ module.exports = {
                 const logFields = [
                     {
                         name: "User",
-                        value: `${interaction.user.tag} (${interaction.user.id})`,
+                        value: `<@${interaction.user.id}> (${interaction.user.tag})`,
                         inline: false,
                     },
-                    { name: "Dex", value: dex, inline: true },
-                    { name: "Country", value: compareData.country, inline: true },
-                    { name: "Diff", value: String(compareData.diff), inline: true },
-                    { name: "Rarity", value: `t${interaction.client.rarities[dKey]?.[compareData.country]?.rarity || "Not found"}`, inline: true },
+                    {
+                        name: "Details",
+                        value: `- **Dex:** ${dex}\n- **Country:** ${
+                            compareData.country
+                        }\n- **Diff:** ${String(compareData.diff)}\n- **Rarity:** t${
+                            interaction.client.rarities[dKey]?.[compareData.country]?.rarity ||
+                            "Not found"
+                        }`,
+                        inline: false,
+                    },
                 ];
                 if (compareData.diff >= 16) {
                     logFields.push({ name: "Target Spawn Art", value: "\u200B" });
