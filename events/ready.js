@@ -125,8 +125,7 @@ module.exports = {
                     app.approximateUserInstallCount,
                     Object.values(users).length
                 );
-                const guildCount = client.guilds.cache.size || 0;
-                await client.dbl.postBotStats({ guilds: guildCount, users: userCount });
+                await client.dbl.postBotStats({ guilds: 0, users: userCount });
                 console.log("DBL stats posted.");
             } catch (e) {
                 console.error("DBL stats error:", e);

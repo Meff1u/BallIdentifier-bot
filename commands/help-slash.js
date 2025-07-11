@@ -18,7 +18,7 @@ module.exports = {
         const data = JSON.parse(fs.readFileSync(dataPath, "utf8"));
         const users = data.users || {};
         const identifyAmount = Object.values(users).reduce(
-            (acc, user) => acc + user.identifyAmount,
+            (acc, user) => acc + (user.identifyAmount || 0),
             0
         );
         const uptimeMs = interaction.client.uptime;
