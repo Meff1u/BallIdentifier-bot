@@ -47,8 +47,8 @@ for (const file of eventFiles) {
 client.once("ready", async () => {
     const rest = new REST({ version: "10" }).setToken(token);
 
-    // Register global commands
-    const globalCommands = slashCommandsArray.filter((cmd) => cmd.name !== "refresh");
+    // Register global commands (exclude refresh and msg)
+    const globalCommands = slashCommandsArray.filter((cmd) => cmd.name !== "refresh" && cmd.name !== "msg");
     try {
         console.log("Global commands refreshing...");
         await rest.put(Routes.applicationCommands(client.user.id), { body: globalCommands });
@@ -57,12 +57,13 @@ client.once("ready", async () => {
         console.error("Error while registering global commands:", error);
     }
 
-    // Register refresh command (private)
+    // Register refresh and msg command (private)
     const refreshCmd = slashCommandsArray.find((cmd) => cmd.name === "refresh");
-    if (refreshCmd) {
+    const msgCmd = slashCommandsArray.find((cmd) => cmd.name === "msg");
+    if (refreshCmd || msgCmd) {
         try {
             await rest.put(Routes.applicationGuildCommands(client.user.id, "379676234566729742"), {
-                body: [refreshCmd],
+                body: [refreshCmd, msgCmd],
             });
             console.log("Refresh command registered for guild 379676234566729742.");
         } catch (error) {
