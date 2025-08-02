@@ -29,10 +29,13 @@ module.exports = {
             return interaction.reply({ content: "Message cannot be empty.", flags: MessageFlags.Ephemeral });
         }
 
-        user.send(message).catch((error) => {
-            console.error("Error sending DM:", error);
+
+        try {
+            await user.send(message);
+        } catch (e) {
+            console.error("Error sending DM:", e);
             return interaction.reply({ content: "Failed to send DM.", flags: MessageFlags.Ephemeral });
-        });
+        }
 
         return interaction.reply({ content: "DM sent!", flags: MessageFlags.Ephemeral });
     }

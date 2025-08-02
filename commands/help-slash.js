@@ -66,11 +66,6 @@ module.exports = {
                     inline: false,
                 },
                 {
-                    name: "Upvote System",
-                    value: "In version 1.1.0 - upvote system was implemented.\nThe user who has upvoted the bot in the last 12 hours - has no restrictions.\nOtherwise the identification function is limited to one use per 10 minutes.\nFor you, it's a moment, a couple of clicks - and it will allow the bot to grow for a wider audience.\n-# Bot is checking for upvotes every 3 minutes.",
-                    inline: false,
-                },
-                {
                     name: "How to Use",
                     value: 'Right-click on a message with an image from one of the supported bots and select "Identify" (image below)',
                     inline: true,
@@ -81,6 +76,10 @@ module.exports = {
             );
 
         const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setLabel("Changelogs")
+                .setStyle(ButtonStyle.Secondary)
+                .setCustomId("changelogs"),
             new ButtonBuilder()
                 .setLabel("Buy me a coffee")
                 .setStyle(ButtonStyle.Link)

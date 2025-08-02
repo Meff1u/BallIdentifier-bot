@@ -12,8 +12,10 @@ const client = new Client({
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.GuildIntegrations,
     ],
-    partials: [Partials.Channel],
+    partials: [Partials.Channel, Partials.Message, Partials.User, Partials.GuildMember],
 });
 
 client.slashCommands = new Collection();
@@ -48,7 +50,9 @@ client.once("ready", async () => {
     const rest = new REST({ version: "10" }).setToken(token);
 
     // Register global commands (exclude refresh and msg)
-    const globalCommands = slashCommandsArray.filter((cmd) => cmd.name !== "refresh" && cmd.name !== "msg");
+    const globalCommands = slashCommandsArray.filter(
+        (cmd) => cmd.name !== "refresh" && cmd.name !== "msg"
+    );
     try {
         console.log("Global commands refreshing...");
         await rest.put(Routes.applicationCommands(client.user.id), { body: globalCommands });
@@ -65,9 +69,9 @@ client.once("ready", async () => {
             await rest.put(Routes.applicationGuildCommands(client.user.id, "379676234566729742"), {
                 body: [refreshCmd, msgCmd],
             });
-            console.log("Refresh command registered for guild 379676234566729742.");
+            console.log("refresh/msg command registered for guild 379676234566729742.");
         } catch (error) {
-            console.error("Error while registering refresh command for guild:", error);
+            console.error("Error while registering refresh/msg command for guild:", error);
         }
     }
 });
