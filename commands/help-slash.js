@@ -21,6 +21,7 @@ module.exports = {
             (acc, user) => acc + (user.identifyAmount || 0),
             0
         );
+        const guilds = await interaction.client.guilds.fetch();
         const uptimeMs = interaction.client.uptime;
         let upvoted = "❌";
         if (
@@ -57,7 +58,7 @@ module.exports = {
                     )}\n- **Approximate user count:** ${Math.max(
                         app.approximateUserInstallCount,
                         Object.values(users).length
-                    )}\n- **Identified balls:** ${identifyAmount}\n- **Upvoted:** ${upvoted}`,
+                    )}\n- **Guilds:** ${guilds.size}\n- **Identified balls:** ${identifyAmount}\n- **Upvoted:** ${upvoted}`,
                     inline: true,
                 },
                 {

@@ -211,7 +211,7 @@ module.exports = {
                         .addSeparatorComponents((s) => s)
                         .addTextDisplayComponents((t) =>
                             t.setContent(
-                                "Notifier message\n - Use `{role}` as placeholder for the mentioned role and `{ball}` for the identified ball name.)\n - Simply don't use {ball} placeholder if you want to receive notifications without ball name."
+                                "Notifier message\n - Use `{role}` as placeholder for the mentioned role and `{ball}` for the identified ball name.\n - Simply don't use `{ball}` placeholder if you want to receive notifications without ball name."
                             )
                         )
                         .addSectionComponents((s) =>
@@ -382,7 +382,7 @@ module.exports = {
                             t.setContent(
                                 `**Selected Bots:** ${selectedBotNames.join(
                                     ", "
-                                )}\n**Selected Role:** <@&${selectedRole}>\n**Custom Message:** \`${customMessage}\`\n\nYour notifier has been configured successfully and saved!`
+                                )}\n**Selected Role:** <@&${selectedRole}>\n**Custom Message:** \`\`\`\n${customMessage}\n\`\`\`\n\nYour notifier has been configured successfully and saved!`
                             )
                         );
 
@@ -424,7 +424,7 @@ module.exports = {
                         .addSeparatorComponents((s) => s)
                         .addTextDisplayComponents((t) =>
                             t.setContent(
-                                "The notifier setup has been cancelled.\n\nYou can run /notifier again to restart the setup."
+                                "The notifier setup has been cancelled.\n\nYou can run </notifier setup:1401243408084762749> again to restart the setup."
                             )
                         );
 
@@ -445,66 +445,6 @@ module.exports = {
                 } catch (error) {
                     console.error("Error cancelling notifier setup:", error);
                 }
-            } else if (interaction.customId.startsWith("notifier_disable_")) {
-                if (!checkUserPermission(interaction.customId, interaction.user.id)) {
-                    return await interaction.reply({
-                        content: "❌ You cannot use this button!",
-                        flags: MessageFlags.Ephemeral,
-                    });
-                }
-                try {
-                    const fs = require("fs");
-                    const path = require("path");
-                    const dataPath = path.join(__dirname, "../assets/data.json");
-
-                    let data = {};
-                    try {
-                        data = JSON.parse(fs.readFileSync(dataPath, "utf8"));
-                    } catch (error) {
-                        console.log("No data.json file found");
-                    }
-
-                    if (
-                        data.guilds &&
-                        data.guilds[interaction.guild.id] &&
-                        data.guilds[interaction.guild.id].notifier
-                    ) {
-                        delete data.guilds[interaction.guild.id].notifier;
-
-                        if (Object.keys(data.guilds[interaction.guild.id]).length === 0) {
-                            delete data.guilds[interaction.guild.id];
-                        }
-
-                        fs.writeFileSync(dataPath, JSON.stringify(data, null, 2));
-                    }
-
-                    const container = new ContainerBuilder()
-                        .setAccentColor(0x808080)
-                        .addTextDisplayComponents((t) => t.setContent("**🔕 Notifier Disabled**"))
-                        .addSeparatorComponents((s) => s)
-                        .addTextDisplayComponents((t) =>
-                            t.setContent(
-                                "The notifier has been disabled and removed from configuration. You will no longer receive notifications."
-                            )
-                        );
-
-                    await interaction.update({
-                        components: [container],
-                        flags: MessageFlags.IsComponentsV2,
-                    });
-
-                    if (client.notifierSelections) {
-                        client.notifierSelections.delete(interaction.user.id);
-                    }
-                    if (client.notifierRoleSelections) {
-                        client.notifierRoleSelections.delete(interaction.user.id);
-                    }
-                    if (client.notifierMessageSelections) {
-                        client.notifierMessageSelections.delete(interaction.user.id);
-                    }
-                } catch (error) {
-                    console.error("Error disabling notifier:", error);
-                }
             } else if (interaction.customId === "changelogs") {
                 const embed = new EmbedBuilder()
                     .setColor(0x0099ff)
@@ -517,7 +457,7 @@ module.exports = {
                         },
                         {
                             name: "v2.0.0 - Notifier", 
-                            value: "Server notifier feature has been implemented:\n- With /notifier command you can set up a notifier for your server.\n- You can select bots to receive notifications from, choose a role to mention, and customize the notification message.\n- Notifier can be disabled at any time with /notifier command.",
+                            value: "Server notifier feature has been implemented:\n- With /notifier command you can set up a notifier for your server.\n- You can select bots to receive notifications from, choose a role to mention, and customize the notification message.\n- Notifier can be disabled at any time with /notifier disable command.",
                             inline: false
                         }
                     )

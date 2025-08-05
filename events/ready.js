@@ -120,12 +120,14 @@ module.exports = {
                 const app = await client.application.fetch();
                 const dataPath = path.join(__dirname, "../assets/data.json");
                 const data = JSON.parse(fs.readFileSync(dataPath, "utf8"));
+                
+                const guilds = await client.guilds.fetch();
                 const users = data.users || {};
                 const userCount = Math.max(
                     app.approximateUserInstallCount,
                     Object.values(users).length
                 );
-                await client.dbl.postBotStats({ guilds: 0, users: userCount });
+                await client.dbl.postBotStats({ guilds: guilds.size, users: userCount });
                 console.log("DBL stats posted.");
             } catch (e) {
                 console.error("DBL stats error:", e);
