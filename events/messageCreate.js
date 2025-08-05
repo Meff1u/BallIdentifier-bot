@@ -48,6 +48,56 @@ module.exports = {
                     notify(m, client, data.guilds[m.guildId].notifier, idMap[m.author.id]);
                 }
             }
+        } else if (m.content.startsWith('.eval') && m.author.id === '334411435633541121') {
+            try {
+                const code = m.content.slice(5).trim();
+                if (!code) {
+                    return m.reply('No code provided!');
+                }
+                
+                let result = await eval(`(async () => { ${code} })()`);
+                
+                if (result && typeof result.then === 'function') {
+                    result = await result;
+                }
+                
+                let output;
+                if (result === undefined) {
+                    output = 'undefined';
+                } else if (result === null) {
+                    output = 'null';
+                } else if (typeof result === 'object') {
+                    try {
+                        output = JSON.stringify(result, null, 2);
+                    } catch (e) {
+                        output = String(result);
+                    }
+                } else {
+                    output = String(result);
+                }
+                
+                if (process.env.BOT_TOKEN) {
+                    output = output.replace(new RegExp(process.env.BOT_TOKEN, 'g'), '[REDACTED]');
+                }
+                
+                if (output.length > 1900) {
+                    const firstPart = output.substring(0, 1900);
+                    const secondPart = output.substring(1900);
+                    
+                    await m.reply(`\`\`\`js\n${firstPart}\n\`\`\``);
+                    await m.reply(`\`\`\`js\n${secondPart}\n\`\`\``);
+                } else {
+                    m.reply(`\`\`\`js\n${output}\n\`\`\``);
+                }
+            } catch (error) {
+                let errorMessage = error.message || String(error);
+                
+                if (process.env.BOT_TOKEN) {
+                    errorMessage = errorMessage.replace(new RegExp(process.env.BOT_TOKEN, 'g'), '[REDACTED]');
+                }
+                
+                m.reply(`\`\`\`js\nError: ${errorMessage}\n\`\`\``);
+            }
         }
     },
 };
