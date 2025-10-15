@@ -103,7 +103,119 @@ module.exports = {
 
         // Modals
         else if (interaction.isModalSubmit()) {
-            if (interaction.customId.startsWith("notifier_message_modal_")) {
+            if (interaction.customId.startsWith("catch_modal_")) {
+                console.log(`[DEBUG] Modal submitted by ${interaction.user.tag} (${interaction.user.id})`);
+                console.log(`[DEBUG] Modal customId: ${interaction.customId}`);
+                
+                const [, , guildId, timestamp] = interaction.customId.split("_");
+                console.log(`[DEBUG] Parsed guildId: ${guildId}, timestamp: ${timestamp}`);
+                console.log(`[DEBUG] Actual guild ID: ${interaction.guild.id}`);
+
+                if (interaction.guild.id !== guildId) {
+                    console.log(`[DEBUG] Guild ID mismatch in modal - expected: ${guildId}, actual: ${interaction.guild.id}`);
+                    return interaction.reply({
+                        content: "🚫 This countryball is not from this server!",
+                        ephemeral: true,
+                    });
+                }
+
+                const sessionData = trainingSessions.get(guildId);
+                console.log(`[DEBUG] Session data exists: ${!!sessionData}`);
+                console.log(`[DEBUG] Session active: ${sessionData?.active}`);
+                console.log(`[DEBUG] Current countryball:`, sessionData?.currentCountryball);
+
+                if (!sessionData || !sessionData.active) {
+                    console.log(`[DEBUG] No active session in modal - sessionData: ${!!sessionData}, active: ${sessionData?.active}`);
+                    return interaction.reply({
+                        content: "🚫 No active training session on this server!",
+                        ephemeral: true,
+                    });
+                }
+
+                const userGuess = interaction.fields.getTextInputValue("countryball_name").trim();
+                const correctName = sessionData.currentCountryball?.name;
+                console.log(`[DEBUG] User guess: "${userGuess}"`);
+                console.log(`[DEBUG] Correct name: "${correctName}"`);
+
+                if (!correctName) {
+                    console.log(`[DEBUG] No correct name found in session data`);
+                    return interaction.reply({
+                        content: "🚫 Error: current countryball not found!",
+                        ephemeral: true,
+                    });
+                }
+
+                if (sessionData.inactivityTimeout) {
+                    console.log(`[DEBUG] Clearing inactivity timeout`);
+                    clearTimeout(sessionData.inactivityTimeout);
+                }
+
+                if (sessionData.currentCountryball?.caught) {
+                    console.log(`[DEBUG] Countryball already caught by someone else`);
+                    return interaction.reply({
+                        content: `${interaction.user.tag}, I was caught already!`,
+                    });
+                }
+
+                console.log(`[DEBUG] Comparing: "${userGuess.toLowerCase()}" === "${correctName.toLowerCase()}"`);
+                if (userGuess.toLowerCase() === correctName.toLowerCase()) {
+                    console.log(`[DEBUG] Correct guess! Processing catch...`);
+                    sessionData.currentCountryball.caught = true;
+
+                    const catchTime = Date.now() - sessionData.currentCountryball.spawnTime;
+                    const timeInSeconds = (catchTime / 1000).toFixed(2);
+                    console.log(`[DEBUG] Catch time: ${timeInSeconds}s`);
+
+                    sessionData.catches = (sessionData.catches || 0) + 1;
+                    console.log(`[DEBUG] Total catches: ${sessionData.catches}`);
+
+                    updateCatchStats(
+                        guildId,
+                        interaction.user.id,
+                        interaction.user.tag,
+                        correctName,
+                        timeInSeconds
+                    );
+
+                    trainingSessions.set(guildId, sessionData);
+
+                    console.log(`[DEBUG] Disabling original message button...`);
+                    const originalMessage = await interaction.channel.messages.fetch(
+                        sessionData.currentCountryball.messageId
+                    );
+                    const disabledButton = new ButtonBuilder()
+                        .setCustomId("disabled")
+                        .setLabel("Catch me!")
+                        .setStyle(ButtonStyle.Primary)
+                        .setDisabled(true);
+
+                    const disabledRow = new ActionRowBuilder().addComponents(disabledButton);
+
+                    await originalMessage.edit({
+                        content: `A wild countryball appeared!`,
+                        components: [disabledRow],
+                    });
+
+                    console.log(`[DEBUG] Sending success message and scheduling next countryball`);
+                    await interaction.reply({
+                        content: `${interaction.user} caught **${correctName}**! (\`${timeInSeconds}s\`)`,
+                    });
+
+                    scheduleNextCountryball(interaction.channel, guildId);
+                } else {
+                    console.log(`[DEBUG] Wrong guess: "${userGuess}" !== "${correctName}"`);
+                    if (sessionData.currentCountryball?.caught) {
+                        console.log(`[DEBUG] Countryball was caught while processing wrong guess`);
+                        return interaction.reply({
+                            content: `${interaction.user}, I was caught already!`,
+                        });
+                    }
+
+                    await interaction.reply({
+                        content: `${interaction.user} Wrong name!\nYou wrote: **${userGuess}**`,
+                    });
+                }
+            } else if (interaction.customId.startsWith("notifier_message_modal_")) {
                 try {
                     const userId = interaction.customId.split("_").pop();
                     if (interaction.user.id !== userId) {
@@ -259,94 +371,6 @@ module.exports = {
                     await interaction.followUp({
                         content: "An error occurred while processing your message.",
                         flags: MessageFlags.Ephemeral,
-                    });
-                }
-            } else if (interaction.customId.startsWith("catch_modal_")) {
-                const [, , guildId, timestamp] = interaction.customId.split("_");
-
-                if (interaction.guild.id !== guildId) {
-                    return interaction.reply({
-                        content: "🚫 This countryball is not from this server!",
-                        ephemeral: true,
-                    });
-                }
-
-                const sessionData = trainingSessions.get(guildId);
-                if (!sessionData || !sessionData.active) {
-                    return interaction.reply({
-                        content: "🚫 No active training session on this server!",
-                        ephemeral: true,
-                    });
-                }
-
-                const userGuess = interaction.fields.getTextInputValue("countryball_name").trim();
-                const correctName = sessionData.currentCountryball?.name;
-
-                if (!correctName) {
-                    return interaction.reply({
-                        content: "🚫 Error: current countryball not found!",
-                        ephemeral: true,
-                    });
-                }
-
-                if (sessionData.inactivityTimeout) {
-                    clearTimeout(sessionData.inactivityTimeout);
-                }
-
-                if (sessionData.currentCountryball?.caught) {
-                    return interaction.reply({
-                        content: `${interaction.user.tag}, I was caught already!`,
-                    });
-                }
-
-                if (userGuess.toLowerCase() === correctName.toLowerCase()) {
-                    sessionData.currentCountryball.caught = true;
-
-                    const catchTime = Date.now() - sessionData.currentCountryball.spawnTime;
-                    const timeInSeconds = (catchTime / 1000).toFixed(2);
-
-                    sessionData.catches = (sessionData.catches || 0) + 1;
-
-                    updateCatchStats(
-                        guildId,
-                        interaction.user.id,
-                        interaction.user.tag,
-                        correctName,
-                        timeInSeconds
-                    );
-
-                    trainingSessions.set(guildId, sessionData);
-
-                    const originalMessage = await interaction.channel.messages.fetch(
-                        sessionData.currentCountryball.messageId
-                    );
-                    const disabledButton = new ButtonBuilder()
-                        .setCustomId("disabled")
-                        .setLabel("Catch me!")
-                        .setStyle(ButtonStyle.Primary)
-                        .setDisabled(true);
-
-                    const disabledRow = new ActionRowBuilder().addComponents(disabledButton);
-
-                    await originalMessage.edit({
-                        content: `A wild countryball appeared!`,
-                        components: [disabledRow],
-                    });
-
-                    await interaction.reply({
-                        content: `${interaction.user} caught **${correctName}**! (\`${timeInSeconds}s\`)`,
-                    });
-
-                    scheduleNextCountryball(interaction.channel, guildId);
-                } else {
-                    if (sessionData.currentCountryball?.caught) {
-                        return interaction.reply({
-                            content: `${interaction.user}, I was caught already!`,
-                        });
-                    }
-
-                    await interaction.reply({
-                        content: `${interaction.user} Wrong name!\nYou wrote: **${userGuess}**`,
                     });
                 }
             }
