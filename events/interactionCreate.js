@@ -138,6 +138,12 @@ module.exports = {
                     clearTimeout(sessionData.inactivityTimeout);
                 }
 
+                sessionData.inactivityTimeout = setTimeout(() => {
+                    if (trainingSessions.has(guildId)) {
+                        endSession(guildId, interaction.channel, 'Training session ended due to inactivity!');
+                    }
+                }, 30000);
+
                 if (sessionData.currentCountryball?.caught) {
                     return interaction.reply({
                         content: `${interaction.user.tag}, I was caught already!`,
