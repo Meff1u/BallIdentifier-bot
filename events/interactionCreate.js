@@ -7,6 +7,8 @@ const {
     RoleSelectMenuBuilder,
     ContainerBuilder,
     EmbedBuilder,
+    ButtonBuilder,
+    ButtonStyle,
 } = require("discord.js");
 const FormData = require("form-data");
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
@@ -104,15 +106,9 @@ module.exports = {
         // Modals
         else if (interaction.isModalSubmit()) {
             if (interaction.customId.startsWith("catch_modal_")) {
-                console.log(`[DEBUG] Modal submitted by ${interaction.user.tag} (${interaction.user.id})`);
-                console.log(`[DEBUG] Modal customId: ${interaction.customId}`);
-                
                 const [, , guildId, timestamp] = interaction.customId.split("_");
-                console.log(`[DEBUG] Parsed guildId: ${guildId}, timestamp: ${timestamp}`);
-                console.log(`[DEBUG] Actual guild ID: ${interaction.guild.id}`);
 
                 if (interaction.guild.id !== guildId) {
-                    console.log(`[DEBUG] Guild ID mismatch in modal - expected: ${guildId}, actual: ${interaction.guild.id}`);
                     return interaction.reply({
                         content: "🚫 This countryball is not from this server!",
                         ephemeral: true,
@@ -120,12 +116,8 @@ module.exports = {
                 }
 
                 const sessionData = trainingSessions.get(guildId);
-                console.log(`[DEBUG] Session data exists: ${!!sessionData}`);
-                console.log(`[DEBUG] Session active: ${sessionData?.active}`);
-                console.log(`[DEBUG] Current countryball:`, sessionData?.currentCountryball);
 
                 if (!sessionData || !sessionData.active) {
-                    console.log(`[DEBUG] No active session in modal - sessionData: ${!!sessionData}, active: ${sessionData?.active}`);
                     return interaction.reply({
                         content: "🚫 No active training session on this server!",
                         ephemeral: true,
@@ -134,11 +126,8 @@ module.exports = {
 
                 const userGuess = interaction.fields.getTextInputValue("countryball_name").trim();
                 const correctName = sessionData.currentCountryball?.name;
-                console.log(`[DEBUG] User guess: "${userGuess}"`);
-                console.log(`[DEBUG] Correct name: "${correctName}"`);
 
                 if (!correctName) {
-                    console.log(`[DEBUG] No correct name found in session data`);
                     return interaction.reply({
                         content: "🚫 Error: current countryball not found!",
                         ephemeral: true,
@@ -146,28 +135,22 @@ module.exports = {
                 }
 
                 if (sessionData.inactivityTimeout) {
-                    console.log(`[DEBUG] Clearing inactivity timeout`);
                     clearTimeout(sessionData.inactivityTimeout);
                 }
 
                 if (sessionData.currentCountryball?.caught) {
-                    console.log(`[DEBUG] Countryball already caught by someone else`);
                     return interaction.reply({
                         content: `${interaction.user.tag}, I was caught already!`,
                     });
                 }
 
-                console.log(`[DEBUG] Comparing: "${userGuess.toLowerCase()}" === "${correctName.toLowerCase()}"`);
                 if (userGuess.toLowerCase() === correctName.toLowerCase()) {
-                    console.log(`[DEBUG] Correct guess! Processing catch...`);
                     sessionData.currentCountryball.caught = true;
 
                     const catchTime = Date.now() - sessionData.currentCountryball.spawnTime;
                     const timeInSeconds = (catchTime / 1000).toFixed(2);
-                    console.log(`[DEBUG] Catch time: ${timeInSeconds}s`);
 
                     sessionData.catches = (sessionData.catches || 0) + 1;
-                    console.log(`[DEBUG] Total catches: ${sessionData.catches}`);
 
                     updateCatchStats(
                         guildId,
@@ -179,7 +162,6 @@ module.exports = {
 
                     trainingSessions.set(guildId, sessionData);
 
-                    console.log(`[DEBUG] Disabling original message button...`);
                     const originalMessage = await interaction.channel.messages.fetch(
                         sessionData.currentCountryball.messageId
                     );
@@ -196,16 +178,13 @@ module.exports = {
                         components: [disabledRow],
                     });
 
-                    console.log(`[DEBUG] Sending success message and scheduling next countryball`);
                     await interaction.reply({
                         content: `${interaction.user} caught **${correctName}**! (\`${timeInSeconds}s\`)`,
                     });
 
                     scheduleNextCountryball(interaction.channel, guildId);
                 } else {
-                    console.log(`[DEBUG] Wrong guess: "${userGuess}" !== "${correctName}"`);
                     if (sessionData.currentCountryball?.caught) {
-                        console.log(`[DEBUG] Countryball was caught while processing wrong guess`);
                         return interaction.reply({
                             content: `${interaction.user}, I was caught already!`,
                         });
