@@ -459,6 +459,11 @@ module.exports = {
                             name: "v2.0.0 - Notifier", 
                             value: "Server notifier feature has been implemented:\n- With /notifier command you can set up a notifier for your server.\n- You can select bots to receive notifications from, choose a role to mention, and customize the notification message.\n- Notifier can be disabled at any time with /notifier disable command.",
                             inline: false
+                        },
+                        {
+                            name: "v2.1.0 - Trainer",
+                            value: "Trainer feature has been added:\n- Use /trainer start to begin training session and catch as many as you can!\n- Use /trainer stop to end your session and see your stats.",
+                            inline: false
                         }
                     )
                     .setTimestamp();
