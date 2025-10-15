@@ -10,14 +10,13 @@ const {
 } = require("discord.js");
 const FormData = require("form-data");
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
+const { trainingSessions, scheduleNextCountryball, updateCatchStats, sendCountryball, endSession } = require('../trainingSession');
 
 module.exports = {
     name: "interactionCreate",
     async execute(interaction, client) {
-        console.log(interaction.customId)
         // Slash commands and context menus
         if (interaction.isChatInputCommand() || interaction.isContextMenuCommand()) {
-            console.log('its chat or context')
             const command = client.slashCommands.get(interaction.commandName);
             if (!command) return;
             try {
@@ -53,10 +52,9 @@ module.exports = {
                 }
             }
         }
-        
+
         // String Select Menus
         else if (interaction.isStringSelectMenu()) {
-            console.log('its string select')
             if (interaction.customId.startsWith("notifier_bot_select_")) {
                 try {
                     const userId = interaction.customId.split("_").pop();
@@ -78,10 +76,9 @@ module.exports = {
                 }
             }
         }
-        
+
         // Role Select Menus
         else if (interaction.isRoleSelectMenu()) {
-            console.log('its role select')
             if (interaction.customId.startsWith("notifier_role_select_")) {
                 try {
                     const userId = interaction.customId.split("_").pop();
@@ -103,10 +100,9 @@ module.exports = {
                 }
             }
         }
-        
+
         // Modals
         else if (interaction.isModalSubmit()) {
-            console.log('its modal submit')
             if (interaction.customId.startsWith("notifier_message_modal_")) {
                 try {
                     const userId = interaction.customId.split("_").pop();
@@ -355,10 +351,9 @@ module.exports = {
                 }
             }
         }
-        
+
         // Buttons
         else if (interaction.isButton()) {
-            console.log('its button')
             if (interaction.customId.startsWith("catch_")) {
                 const [, guildId, timestamp] = interaction.customId.split("_");
 

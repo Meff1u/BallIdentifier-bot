@@ -62,7 +62,7 @@ module.exports = {
                 roundsPlayed: 0
             });
 
-            await interaction.reply({ content: `🏁 Starting a new catching trainer session!\n- Dex: **${dex}**\n- Rounds: ${rounds ? `**${rounds}**` : '**Unlimited**'}!\n\nFirst countryball gonna appear in 5 seconds...`});
+            await interaction.reply({ content: `🏁 Starting a new catching trainer session!\n- Dex: **${dex}**\n- Rounds: ${rounds ? `**${rounds}**` : '**Unlimited**'}\n\nFirst countryball gonna appear in 5 seconds...`});
 
             setTimeout(async () => {
                 const session = trainingSessions.get(guildId);
