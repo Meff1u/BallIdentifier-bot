@@ -346,6 +346,41 @@ module.exports = {
         }
 
         if (interaction.isButton()) {
+            if (interaction.customId.startsWith("catch_")) {
+                const [, guildId, timestamp] = interaction.customId.split("_");
+
+                if (interaction.guild.id !== guildId) {
+                    return interaction.reply({
+                        content: "🚫 This countryball is not from this server!",
+                        ephemeral: true,
+                    });
+                }
+
+                const sessionData = trainingSessions.get(guildId);
+                if (!sessionData || !sessionData.active) {
+                    return interaction.reply({
+                        content: "🚫 No active training session on this server!",
+                        ephemeral: true,
+                    });
+                }
+
+                const modal = new ModalBuilder()
+                    .setCustomId(`catch_modal_${guildId}_${timestamp}`)
+                    .setTitle("Catch the Countryball!");
+
+                const nameInput = new TextInputBuilder()
+                    .setCustomId("countryball_name")
+                    .setLabel("Enter the countryball name:")
+                    .setStyle(TextInputStyle.Short)
+                    .setPlaceholder("Your guess")
+                    .setRequired(true);
+
+                const firstActionRow = new ActionRowBuilder().addComponents(nameInput);
+                modal.addComponents(firstActionRow);
+
+                return await interaction.showModal(modal);
+            }
+
             const checkUserPermission = (customId, userId) => {
                 if (customId.includes("_")) {
                     const expectedUserId = customId.split("_").pop();
@@ -560,39 +595,6 @@ module.exports = {
                     embeds: [embed],
                     flags: MessageFlags.Ephemeral,
                 });
-            } else if (interaction.customId.startsWith("catch_")) {
-                const [, guildId, timestamp] = interaction.customId.split("_");
-
-                if (interaction.guild.id !== guildId) {
-                    return interaction.reply({
-                        content: "🚫 This countryball is not from this server!",
-                        ephemeral: true,
-                    });
-                }
-
-                const sessionData = trainingSessions.get(guildId);
-                if (!sessionData || !sessionData.active) {
-                    return interaction.reply({
-                        content: "🚫 No active training session on this server!",
-                        ephemeral: true,
-                    });
-                }
-
-                const modal = new ModalBuilder()
-                    .setCustomId(`catch_modal_${guildId}_${timestamp}`)
-                    .setTitle("Catch the Countryball!");
-
-                const nameInput = new TextInputBuilder()
-                    .setCustomId("countryball_name")
-                    .setLabel("Enter the countryball name:")
-                    .setStyle(TextInputStyle.Short)
-                    .setPlaceholder("Your guess")
-                    .setRequired(true);
-
-                const firstActionRow = new ActionRowBuilder().addComponents(nameInput);
-                modal.addComponents(firstActionRow);
-
-                await interaction.showModal(modal);
             }
         }
     },
