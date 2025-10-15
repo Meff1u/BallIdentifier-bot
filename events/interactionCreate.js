@@ -6,7 +6,7 @@ const {
     TextInputStyle,
     RoleSelectMenuBuilder,
     ContainerBuilder,
-    EmbedBuilder
+    EmbedBuilder,
 } = require("discord.js");
 const FormData = require("form-data");
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
@@ -254,6 +254,94 @@ module.exports = {
                         flags: MessageFlags.Ephemeral,
                     });
                 }
+            } else if (interaction.customId.startsWith("catch_modal_")) {
+                const [, , guildId, timestamp] = interaction.customId.split("_");
+
+                if (interaction.guild.id !== guildId) {
+                    return interaction.reply({
+                        content: "🚫 This countryball is not from this server!",
+                        ephemeral: true,
+                    });
+                }
+
+                const sessionData = trainingSessions.get(guildId);
+                if (!sessionData || !sessionData.active) {
+                    return interaction.reply({
+                        content: "🚫 No active training session on this server!",
+                        ephemeral: true,
+                    });
+                }
+
+                const userGuess = interaction.fields.getTextInputValue("countryball_name").trim();
+                const correctName = sessionData.currentCountryball?.name;
+
+                if (!correctName) {
+                    return interaction.reply({
+                        content: "🚫 Error: current countryball not found!",
+                        ephemeral: true,
+                    });
+                }
+
+                if (sessionData.inactivityTimeout) {
+                    clearTimeout(sessionData.inactivityTimeout);
+                }
+
+                if (sessionData.currentCountryball?.caught) {
+                    return interaction.reply({
+                        content: `${interaction.user.tag}, I was caught already!`,
+                    });
+                }
+
+                if (userGuess.toLowerCase() === correctName.toLowerCase()) {
+                    sessionData.currentCountryball.caught = true;
+
+                    const catchTime = Date.now() - sessionData.currentCountryball.spawnTime;
+                    const timeInSeconds = (catchTime / 1000).toFixed(2);
+
+                    sessionData.catches = (sessionData.catches || 0) + 1;
+
+                    updateCatchStats(
+                        guildId,
+                        interaction.user.id,
+                        interaction.user.tag,
+                        correctName,
+                        timeInSeconds
+                    );
+
+                    trainingSessions.set(guildId, sessionData);
+
+                    const originalMessage = await interaction.channel.messages.fetch(
+                        sessionData.currentCountryball.messageId
+                    );
+                    const disabledButton = new ButtonBuilder()
+                        .setCustomId("disabled")
+                        .setLabel("Catch me!")
+                        .setStyle(ButtonStyle.Primary)
+                        .setDisabled(true);
+
+                    const disabledRow = new ActionRowBuilder().addComponents(disabledButton);
+
+                    await originalMessage.edit({
+                        content: `A wild countryball appeared!`,
+                        components: [disabledRow],
+                    });
+
+                    await interaction.reply({
+                        content: `${interaction.user} caught **${correctName}**! (\`${timeInSeconds}s\`)`,
+                    });
+
+                    scheduleNextCountryball(interaction.channel, guildId);
+                } else {
+                    if (sessionData.currentCountryball?.caught) {
+                        return interaction.reply({
+                            content: `${interaction.user}, I was caught already!`,
+                        });
+                    }
+
+                    await interaction.reply({
+                        content: `${interaction.user} Wrong name!\nYou wrote: **${userGuess}**`,
+                    });
+                }
             }
         }
 
@@ -453,17 +541,17 @@ module.exports = {
                         {
                             name: "v1.1.0 - Upvote System",
                             value: "In this version, a new upvote system was implemented.\n- Users who upvote the bot in the last 12 hours have no restrictions.\n- Otherwise, identification is limited to one use per 10 minutes.\n- Bot checks for upvotes every 3 minutes.",
-                            inline: false
+                            inline: false,
                         },
                         {
-                            name: "v2.0.0 - Notifier", 
+                            name: "v2.0.0 - Notifier",
                             value: "Server notifier feature has been implemented:\n- With /notifier command you can set up a notifier for your server.\n- You can select bots to receive notifications from, choose a role to mention, and customize the notification message.\n- Notifier can be disabled at any time with /notifier disable command.",
-                            inline: false
+                            inline: false,
                         },
                         {
                             name: "v2.1.0 - Trainer",
                             value: "Trainer feature has been added:\n- Use /trainer start to begin training session and catch as many as you can!\n- Use /trainer stop to end your session and see your stats.",
-                            inline: false
+                            inline: false,
                         }
                     )
                     .setTimestamp();
@@ -472,6 +560,39 @@ module.exports = {
                     embeds: [embed],
                     flags: MessageFlags.Ephemeral,
                 });
+            } else if (interaction.customId.startsWith("catch_")) {
+                const [, guildId, timestamp] = interaction.customId.split("_");
+
+                if (interaction.guild.id !== guildId) {
+                    return interaction.reply({
+                        content: "🚫 This countryball is not from this server!",
+                        ephemeral: true,
+                    });
+                }
+
+                const sessionData = trainingSessions.get(guildId);
+                if (!sessionData || !sessionData.active) {
+                    return interaction.reply({
+                        content: "🚫 No active training session on this server!",
+                        ephemeral: true,
+                    });
+                }
+
+                const modal = new ModalBuilder()
+                    .setCustomId(`catch_modal_${guildId}_${timestamp}`)
+                    .setTitle("Catch the Countryball!");
+
+                const nameInput = new TextInputBuilder()
+                    .setCustomId("countryball_name")
+                    .setLabel("Enter the countryball name:")
+                    .setStyle(TextInputStyle.Short)
+                    .setPlaceholder("Your guess")
+                    .setRequired(true);
+
+                const firstActionRow = new ActionRowBuilder().addComponents(nameInput);
+                modal.addComponents(firstActionRow);
+
+                await interaction.showModal(modal);
             }
         }
     },
