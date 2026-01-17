@@ -7,58 +7,55 @@ const {
     ButtonStyle,
 } = require("discord.js");
 const { version } = require("../package.json");
-const fs = require("fs");
-const path = require("path");
+
+// Import shared utilities
+const { COLORS } = require("../utils/constants");
+const { readJsonFile, formatDuration, isUpvoter, getAssetsPath } = require("../utils/helpers");
+
+const DATA_PATH = getAssetsPath("data.json");
 
 module.exports = {
-    data: new SlashCommandBuilder().setName("help").setDescription("Useful informations."),
+    data: new SlashCommandBuilder()
+        .setName("help")
+        .setDescription("Useful information about the bot."),
+        
     async execute(interaction) {
-        const app = await interaction.client.application.fetch();
-        const dataPath = path.join(__dirname, "../assets/data.json");
-        const data = JSON.parse(fs.readFileSync(dataPath, "utf8"));
+        const { client, user } = interaction;
+        
+        // Fetch data in parallel
+        const [app, guilds] = await Promise.all([
+            client.application.fetch(),
+            client.guilds.fetch(),
+        ]);
+        
+        // Read user data
+        const data = readJsonFile(DATA_PATH, { users: {} });
         const users = data.users || {};
         const identifyAmount = Object.values(users).reduce(
-            (acc, user) => acc + (user.identifyAmount || 0),
-            0
+            (acc, u) => acc + (u.identifyAmount || 0), 0
         );
-        const guilds = await interaction.client.guilds.fetch();
-        const uptimeMs = interaction.client.uptime;
-        let upvoted = "❌";
-        if (
-            Array.isArray(interaction.client.upvotes.upvotes) &&
-            interaction.client.upvotes.upvotes.some((v) => v.user_id === interaction.user.id)
-        ) {
-            upvoted = "✅";
-        }
-
-        function formatUptime(ms) {
-            const sec = Math.floor((ms / 1000) % 60);
-            const min = Math.floor((ms / (1000 * 60)) % 60);
-            const hr = Math.floor((ms / (1000 * 60 * 60)) % 24);
-            const d = Math.floor(ms / (1000 * 60 * 60 * 24));
-            return `${d > 0 ? d + "d " : ""}${hr > 0 ? hr + "h " : ""}${
-                min > 0 ? min + "m " : ""
-            }${sec}s`;
-        }
+        
+        const isUserUpvoted = isUpvoter(client.upvotes, user.id);
 
         const embed = new EmbedBuilder()
             .setTitle("BallIdentifier")
             .setFooter({ text: `v${version} by @meffiu` })
-            .setColor("#6839A6")
+            .setColor(COLORS.LOG)
             .addFields(
                 {
                     name: "Supported Bots",
-                    value: "- Ballsdex\n- DynastyDex\n- Empireballs\n- HistoryDex",
+                    value: "- Ballsdex\n- FoodDex",
                     inline: true,
                 },
                 {
                     name: "Statistics",
-                    value: `- **Uptime:** ${formatUptime(
-                        uptimeMs
-                    )}\n- **Approximate user count:** ${Math.max(
-                        app.approximateUserInstallCount,
-                        Object.values(users).length
-                    )}\n- **Guilds:** ${guilds.size}\n- **Identified balls:** ${identifyAmount}\n- **Upvoted:** ${upvoted}`,
+                    value: [
+                        `- **Uptime:** ${formatDuration(client.uptime)}`,
+                        `- **Approximate user count:** ${Math.max(app.approximateUserInstallCount, Object.keys(users).length)}`,
+                        `- **Guilds:** ${guilds.size}`,
+                        `- **Identified balls:** ${identifyAmount}`,
+                        `- **Upvoted:** ${isUserUpvoted ? "✅" : "❌"}`,
+                    ].join("\n"),
                     inline: true,
                 },
                 {
@@ -72,9 +69,7 @@ module.exports = {
                     inline: true,
                 }
             )
-            .setImage(
-                "https://github.com/Meff1u/BallIdentifier-bot/blob/main/assets/tutorial.png?raw=true"
-            );
+            .setImage("https://github.com/Meff1u/BallIdentifier-bot/blob/main/assets/tutorial.png?raw=true");
 
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
@@ -84,7 +79,7 @@ module.exports = {
             new ButtonBuilder()
                 .setLabel("Buy me a coffee")
                 .setStyle(ButtonStyle.Link)
-                .setURL("https://buycoffee.to/meffiu"),
+                .setURL("https://paypal.me/meffiu"),
             new ButtonBuilder()
                 .setLabel("Upvote Me")
                 .setStyle(ButtonStyle.Link)

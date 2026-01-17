@@ -8,9 +8,12 @@ const {
     RoleSelectMenuBuilder,
     EmbedBuilder,
 } = require("discord.js");
-const fs = require("fs");
-const path = require("path");
-const dataPath = path.join(__dirname, "../assets/data.json");
+
+// Import shared utilities
+const { SUPPORTED_BOT_IDS, COLORS } = require("../utils/constants");
+const { readJsonFile, writeJsonFile, getAssetsPath } = require("../utils/helpers");
+
+const DATA_PATH = getAssetsPath("data.json");
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -47,17 +50,10 @@ module.exports = {
 
         if (interaction.options.getSubcommand() === "setup") {
             try {
-                const targetBotIds = [
-                    "999736048596816014", // Ballsdex
-                    "1174135035889201173", // DynastyDex
-                    "1061145299927695400", // Empireballs
-                    "1120942938126553190", // HistoryDex
-                ];
-
                 const members = await guild.members.fetch();
                 const availableBots = [];
 
-                for (const botId of targetBotIds) {
+                for (const botId of SUPPORTED_BOT_IDS) {
                     const member = members.get(botId);
                     if (member && member.user.bot) {
                         availableBots.push({
@@ -171,18 +167,13 @@ module.exports = {
                 });
             }
         } else if (interaction.options.getSubcommand() === "view") {
-            let data = {};
-            try {
-                data = JSON.parse(fs.readFileSync(dataPath, "utf8"));
-            } catch (error) {
-                console.error("Error reading data.json:", error);
-            }
+            const data = readJsonFile(DATA_PATH, { guilds: {} });
 
             if (data.guilds[interaction.guild.id] && data.guilds[interaction.guild.id]?.notifier) {
                 const notifierConfig = data.guilds[interaction.guild.id].notifier;
 
                 const embed = new EmbedBuilder()
-                    .setColor(0x0099ff)
+                    .setColor(COLORS.INFO)
                     .setTitle("Notifier Configuration")
                     .setDescription(
                         `**Bots:** ${notifierConfig.selectedBots
@@ -205,12 +196,7 @@ module.exports = {
             }
         } else if (interaction.options.getSubcommand() === "disable") {
             try {
-                let data = {};
-                try {
-                    data = JSON.parse(fs.readFileSync(dataPath, "utf8"));
-                } catch (error) {
-                    console.error("Error reading data.json:", error);
-                }
+                const data = readJsonFile(DATA_PATH, { guilds: {} });
 
                 if (
                     data.guilds &&
@@ -223,7 +209,7 @@ module.exports = {
                         delete data.guilds[interaction.guild.id];
                     }
 
-                    fs.writeFileSync(dataPath, JSON.stringify(data, null, 2));
+                    writeJsonFile(DATA_PATH, data);
                 }
 
                 const container = new ContainerBuilder()

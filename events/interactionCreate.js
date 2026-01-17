@@ -14,6 +14,12 @@ const FormData = require("form-data");
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 const { trainingSessions, scheduleNextCountryball, updateCatchStats, sendCountryball, endSession } = require('../trainingSession');
 
+// Import shared utilities
+const { SUPPORTED_BOT_IDS, BOT_NAMES, COLORS, INACTIVITY_TIMEOUT } = require("../utils/constants");
+const { readJsonFile, writeJsonFile, getAssetsPath } = require("../utils/helpers");
+
+const DATA_PATH = getAssetsPath("data.json");
+
 module.exports = {
     name: "interactionCreate",
     async execute(interaction, client) {
@@ -142,7 +148,7 @@ module.exports = {
                     if (trainingSessions.has(guildId)) {
                         endSession(guildId, interaction.channel, 'Training session ended due to inactivity!');
                     }
-                }, 30000);
+                }, INACTIVITY_TIMEOUT);
 
                 if (sessionData.currentCountryball?.caught) {
                     return interaction.reply({
@@ -243,17 +249,10 @@ module.exports = {
                         ButtonStyle,
                     } = require("discord.js");
 
-                    const targetBotIds = [
-                        "999736048596816014", // Ballsdex
-                        "1174135035889201173", // DynastyDex
-                        "1061145299927695400", // Empireballs
-                        "1120942938126553190", // HistoryDex
-                    ];
-
                     const members = await guild.members.fetch();
                     const availableBots = [];
 
-                    for (const botId of targetBotIds) {
+                    for (const botId of SUPPORTED_BOT_IDS) {
                         const member = members.get(botId);
                         if (member && member.user.bot) {
                             availableBots.push({
@@ -265,7 +264,7 @@ module.exports = {
                     }
 
                     const notifierContainer = new ContainerBuilder()
-                        .setAccentColor(0x0099ff)
+                        .setAccentColor(COLORS.INFO)
                         .addTextDisplayComponents((t) =>
                             t.setContent("**🔔 Notification Setup 🔔**")
                         )
@@ -472,29 +471,13 @@ module.exports = {
                         });
                     }
 
-                    const botNames = {
-                        "999736048596816014": "Ballsdex",
-                        "1174135035889201173": "DynastyDex",
-                        1061145299927695400: "Empireballs",
-                        "1120942938126553190": "HistoryDex",
-                    };
-
-                    const selectedBotNames = selectedBots.map((id) => botNames[id]);
+                    const selectedBotNames = selectedBots.map((id) => BOT_NAMES[id]);
 
                     const customMessage =
                         client.notifierMessageSelections?.get(interaction.user.id) ||
                         "{role} Catch that ball! - **{ball}**";
 
-                    const fs = require("fs");
-                    const path = require("path");
-                    const dataPath = path.join(__dirname, "../assets/data.json");
-
-                    let data = {};
-                    try {
-                        data = JSON.parse(fs.readFileSync(dataPath, "utf8"));
-                    } catch (error) {
-                        console.log("No data.json file found");
-                    }
+                    let data = readJsonFile(DATA_PATH, { guilds: {} });
 
                     if (!data.guilds) {
                         data.guilds = {};
@@ -510,10 +493,10 @@ module.exports = {
                         },
                     };
 
-                    fs.writeFileSync(dataPath, JSON.stringify(data, null, 2));
+                    writeJsonFile(DATA_PATH, data);
 
                     const confirmationContainer = new ContainerBuilder()
-                        .setAccentColor(0x00ff00)
+                        .setAccentColor(COLORS.SUCCESS)
                         .addTextDisplayComponents((t) =>
                             t.setContent("**✅ Notifier Setup - Completed**")
                         )
@@ -557,7 +540,7 @@ module.exports = {
 
                 try {
                     const container = new ContainerBuilder()
-                        .setAccentColor(0xff0000)
+                        .setAccentColor(COLORS.ERROR)
                         .addTextDisplayComponents((t) =>
                             t.setContent("**❌ Notifier Setup - Cancelled**")
                         )
@@ -587,7 +570,7 @@ module.exports = {
                 }
             } else if (interaction.customId === "changelogs") {
                 const embed = new EmbedBuilder()
-                    .setColor(0x0099ff)
+                    .setColor(COLORS.INFO)
                     .setTitle("📋 Changelogs")
                     .addFields(
                         {

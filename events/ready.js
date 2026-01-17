@@ -1,182 +1,182 @@
-const path = require("path");
-const fs = require("fs");
-const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 const { createDjsClient } = require("discordbotlist");
+
+const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
+
+// Import shared utilities
+const { ASSETS_BASE_URL, BOT_DATA_KEYS } = require("../utils/constants");
+const { readJsonFile, writeJsonFile, getAssetsPath } = require("../utils/helpers");
+
+// Local constants
+const DATA_PATH = getAssetsPath("data.json");
+const UPVOTES_PATH = getAssetsPath("upvotes.json");
+const REFRESH_INTERVAL = 60 * 60 * 1000; // 1 hour
+const DBL_POLL_INTERVAL = 180000; // 3 minutes
+
+const HASH_URLS = Object.fromEntries(
+    Object.entries(BOT_DATA_KEYS).map(([, key]) => [
+        key,
+        `${ASSETS_BASE_URL}/jsons/${key === "BD" ? "Ballsdex" : "FoodDex"}`,
+    ])
+);
 
 module.exports = {
     name: "ready",
     once: true,
     async execute(client) {
-        console.log(`${client.user.tag} ready`);
+        console.log(`✅ ${client.user.tag} ready`);
+        
+        // Initialize DBL client
         client.dbl = createDjsClient(process.env.DBL_TOKEN, client);
 
-        client.fetchHashes = async function () {
-            const urls = {
-                BD: "https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets/jsons/Ballsdex",
-                DD: "https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets/jsons/Dynastydex",
-                EB: "https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets/jsons/Empireballs",
-                HD: "https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets/jsons/HistoryDex",
-            };
+        // Define fetch methods
+        client.fetchHashes = async () => {
             client.hashes = {};
             client.rarities = {};
-            for (const [key, url] of Object.entries(urls)) {
+            
+            const fetchPromises = Object.entries(HASH_URLS).map(async ([key, url]) => {
                 try {
-                    const response1 = await fetch(`${url}.json`);
-                    if (!response1.ok) throw new Error(`HTTP error! status: ${response1.status}`);
-                    const data1 = await response1.json();
-                    const response2 = await fetch(`${url}Hashes.json`);
-                    if (!response2.ok) throw new Error(`HTTP error! status: ${response2.status}`);
-                    const data2 = await response2.json();
-                    client.hashes[key] = data2;
-                    client.rarities[key] = data1;
-                    console.log(`Fetched ${key} hashes and rarities successfully.`);
+                    const [raritiesRes, hashesRes] = await Promise.all([
+                        fetch(`${url}.json`),
+                        fetch(`${url}Hashes.json`),
+                    ]);
+                    
+                    if (!raritiesRes.ok || !hashesRes.ok) {
+                        throw new Error(`HTTP error`);
+                    }
+                    
+                    client.rarities[key] = await raritiesRes.json();
+                    client.hashes[key] = await hashesRes.json();
+                    console.log(`✅ Fetched ${key} hashes and rarities`);
                 } catch (error) {
-                    console.error(`Failed to fetch ${key} hashes/rarities:`, error);
+                    console.error(`❌ Failed to fetch ${key}:`, error.message);
                 }
-            }
+            });
+            
+            await Promise.all(fetchPromises);
         };
-        await client.fetchHashes();
 
-        client.fetchUpvotes = async function () {
+        client.fetchUpvotes = async () => {
             try {
-                const upvoteRes = await fetch(
+                const response = await fetch(
                     "https://discordbotlist.com/api/v1/bots/510775326310268930/upvotes",
-                    {
-                        headers: { Authorization: process.env.DBL_TOKEN },
-                    }
+                    { headers: { Authorization: process.env.DBL_TOKEN } }
                 );
-                if (upvoteRes.ok) {
-                    const fetchedUpvotes = await upvoteRes.json();
-
-                    const upvotesFilePath = path.join(__dirname, "../assets/upvotes.json");
-                    let existingUpvotes = [];
-                    try {
-                        existingUpvotes = JSON.parse(fs.readFileSync(upvotesFilePath, "utf8"));
-                    } catch (e) {
-                        console.warn("No existing upvotes file found, starting fresh.");
-                    }
-
-                    const fetchedUserIds = new Set(fetchedUpvotes.upvotes.map((u) => u.user_id));
-                    const missingUsers = existingUpvotes.filter(
-                        (u) => !fetchedUserIds.has(u.user_id)
-                    );
-
-                    if (missingUsers.length > 0) {
-                        client.upvoteReminder(missingUsers);
-                        console.log("Users in file but not in fetched data:", missingUsers);
-                    }
-
-                    fs.writeFileSync(
-                        upvotesFilePath,
-                        JSON.stringify(fetchedUpvotes.upvotes, null, 4)
-                    );
-
-                    client.upvotes = fetchedUpvotes;
-                    console.log(client.upvotes);
-                } else {
-                    client.upvotes = [];
-                    console.error(`Failed to fetch upvotes from DBL: ${upvoteRes.status}`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
                 }
-            } catch (e) {
-                client.upvotes = [];
-                console.error("Error fetching upvotes from DBL:", e);
+                
+                const fetchedUpvotes = await response.json();
+                const existingUpvotes = readJsonFile(UPVOTES_PATH, []);
+                
+                // Find expired upvotes
+                const fetchedUserIds = new Set(fetchedUpvotes.upvotes.map((u) => u.user_id));
+                const expiredUsers = existingUpvotes.filter((u) => !fetchedUserIds.has(u.user_id));
+                
+                if (expiredUsers.length > 0) {
+                    await client.upvoteReminder(expiredUsers);
+                    console.log("📤 Sent reminders to expired upvoters:", expiredUsers.length);
+                }
+                
+
+                writeJsonFile(UPVOTES_PATH, fetchedUpvotes.upvotes);
+                client.upvotes = fetchedUpvotes;
+                console.log(`✅ Fetched ${fetchedUpvotes.upvotes.length} upvotes`);
+            } catch (error) {
+                client.upvotes = { upvotes: [] };
+                console.error("❌ Failed to fetch upvotes:", error.message);
             }
         };
 
-        client.upvoteReminder = async function (userIds) {
-            const dataPath = path.join(__dirname, "../assets/data.json");
-            let data;
+        client.upvoteReminder = async (users) => {
+            const data = readJsonFile(DATA_PATH, { users: {} });
+            
+            for (const { user_id: userId } of users) {
+                if (data.users[userId]?.notifications?.reminder !== true) continue;
+                
+                try {
+                    const user = await client.users.fetch(userId);
+                    await user.send(
+                        "Your upvote expired! [Upvote](https://discordbotlist.com/bots/ballidentifier/upvote) again!"
+                    );
+                    console.log(`📨 Reminder sent to ${userId}`);
+                } catch (error) {
+                    console.error(`❌ Failed to send reminder to ${userId}:`, error.message);
+                }
+            }
+        };
+
+        client.postDBLStats = async () => {
             try {
-                data = JSON.parse(fs.readFileSync(dataPath, "utf8"));
-            } catch (e) {
-                data = { users: {} };
-            }
-
-            for (const user of userIds) {
-                const userId = user.user_id;
-                if (data.users[userId]?.notifications?.reminder === true) {
-                    try {
-                        const userObject = await client.users.fetch(userId);
-                        await userObject.send(
-                            "Your upvote expired! [Upvote](https://discordbotlist.com/bots/ballidentifier/upvote) again!"
-                        );
-                        console.log(`Reminder sent to user ${userId}`);
-                    } catch (e) {
-                        console.error(`Failed to send reminder to user ${userId}:`, e);
-                    }
-                }
+                const [app, guilds] = await Promise.all([
+                    client.application.fetch(),
+                    client.guilds.fetch(),
+                ]);
+                
+                const data = readJsonFile(DATA_PATH, { users: {} });
+                const userCount = Math.max(
+                    app.approximateUserInstallCount || 0,
+                    Object.keys(data.users || {}).length
+                );
+                
+                await client.dbl.postBotStats({ guilds: guilds.size, users: userCount });
+                console.log("✅ DBL stats posted");
+            } catch (error) {
+                console.error("❌ DBL stats error:", error.message);
             }
         };
 
-        async function refreshLoop() {
+        // Initial fetch
+        await client.fetchHashes();
+        
+        // Start refresh loop
+        const refreshLoop = async () => {
             await client.fetchUpvotes();
             await client.postDBLStats();
-            setTimeout(refreshLoop, 60 * 60 * 1000);
-        }
+            setTimeout(refreshLoop, REFRESH_INTERVAL);
+        };
         refreshLoop();
 
-        client.postDBLStats = async function () {
-            try {
-                const app = await client.application.fetch();
-                const dataPath = path.join(__dirname, "../assets/data.json");
-                const data = JSON.parse(fs.readFileSync(dataPath, "utf8"));
-                
-                const guilds = await client.guilds.fetch();
-                const users = data.users || {};
-                const userCount = Math.max(
-                    app.approximateUserInstallCount,
-                    Object.values(users).length
-                );
-                await client.dbl.postBotStats({ guilds: guilds.size, users: userCount });
-                console.log("DBL stats posted.");
-            } catch (e) {
-                console.error("DBL stats error:", e);
-            }
-        };
-
-        client.dbl.startPolling(180000);
+        // Set up DBL polling and vote handler
+        client.dbl.startPolling(DBL_POLL_INTERVAL);
+        
         client.dbl.on("vote", async (vote) => {
             await client.fetchUpvotes();
+            
             try {
-                const dataPath = path.join(__dirname, "../assets/data.json");
-                let data;
-                try {
-                    data = JSON.parse(fs.readFileSync(dataPath, "utf8"));
-                } catch (e) {
-                    data = { users: {} };
-                }
-
-                const userId = vote.id;
-                if (data.users[userId]?.notifications?.thanks !== false) {
+                const data = readJsonFile(DATA_PATH, { users: {} });
+                
+                // Send thanks message if enabled
+                if (data.users[vote.id]?.notifications?.thanks !== false) {
                     try {
-                        const userObject = await client.users.fetch(userId);
-                        await userObject.send("Thanks for voting!\n-# You can toggle this message in </notifications:1388927499248996473> command");
-                        console.log(`Thanks message sent to user ${userId}`);
-                    } catch (e) {
-                        console.error(`Failed to send thanks message to user ${userId}:`, e);
+                        const user = await client.users.fetch(vote.id);
+                        await user.send(
+                            "Thanks for voting!\n-# You can toggle this message in </notifications:1388927499248996473> command"
+                        );
+                        console.log(`💖 Thanks sent to ${vote.id}`);
+                    } catch (error) {
+                        console.error(`❌ Failed to send thanks to ${vote.id}:`, error.message);
                     }
                 }
 
+                // Send webhook notification
                 const webhookUrl = process.env.UPVOTE_WEBHOOK_URL;
-                if (!webhookUrl) return;
-                await fetch(webhookUrl, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        embeds: [
-                            {
+                if (webhookUrl) {
+                    await fetch(webhookUrl, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            embeds: [{
                                 title: "New Upvote!",
-                                description: `<@${vote.id}> (${vote.username}) just upvoted the bot on DiscordBotList!`,
+                                description: `<@${vote.id}> (${vote.username}) just upvoted!`,
                                 color: 0x00ff00,
-                                timestamp: vote.time
-                                    ? new Date(vote.time).toISOString()
-                                    : new Date().toISOString(),
-                            },
-                        ],
-                    }),
-                });
-            } catch (e) {
-                console.error("Error sending upvote notification:", e);
+                                timestamp: vote.time ? new Date(vote.time).toISOString() : new Date().toISOString(),
+                            }],
+                        }),
+                    });
+                }
+            } catch (error) {
+                console.error("❌ Error handling vote:", error.message);
             }
         });
     },
