@@ -119,7 +119,7 @@ module.exports = {
 
             // Determine log color based on confidence
             const logColor = compareData.diff <= 10 ? 0x00ff00 
-                           : compareData.diff <= 15 ? REPORT_COLOR 
+                           : compareData.diff <= 15 ? COLORS.ERROR 
                            : 0xff0000;
 
             const imageUrl = buildImageUrl(config.dex, compareData.country);
@@ -179,8 +179,8 @@ module.exports = {
                     const cooldown = client.reportCooldowns.get(btnInteraction.user.id);
                     const now = Date.now();
                     
-                    if (cooldown && now - cooldown < COOLDOWN_MS) {
-                        const left = Math.ceil((COOLDOWN_MS - (now - cooldown)) / 60000);
+                    if (cooldown && now - cooldown < COOLDOWN_DURATION) {
+                        const left = Math.ceil((COOLDOWN_DURATION - (now - cooldown)) / 60000);
                         return btnInteraction.reply({
                             content: `You can send another report in ${left} min.`,
                             flags: MessageFlags.Ephemeral,
@@ -196,7 +196,7 @@ module.exports = {
                             form.append("payload_json", JSON.stringify({
                                 embeds: [{
                                     title: "Wrong answer report",
-                                    color: REPORT_COLOR,
+                                    color: COLORS.ERROR,
                                     fields: [
                                         { name: "User", value: `${btnInteraction.user.tag} (${btnInteraction.user.id})` },
                                         { name: "Detected country", value: `${compareData.country} (${compareData.diff} diff)` },
