@@ -60,19 +60,38 @@ async function handleEval(m, client) {
             output = output.replace(new RegExp(process.env.BOT_TOKEN, "g"), "[REDACTED]");
         }
         
-        // Handle long outputs
-        if (output.length > 1900) {
-            await m.reply(`\`\`\`js\n${output.substring(0, 1900)}\n\`\`\``);
-            await m.reply(`\`\`\`js\n${output.substring(1900)}\n\`\`\``);
-        } else {
-            m.reply(`\`\`\`js\n${output}\n\`\`\``);
+        // Split output into chunks that fit in Discord's 2000 character limit
+        const maxChunkLength = 1900; // Account for code block markers
+        const chunks = [];
+        
+        for (let i = 0; i < output.length; i += maxChunkLength) {
+            chunks.push(output.substring(i, i + maxChunkLength));
+        }
+        
+        // Send each chunk as a separate message
+        for (let i = 0; i < chunks.length; i++) {
+            const isLastChunk = i === chunks.length - 1;
+            const header = chunks.length > 1 ? `[${i + 1}/${chunks.length}]\n` : "";
+            await m.reply(`\`\`\`js\n${header}${chunks[i]}\n\`\`\``);
         }
     } catch (error) {
         let errorMessage = error.message || String(error);
         if (process.env.BOT_TOKEN) {
             errorMessage = errorMessage.replace(new RegExp(process.env.BOT_TOKEN, "g"), "[REDACTED]");
         }
-        m.reply(`\`\`\`js\nError: ${errorMessage}\n\`\`\``);
+        
+        // Handle long error messages the same way
+        const maxChunkLength = 1900;
+        const chunks = [];
+        
+        for (let i = 0; i < errorMessage.length; i += maxChunkLength) {
+            chunks.push(errorMessage.substring(i, i + maxChunkLength));
+        }
+        
+        for (let i = 0; i < chunks.length; i++) {
+            const header = chunks.length > 1 ? `[${i + 1}/${chunks.length}]\n` : "";
+            await m.reply(`\`\`\`js\nError: ${header}${chunks[i]}\n\`\`\``);
+        }
     }
 }
 
