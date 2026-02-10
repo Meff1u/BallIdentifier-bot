@@ -35,7 +35,7 @@ module.exports = {
         
         // Handle eval command for admin
         if (m.content.startsWith(".eval") && m.author.id === ADMIN_ID) {
-            await handleEval(m);
+            await handleEval(m, client);
         }
     },
 };
@@ -43,7 +43,7 @@ module.exports = {
 /**
  * Handle eval command
  */
-async function handleEval(m) {
+async function handleEval(m, client) {
     try {
         const code = m.content.slice(5).trim();
         if (!code) return m.reply("No code provided!");
