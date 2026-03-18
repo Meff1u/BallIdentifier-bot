@@ -2,6 +2,7 @@ const { Client, GatewayIntentBits, Partials, Collection, REST, Routes } = requir
 require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
+const { startServer, initializeServer } = require("./server");
 
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
@@ -75,6 +76,10 @@ client.once("ready", async () => {
     }
 
     await Promise.allSettled(registrations);
+
+    // Initialize and start Express server
+    initializeServer(client);
+    startServer();
 });
 
 // Utility function to send webhook
