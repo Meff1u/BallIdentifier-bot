@@ -37,17 +37,25 @@ app.get("/api/stats", (req, res) => {
         return res.status(503).json({ error: "Discord bot not connected" });
     }
 
-    // Read user data to calculate identified balls
-    const data = readJsonFile(DATA_PATH, { users: {} });
-    const users = data.users || {};
-    const identifiedBalls = Object.values(users).reduce(
-        (acc, u) => acc + (u.identifyAmount || 0), 0
-    );
+    // Fetch app data and read user data in parallel
+    Promise.all([
+        client.application.fetch(),
+        Promise.resolve(readJsonFile(DATA_PATH, { users: {} })),
+    ]).then(([appData, data]) => {
+        const users = data.users || {};
+        const identifiedBalls = Object.values(users).reduce(
+            (acc, u) => acc + (u.identifyAmount || 0), 0
+        );
+        const userCount = Math.max(appData.approximateUserInstallCount, Object.keys(users).length);
 
-    res.status(200).json({
-        guilds: client.guilds.cache.size,
-        users: Object.keys(users).length,
-        identifiedBalls: identifiedBalls,
+        res.status(200).json({
+            guilds: client.guilds.cache.size,
+            users: userCount,
+            identifiedBalls: identifiedBalls,
+        });
+    }).catch((err) => {
+        console.error("Stats endpoint error:", err);
+        res.status(500).json({ error: "Failed to fetch stats" });
     });
 });
 
