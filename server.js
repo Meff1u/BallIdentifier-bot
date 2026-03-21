@@ -20,6 +20,29 @@ const initializeServer = (c) => {
     client = c;
 };
 
+// Middleware to verify API key for protected endpoints
+const verifyApiKey = (req, res, next) => {
+    const apiKey = process.env.API_KEY;
+    
+    if (!apiKey) {
+        return res.status(500).json({ error: "API key not configured" });
+    }
+    
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return res.status(401).json({ error: "Missing or invalid authorization header" });
+    }
+    
+    const token = authHeader.substring(7);
+    
+    if (token !== apiKey) {
+        return res.status(403).json({ error: "Invalid API key" });
+    }
+    
+    next();
+};
+
 // API Routes
 
 // Health check endpoint
@@ -56,6 +79,25 @@ app.get("/api/stats", (req, res) => {
     }).catch((err) => {
         console.error("Stats endpoint error:", err);
         res.status(500).json({ error: "Failed to fetch stats" });
+    });
+});
+
+// Get list of guilds where bot is present
+app.get("/api/guilds", verifyApiKey, (req, res) => {
+    if (!client) {
+        return res.status(503).json({ error: "Discord bot not connected" });
+    }
+
+    const guilds = client.guilds.cache.map(guild => ({
+        id: guild.id,
+        name: guild.name,
+        icon: guild.icon,
+        memberCount: guild.memberCount,
+    }));
+
+    res.status(200).json({
+        guilds: guilds,
+        total: guilds.length,
     });
 });
 
