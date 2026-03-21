@@ -103,7 +103,7 @@ app.get("/api/guilds", verifyApiKey, (req, res) => {
 });
 
 // Get server configuration
-app.get("/api/guilds/:guildId/config", verifyApiKey, (req, res) => {
+app.get("/api/guilds/:guildId/config", verifyApiKey, async (req, res) => {
     if (!client) {
         return res.status(503).json({ error: "Discord bot not connected" });
     }
@@ -116,6 +116,9 @@ app.get("/api/guilds/:guildId/config", verifyApiKey, (req, res) => {
     }
 
     try {
+        // Fetch all members to ensure cache is complete
+        await guild.members.fetch();
+
         // 1. Get supported bots present on this server
         const botMembers = guild.members.cache.filter(member => 
             member.user.bot && SUPPORTED_BOT_IDS.includes(member.id)
