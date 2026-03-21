@@ -5,6 +5,7 @@ const path = require("path");
 
 // Import helpers
 const { readJsonFile, getAssetsPath } = require("./utils/helpers");
+const { SUPPORTED_BOT_IDS } = require("./utils/constants");
 
 const PORT = process.env.PORT || 3001;
 const DATA_PATH = getAssetsPath("data.json");
@@ -99,6 +100,65 @@ app.get("/api/guilds", verifyApiKey, (req, res) => {
         guilds: guilds,
         total: guilds.length,
     });
+});
+
+// Get server configuration
+app.get("/api/guilds/:guildId/config", verifyApiKey, (req, res) => {
+    if (!client) {
+        return res.status(503).json({ error: "Discord bot not connected" });
+    }
+
+    const { guildId } = req.params;
+    const guild = client.guilds.cache.get(guildId);
+
+    if (!guild) {
+        return res.status(404).json({ error: "Guild not found" });
+    }
+
+    try {
+        // 1. Get supported bots present on this server
+        const botMembers = guild.members.cache.filter(member => 
+            member.user.bot && SUPPORTED_BOT_IDS.includes(member.id)
+        );
+        const supportedBots = Array.from(botMembers.values()).map(member => ({
+            id: member.id,
+            name: member.user.username,
+        }));
+
+        // 2. Get roles below BallIdentifier bot's highest role
+        const botMember = guild.members.cache.get(client.user.id);
+        let availableRoles = [];
+
+        if (botMember && botMember.roles.highest) {
+            const botHighestRolePosition = botMember.roles.highest.position;
+            availableRoles = guild.roles.cache
+                .filter(role => 
+                    role.position < botHighestRolePosition && 
+                    role.id !== guild.id
+                )
+                .map(role => ({
+                    id: role.id,
+                    name: role.name,
+                    position: role.position,
+                }))
+                .sort((a, b) => b.position - a.position);
+        }
+
+        // 3. Get current configuration from data.json
+        const data = readJsonFile(DATA_PATH, { guilds: {} });
+        const guildConfig = data.guilds && data.guilds[guildId] ? data.guilds[guildId] : null;
+
+        res.status(200).json({
+            guildId: guildId,
+            guildName: guild.name,
+            supportedBots: supportedBots,
+            availableRoles: availableRoles,
+            configuration: guildConfig || { message: "No configuration set up yet" },
+        });
+    } catch (error) {
+        console.error("Server config endpoint error:", error);
+        res.status(500).json({ error: "Failed to fetch server configuration" });
+    }
 });
 
 // Error handling middleware
