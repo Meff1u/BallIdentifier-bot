@@ -65,7 +65,7 @@ module.exports = {
                 }
 
                 if (availableBots.length === 0) {
-                    return await interaction.reply({
+                    return await interaction.editReply({
                         content: "No supported bots found on this server!",
                         flags: MessageFlags.Ephemeral,
                     });

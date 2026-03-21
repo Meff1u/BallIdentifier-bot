@@ -3,17 +3,21 @@ const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
 
+// Import helpers
+const { readJsonFile, getAssetsPath } = require("./utils/helpers");
+
 const PORT = process.env.PORT || 3001;
+const DATA_PATH = getAssetsPath("data.json");
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 
-let discordClient;
+let client;
 
-const initializeServer = (client) => {
-    discordClient = client;
+const initializeServer = (c) => {
+    client = c;
 };
 
 // API Routes
@@ -23,22 +27,27 @@ app.get("/api/health", (req, res) => {
     res.status(200).json({
         status: "online",
         timestamp: new Date().toISOString(),
-        botReady: discordClient ? discordClient.isReady() : false,
+        botReady: client ? client.isReady() : false,
     });
 });
 
 // Bot stats endpoint
 app.get("/api/stats", (req, res) => {
-    if (!discordClient) {
+    if (!client) {
         return res.status(503).json({ error: "Discord bot not connected" });
     }
 
+    // Read user data to calculate identified balls
+    const data = readJsonFile(DATA_PATH, { users: {} });
+    const users = data.users || {};
+    const identifiedBalls = Object.values(users).reduce(
+        (acc, u) => acc + (u.identifyAmount || 0), 0
+    );
+
     res.status(200).json({
-        uptime: discordClient.uptime,
-        guilds: discordClient.guilds.cache.size,
-        users: discordClient.users.cache.size,
-        readyAt: discordClient.readyAt,
-        latency: discordClient.ws.ping,
+        guilds: client.guilds.cache.size,
+        users: Object.keys(users).length,
+        identifiedBalls: identifiedBalls,
     });
 });
 
