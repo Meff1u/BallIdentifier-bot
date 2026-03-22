@@ -42,14 +42,8 @@ const createRateLimiter = (maxRequests, windowMs) => {
         const recentTimestamps = timestamps.filter(timestamp => timestamp > windowStart);
         
         if (recentTimestamps.length >= maxRequests) {
-            // Calculate retry after in seconds
-            const oldestTimestamp = Math.min(...recentTimestamps);
-            const resetTime = oldestTimestamp + windowMs;
-            const retryAfter = Math.max(1, Math.ceil((resetTime - now) / 1000));
-
             return res.status(429).json({ 
-                error: "Too many requests. Please try again later.",
-                retryAfter: retryAfter 
+                error: "Too many requests. Please try again later."
             });
         }
 
