@@ -1,11 +1,5 @@
 const {
     MessageFlags,
-    ActionRowBuilder,
-    ModalBuilder,
-    TextInputBuilder,
-    TextInputStyle,
-    RoleSelectMenuBuilder,
-    ContainerBuilder,
     EmbedBuilder,
     ButtonBuilder,
     ButtonStyle,
@@ -14,7 +8,7 @@ const FormData = require("form-data");
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
 // Import shared utilities
-const { SUPPORTED_BOT_IDS, BOT_NAMES, COLORS, INACTIVITY_TIMEOUT } = require("../utils/constants");
+const { COLORS, INACTIVITY_TIMEOUT } = require("../utils/constants");
 const { readJsonFile, writeJsonFile, getAssetsPath } = require("../utils/helpers");
 
 const DATA_PATH = getAssetsPath("data.json");
@@ -62,382 +56,22 @@ module.exports = {
 
         // String Select Menus
         else if (interaction.isStringSelectMenu()) {
-            if (interaction.customId.startsWith("notifier_bot_select_")) {
-                try {
-                    const userId = interaction.customId.split("_").pop();
-                    if (interaction.user.id !== userId) {
-                        return await interaction.reply({
-                            content: "❌ You cannot use this menu!",
-                            flags: MessageFlags.Ephemeral,
-                        });
-                    }
-
-                    await interaction.deferUpdate();
-
-                    if (!client.notifierSelections) {
-                        client.notifierSelections = new Map();
-                    }
-                    client.notifierSelections.set(interaction.user.id, interaction.values);
-                } catch (error) {
-                    console.error("Error handling notifier bot selection:", error);
-                }
-            }
+            // No string select menus handling needed
         }
 
         // Role Select Menus
         else if (interaction.isRoleSelectMenu()) {
-            if (interaction.customId.startsWith("notifier_role_select_")) {
-                try {
-                    const userId = interaction.customId.split("_").pop();
-                    if (interaction.user.id !== userId) {
-                        return await interaction.reply({
-                            content: "❌ You cannot use this menu!",
-                            flags: MessageFlags.Ephemeral,
-                        });
-                    }
-
-                    await interaction.deferUpdate();
-
-                    if (!client.notifierRoleSelections) {
-                        client.notifierRoleSelections = new Map();
-                    }
-                    client.notifierRoleSelections.set(interaction.user.id, interaction.values[0]);
-                } catch (error) {
-                    console.error("Error handling notifier role selection:", error);
-                }
-            }
+            // No role select menus handling needed
         }
 
         // Modals
         else if (interaction.isModalSubmit()) {
-            if (interaction.customId.startsWith("notifier_message_modal_")) {
-                try {
-                    const userId = interaction.customId.split("_").pop();
-                    if (interaction.user.id !== userId) {
-                        return await interaction.reply({
-                            content: "❌ You cannot use this modal!",
-                            flags: MessageFlags.Ephemeral,
-                        });
-                    }
-
-                    await interaction.deferUpdate();
-
-                    const messageInput =
-                        interaction.fields.getTextInputValue("notifier_message_input");
-                    const guild = interaction.guild;
-
-                    if (!guild) {
-                        return await interaction.followUp({
-                            content: "This command can only be used in a server!",
-                            flags: MessageFlags.Ephemeral,
-                        });
-                    }
-
-                    if (!messageInput.includes("{role}")) {
-                        return await interaction.followUp({
-                            content:
-                                "❌ Your message must contain the `{role}` placeholder! This is required to mention the role in notifications.",
-                            flags: MessageFlags.Ephemeral,
-                        });
-                    }
-
-                    if (!client.notifierMessageSelections) {
-                        client.notifierMessageSelections = new Map();
-                    }
-                    client.notifierMessageSelections.set(interaction.user.id, messageInput);
-
-                    const ContainerBuilder = require("discord.js").ContainerBuilder;
-                    const {
-                        StringSelectMenuBuilder,
-                        ButtonBuilder,
-                        ButtonStyle,
-                    } = require("discord.js");
-
-                    const members = await guild.members.fetch();
-                    const availableBots = [];
-
-                    for (const botId of SUPPORTED_BOT_IDS) {
-                        const member = members.get(botId);
-                        if (member && member.user.bot) {
-                            availableBots.push({
-                                id: botId,
-                                name: member.user.username,
-                                user: member.user,
-                            });
-                        }
-                    }
-
-                    const notifierContainer = new ContainerBuilder()
-                        .setAccentColor(COLORS.INFO)
-                        .addTextDisplayComponents((t) =>
-                            t.setContent("**🔔 Notification Setup 🔔**")
-                        )
-                        .addSeparatorComponents((s) => s)
-                        .addTextDisplayComponents((t) =>
-                            t.setContent("Select the bots you want to receive notifications from:")
-                        )
-                        .addActionRowComponents((a) =>
-                            a.setComponents(
-                                new StringSelectMenuBuilder()
-                                    .setCustomId(`notifier_bot_select_${interaction.user.id}`)
-                                    .setPlaceholder("Select bots for notifications...")
-                                    .setMinValues(1)
-                                    .setMaxValues(availableBots.length)
-                                    .addOptions(
-                                        availableBots.map((bot) => ({
-                                            label: bot.name,
-                                            description: `Receive notification when ${bot.name} spawns`,
-                                            value: bot.id,
-                                            emoji: "🤖",
-                                        }))
-                                    )
-                            )
-                        )
-                        .addSeparatorComponents((s) => s)
-                        .addTextDisplayComponents((t) =>
-                            t.setContent(
-                                "Select the role you want me to mention:\n-# Remember to check if bot has mention permissions and selected role is below the bot's role in the server."
-                            )
-                        )
-                        .addActionRowComponents((s) => {
-                            const roleSelectMenu = new RoleSelectMenuBuilder()
-                                .setCustomId(`notifier_role_select_${interaction.user.id}`)
-                                .setPlaceholder("Select a role...")
-                                .setMinValues(1)
-                                .setMaxValues(1);
-
-                            const previouslySelectedRole = client.notifierRoleSelections?.get(
-                                interaction.user.id
-                            );
-                            if (previouslySelectedRole) {
-                                roleSelectMenu.setDefaultRoles([previouslySelectedRole]);
-                            }
-
-                            return s.setComponents(roleSelectMenu);
-                        })
-                        .addSeparatorComponents((s) => s)
-                        .addTextDisplayComponents((t) =>
-                            t.setContent(
-                                "Notifier message\n - Use `{role}` as placeholder for the mentioned role and `{ball}` for the identified ball name.\n - Simply don't use `{ball}` placeholder if you want to receive notifications without ball name."
-                            )
-                        )
-                        .addSectionComponents((s) =>
-                            s
-                                .addTextDisplayComponents((t) =>
-                                    t.setContent(`\`\`\`\n${messageInput}\n\`\`\``)
-                                )
-                                .setButtonAccessory((b) =>
-                                    b
-                                        .setCustomId(`notifier_message_edit_${interaction.user.id}`)
-                                        .setLabel("Edit Message")
-                                        .setStyle(ButtonStyle.Primary)
-                                )
-                        )
-                        .addSeparatorComponents((s) => s)
-                        .addActionRowComponents((s) =>
-                            s.setComponents(
-                                new ButtonBuilder()
-                                    .setCustomId(`notifier_confirm_${interaction.user.id}`)
-                                    .setLabel("Confirm Selection")
-                                    .setStyle(ButtonStyle.Success)
-                                    .setEmoji("✅"),
-                                new ButtonBuilder()
-                                    .setCustomId(`notifier_cancel_${interaction.user.id}`)
-                                    .setLabel("Cancel")
-                                    .setStyle(ButtonStyle.Danger)
-                                    .setEmoji("🛑")
-                            )
-                        );
-
-                    await interaction.editReply({
-                        components: [notifierContainer],
-                        flags: MessageFlags.IsComponentsV2,
-                        allowedMentions: { parse: [] },
-                    });
-                } catch (error) {
-                    console.error("Error handling message modal submission:", error);
-                    await interaction.followUp({
-                        content: "An error occurred while processing your message.",
-                        flags: MessageFlags.Ephemeral,
-                    });
-                }
-            }
+            // No modal handling needed
         }
 
         // Buttons
         else if (interaction.isButton()) {
-            const checkUserPermission = (customId, userId) => {
-                if (customId.includes("_")) {
-                    const expectedUserId = customId.split("_").pop();
-                    return userId === expectedUserId;
-                }
-                return true;
-            };
-
-            if (interaction.customId.startsWith("notifier_role_select")) {
-                const modal = new ModalBuilder()
-                    .setCustomId("notifier_role_modal")
-                    .setTitle("Select Notifier Role");
-
-                const roleInput = new TextInputBuilder()
-                    .setCustomId("notifier_role_input")
-                    .setLabel("Enter the role name or ID:")
-                    .setStyle(TextInputStyle.Short)
-                    .setRequired(true);
-
-                modal.addComponents(new ActionRowBuilder().addComponents(roleInput));
-
-                await interaction.showModal(modal);
-            } else if (interaction.customId.startsWith("notifier_message_edit_")) {
-                if (!checkUserPermission(interaction.customId, interaction.user.id)) {
-                    return await interaction.reply({
-                        content: "❌ You cannot use this button!",
-                        flags: MessageFlags.Ephemeral,
-                    });
-                }
-
-                const currentMessage =
-                    client.notifierMessageSelections?.get(interaction.user.id) ||
-                    "{role} Catch that ball! - **{ball}**";
-
-                const modal = new ModalBuilder()
-                    .setCustomId(`notifier_message_modal_${interaction.user.id}`)
-                    .setTitle("Edit Notifier Message");
-
-                const messageInput = new TextInputBuilder()
-                    .setCustomId("notifier_message_input")
-                    .setLabel("Enter your custom notifier message:")
-                    .setPlaceholder("{role} Catch that ball! - **{ball}**")
-                    .setValue(currentMessage)
-                    .setStyle(TextInputStyle.Paragraph)
-                    .setRequired(true)
-                    .setMaxLength(500);
-
-                modal.addComponents(new ActionRowBuilder().addComponents(messageInput));
-
-                await interaction.showModal(modal);
-            } else if (interaction.customId.startsWith("notifier_confirm_")) {
-                if (!checkUserPermission(interaction.customId, interaction.user.id)) {
-                    return await interaction.reply({
-                        content: "❌ You cannot use this button!",
-                        flags: MessageFlags.Ephemeral,
-                    });
-                }
-                try {
-                    const selectedBots = client.notifierSelections?.get(interaction.user.id);
-                    if (!selectedBots || selectedBots.length === 0) {
-                        return await interaction.reply({
-                            content: "Please select at least one bot first!",
-                            flags: MessageFlags.Ephemeral,
-                        });
-                    }
-
-                    const selectedRole = client.notifierRoleSelections?.get(interaction.user.id);
-                    if (!selectedRole) {
-                        return await interaction.reply({
-                            content: "Please select a role first!",
-                            flags: MessageFlags.Ephemeral,
-                        });
-                    }
-
-                    const selectedBotNames = selectedBots.map((id) => BOT_NAMES[id]);
-
-                    const customMessage =
-                        client.notifierMessageSelections?.get(interaction.user.id) ||
-                        "{role} Catch that ball! - **{ball}**";
-
-                    let data = readJsonFile(DATA_PATH, { guilds: {} });
-
-                    if (!data.guilds) {
-                        data.guilds = {};
-                    }
-
-                    data.guilds[interaction.guild.id] = {
-                        notifier: {
-                            selectedBots: selectedBots,
-                            selectedRole: selectedRole,
-                            customMessage: customMessage,
-                            setupBy: interaction.user.id,
-                            setupAt: new Date(),
-                        },
-                    };
-
-                    writeJsonFile(DATA_PATH, data);
-
-                    const confirmationContainer = new ContainerBuilder()
-                        .setAccentColor(COLORS.SUCCESS)
-                        .addTextDisplayComponents((t) =>
-                            t.setContent("**✅ Notifier Setup - Completed**")
-                        )
-                        .addSeparatorComponents((s) => s)
-                        .addTextDisplayComponents((t) =>
-                            t.setContent(
-                                `**Selected Bots:** ${selectedBotNames.join(
-                                    ", "
-                                )}\n**Selected Role:** <@&${selectedRole}>\n**Custom Message:** \`\`\`\n${customMessage}\n\`\`\`\n\nYour notifier has been configured successfully and saved!`
-                            )
-                        );
-
-                    await interaction.update({
-                        components: [confirmationContainer],
-                        flags: MessageFlags.IsComponentsV2,
-                    });
-
-                    if (client.notifierSelections) {
-                        client.notifierSelections.delete(interaction.user.id);
-                    }
-                    if (client.notifierRoleSelections) {
-                        client.notifierRoleSelections.delete(interaction.user.id);
-                    }
-                    if (client.notifierMessageSelections) {
-                        client.notifierMessageSelections.delete(interaction.user.id);
-                    }
-                } catch (error) {
-                    console.error("Error confirming notifier selection:", error);
-                    await interaction.reply({
-                        content: "An error occurred while confirming your selection.",
-                        flags: MessageFlags.Ephemeral,
-                    });
-                }
-            } else if (interaction.customId.startsWith("notifier_cancel_")) {
-                if (!checkUserPermission(interaction.customId, interaction.user.id)) {
-                    return await interaction.reply({
-                        content: "❌ You cannot use this button!",
-                        flags: MessageFlags.Ephemeral,
-                    });
-                }
-
-                try {
-                    const container = new ContainerBuilder()
-                        .setAccentColor(COLORS.ERROR)
-                        .addTextDisplayComponents((t) =>
-                            t.setContent("**❌ Notifier Setup - Cancelled**")
-                        )
-                        .addSeparatorComponents((s) => s)
-                        .addTextDisplayComponents((t) =>
-                            t.setContent(
-                                "The notifier setup has been cancelled.\n\nYou can run </notifier setup:1401243408084762749> again to restart the setup."
-                            )
-                        );
-
-                    await interaction.update({
-                        components: [container],
-                        flags: MessageFlags.IsComponentsV2,
-                    });
-
-                    if (client.notifierSelections) {
-                        client.notifierSelections.delete(interaction.user.id);
-                    }
-                    if (client.notifierRoleSelections) {
-                        client.notifierRoleSelections.delete(interaction.user.id);
-                    }
-                    if (client.notifierMessageSelections) {
-                        client.notifierMessageSelections.delete(interaction.user.id);
-                    }
-                } catch (error) {
-                    console.error("Error cancelling notifier setup:", error);
-                }
-            } else if (interaction.customId === "changelogs") {
+            if (interaction.customId === "changelogs") {
                 const embed = new EmbedBuilder()
                     .setColor(COLORS.INFO)
                     .setTitle("📋 Changelogs")
@@ -454,7 +88,12 @@ module.exports = {
                         },
                         {
                             name: "v2.1.0 - Trainer (Removed)",
-                            value: "⚠️ Trainer feature has been removed due to unauthorized use of Ballsdex bot assets.",
+                            value: "⚠️ Trainer feature has been removed due to unauthorized use of Ballsdex bot assets.\n\nTry out trainer feature on [website](https://ballidentifier.xyz) instead!",
+                            inline: false,
+                        },
+                        {
+                            name: "v2.3.0 - Dashboard",
+                            value: "A new dashboard has been implemented for easier management of your bot settings.\n- Access your dashboard at [ballidentifier.xyz/dashboard](https://ballidentifier.xyz/dashboard).",
                             inline: false,
                         }
                     )
