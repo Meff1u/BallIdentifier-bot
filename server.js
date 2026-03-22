@@ -12,8 +12,18 @@ const DATA_PATH = getAssetsPath("data.json");
 
 const app = express();
 
-app.use(cors());
-app.use(express.json());
+// CORS configuration - restrict to ballidentifier.xyz
+app.use(
+    cors({
+        origin: process.env.CORS_ORIGIN || "https://ballidentifier.xyz",
+        credentials: true,
+        methods: ["GET", "POST", "OPTIONS"],
+        allowedHeaders: ["Content-Type", "Authorization"],
+    })
+);
+
+// Request size limit - 1KB to prevent DoS attacks
+app.use(express.json({ limit: "1kb" }));
 
 let client;
 
@@ -97,6 +107,54 @@ const verifyApiKey = (req, res, next) => {
         return res.status(403).json({ error: "Invalid API key" });
     }
     
+    next();
+};
+
+// Middleware to validate guild config request body
+const validateGuildConfigInput = (req, res, next) => {
+    const { selectedBots, selectedRole, customMessage, setupBy, setupAt, isDelete } = req.body;
+
+    // Skip validation for delete operations (minimal data needed)
+    if (isDelete) {
+        return next();
+    }
+
+    // Validate customMessage length (200 limit)
+    if (customMessage && typeof customMessage === "string") {
+        if (customMessage.length > 200) {
+            return res.status(400).json({
+                error: "customMessage exceeds maximum length of 200 characters",
+            });
+        }
+    }
+
+    // Validate selectedRole is a valid Discord snowflake ID (18-20 digits)
+    if (selectedRole && typeof selectedRole === "string") {
+        if (!/^\d{18,20}$/.test(selectedRole)) {
+            return res.status(400).json({
+                error: "selectedRole must be a valid Discord role ID (18-20 digits)",
+            });
+        }
+    }
+
+    // Validate setupBy is a valid Discord username (2-32 chars, alphanumeric + . _ -)
+    if (setupBy && typeof setupBy === "string") {
+        if (!/^[a-zA-Z0-9._-]{2,32}$/.test(setupBy)) {
+            return res.status(400).json({
+                error: "setupBy must be a valid Discord username (2-32 characters, alphanumeric with . _ -)",
+            });
+        }
+    }
+
+    // Validate setupAt is a valid timestamp
+    if (setupAt) {
+        if (typeof setupAt !== "number" || setupAt <= 0) {
+            return res.status(400).json({
+                error: "setupAt must be a valid positive timestamp",
+            });
+        }
+    }
+
     next();
 };
 
@@ -221,7 +279,7 @@ app.get("/api/guilds/:guildId/config", apiLimiter, verifyApiKey, async (req, res
 });
 
 // Update server configuration
-app.post("/api/guilds/:guildId/config", apiLimiter, verifyApiKey, (req, res) => {
+app.post("/api/guilds/:guildId/config", apiLimiter, verifyApiKey, validateGuildConfigInput, (req, res) => {
     if (!client) {
         return res.status(503).json({ error: "Discord bot not connected" });
     }
