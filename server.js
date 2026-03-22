@@ -42,7 +42,11 @@ const createRateLimiter = (maxRequests, windowMs) => {
         const recentTimestamps = timestamps.filter(timestamp => timestamp > windowStart);
         
         if (recentTimestamps.length >= maxRequests) {
-            const retryAfter = Math.ceil((Math.min(...recentTimestamps) + windowMs - now) / 1000);
+            // Calculate retry after in seconds
+            const oldestTimestamp = Math.min(...recentTimestamps);
+            const resetTime = oldestTimestamp + windowMs;
+            const retryAfter = Math.max(1, Math.ceil((resetTime - now) / 1000));
+
             return res.status(429).json({ 
                 error: "Too many requests. Please try again later.",
                 retryAfter: retryAfter 
@@ -55,7 +59,7 @@ const createRateLimiter = (maxRequests, windowMs) => {
 
         // Set rate limit headers
         res.setHeader("X-RateLimit-Limit", maxRequests);
-        res.setHeader("X-RateLimit-Remaining", maxRequests - recentTimestamps.length);
+        res.setHeader("X-RateLimit-Remaining", Math.max(0, maxRequests - recentTimestamps.length));
         res.setHeader("X-RateLimit-Reset", new Date(Math.min(...recentTimestamps) + windowMs).toISOString());
 
         next();
