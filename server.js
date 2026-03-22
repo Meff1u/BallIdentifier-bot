@@ -63,8 +63,8 @@ const createRateLimiter = (maxRequests, windowMs) => {
 };
 
 // Rate limiters
-const generalLimiter = createRateLimiter(100, 15 * 60 * 1000); // 100 requests per 15 minutes
-const apiLimiter = createRateLimiter(50, 15 * 60 * 1000); // 50 requests per 15 minutes for API endpoints
+const generalLimiter = createRateLimiter(10, 60 * 1000); // 10 requests per minute
+const apiLimiter = createRateLimiter(5, 60 * 1000); // 5 requests per minute for API endpoints
 
 // Cleanup old entries every 30 minutes
 setInterval(() => {
@@ -229,27 +229,7 @@ app.post("/api/guilds/:guildId/config", apiLimiter, verifyApiKey, (req, res) => 
     }
 
     const { guildId } = req.params;
-    const { selectedBots, selectedRole, customMessage, setupBy, setupAt } = req.body;
-
-    // Validate required fields
-    if (!guildId || !selectedBots || !selectedRole || !customMessage || !setupBy || !setupAt) {
-        return res.status(400).json({ 
-            error: "Missing required fields: selectedBots, selectedRole, customMessage, setupBy, setupAt" 
-        });
-    }
-
-    // Validate selectedBots is an array
-    if (!Array.isArray(selectedBots) || selectedBots.length === 0) {
-        return res.status(400).json({ error: "selectedBots must be a non-empty array" });
-    }
-
-    // Validate all selectedBots are supported
-    const unsupportedBots = selectedBots.filter(botId => !SUPPORTED_BOT_IDS.includes(botId));
-    if (unsupportedBots.length > 0) {
-        return res.status(400).json({ 
-            error: `Unsupported bot IDs: ${unsupportedBots.join(", ")}` 
-        });
-    }
+    const { selectedBots, selectedRole, customMessage, setupBy, setupAt, isDelete } = req.body;
 
     // Validate guild exists
     const guild = client.guilds.cache.get(guildId);
@@ -264,6 +244,44 @@ app.post("/api/guilds/:guildId/config", apiLimiter, verifyApiKey, (req, res) => 
         // Ensure guilds object exists
         if (!data.guilds) {
             data.guilds = {};
+        }
+
+        // Handle delete operation
+        if (isDelete) {
+            // Delete notifier configuration for this guild
+            if (data.guilds[guildId]) {
+                delete data.guilds[guildId].notifier;
+            }
+
+            // Write updated data back to file
+            fs.writeFileSync(DATA_PATH, JSON.stringify(data, null, 2), "utf8");
+
+            return res.status(200).json({
+                success: true,
+                message: "Configuration deleted successfully",
+                guildId: guildId,
+            });
+        }
+
+        // Handle save/update operation
+        // Validate required fields
+        if (!selectedBots || !selectedRole || !customMessage || !setupBy || !setupAt) {
+            return res.status(400).json({ 
+                error: "Missing required fields: selectedBots, selectedRole, customMessage, setupBy, setupAt" 
+            });
+        }
+
+        // Validate selectedBots is an array
+        if (!Array.isArray(selectedBots) || selectedBots.length === 0) {
+            return res.status(400).json({ error: "selectedBots must be a non-empty array" });
+        }
+
+        // Validate all selectedBots are supported
+        const unsupportedBots = selectedBots.filter(botId => !SUPPORTED_BOT_IDS.includes(botId));
+        if (unsupportedBots.length > 0) {
+            return res.status(400).json({ 
+                error: `Unsupported bot IDs: ${unsupportedBots.join(", ")}` 
+            });
         }
 
         // Ensure guild entry exists
