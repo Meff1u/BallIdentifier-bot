@@ -20,10 +20,18 @@ module.exports = {
         if (interaction.isChatInputCommand() || interaction.isContextMenuCommand()) {
             const command = client.slashCommands.get(interaction.commandName);
             if (!command) return;
+            
+            // Log command usage
+            const commandType = interaction.isChatInputCommand() ? "Slash" : "Context Menu";
+            const userTag = `${interaction.user.username}#${interaction.user.discriminator || "0"}`;
+            const guildName = interaction.guild?.name || "DM";
+            client.logDiscord(`${commandType} Command: \`${interaction.commandName}\` | User: ${userTag} | Guild: ${guildName}`);
+            
             try {
                 await command.execute(interaction);
             } catch (error) {
                 console.error(`Error executing command ${interaction.commandName}:`, error);
+                client.logDiscord(`⚠️ Command Error in \`${interaction.commandName}\`: ${error.message}`);
                 const webhookUrl = process.env.ERROR_WEBHOOK_URL;
                 if (webhookUrl) {
                     try {
@@ -53,7 +61,6 @@ module.exports = {
                 }
             }
         }
-
         // String Select Menus
         else if (interaction.isStringSelectMenu()) {
             // No string select menus handling needed

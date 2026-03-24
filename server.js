@@ -162,6 +162,7 @@ const validateGuildConfigInput = (req, res, next) => {
 
 // Health check endpoint
 app.get("/api/health", generalLimiter, (req, res) => {
+    client?.logAPI?.(`GET /api/health | Status: OK`);
     res.status(200).json({
         status: "online",
         timestamp: new Date().toISOString(),
@@ -172,6 +173,7 @@ app.get("/api/health", generalLimiter, (req, res) => {
 // Bot stats endpoint
 app.get("/api/stats", generalLimiter, (req, res) => {
     if (!client) {
+        client?.logAPI?.(`GET /api/stats | Status: Error`);
         return res.status(503).json({ error: "Discord bot not connected" });
     }
 
@@ -186,6 +188,8 @@ app.get("/api/stats", generalLimiter, (req, res) => {
         );
         const userCount = Math.max(appData.approximateUserInstallCount, Object.keys(users).length);
 
+        client?.logAPI?.(`GET /api/stats | Guilds: ${client.guilds.cache.size} | Users: ${userCount}`);
+
         res.status(200).json({
             guilds: client.guilds.cache.size,
             users: userCount,
@@ -193,6 +197,7 @@ app.get("/api/stats", generalLimiter, (req, res) => {
         });
     }).catch((err) => {
         console.error("Stats endpoint error:", err);
+        client?.logAPI?.(`GET /api/stats | Status: Error - ${err.message}`);
         res.status(500).json({ error: "Failed to fetch stats" });
     });
 });
@@ -200,6 +205,7 @@ app.get("/api/stats", generalLimiter, (req, res) => {
 // Get list of guilds where bot is present
 app.get("/api/guilds", apiLimiter, verifyApiKey, (req, res) => {
     if (!client) {
+        client?.logAPI?.(`GET /api/guilds | Status: Error - Bot not connected`);
         return res.status(503).json({ error: "Discord bot not connected" });
     }
 
@@ -209,6 +215,8 @@ app.get("/api/guilds", apiLimiter, verifyApiKey, (req, res) => {
         icon: guild.icon,
         memberCount: guild.memberCount,
     }));
+
+    client.logAPI(`GET /api/guilds | Retrieved ${guilds.length} guilds`);
 
     res.status(200).json({
         guilds: guilds,
@@ -226,14 +234,25 @@ app.get("/api/guilds/:guildId/config", apiLimiter, verifyApiKey, async (req, res
     const guild = client.guilds.cache.get(guildId);
 
     if (!guild) {
+        client.logAPI(`GET /api/guilds/${guildId}/config | Status: Error - Guild not found`);
         return res.status(404).json({ error: "Guild not found" });
     }
 
     try {
-        // Fetch all members to ensure cache is complete
-        await guild.members.fetch();
+        // Fetch all members with timeout to avoid hanging on large servers
+        try {
+            await Promise.race([
+                guild.members.fetch(),
+                new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error("Members fetch timeout")), 5000)
+                )
+            ]);
+        } catch (fetchError) {
+            console.warn(`Members fetch failed for guild ${guildId}: ${fetchError.message}. Using cached members.`);
+            client.logAPI(`GET /api/guilds/${guildId}/config | Members fetch timeout, using cache`);
+        }
 
-        // 1. Get supported bots present on this server
+        // 1. Get supported bots present on this server (uses cache, which may be partial if fetch timed out)
         const botMembers = guild.members.cache.filter(member => 
             member.user.bot && SUPPORTED_BOT_IDS.includes(member.id)
         );
@@ -265,6 +284,8 @@ app.get("/api/guilds/:guildId/config", apiLimiter, verifyApiKey, async (req, res
         const data = readJsonFile(DATA_PATH, { guilds: {} });
         const guildConfig = data.guilds && data.guilds[guildId] ? data.guilds[guildId] : null;
 
+        client.logAPI(`GET /api/guilds/${guildId}/config | Guild: ${guild.name} | Bots: ${supportedBots.length} | Roles: ${availableRoles.length}`);
+
         res.status(200).json({
             guildId: guildId,
             guildName: guild.name,
@@ -274,6 +295,7 @@ app.get("/api/guilds/:guildId/config", apiLimiter, verifyApiKey, async (req, res
         });
     } catch (error) {
         console.error("Server config endpoint error:", error);
+        client.logAPI(`GET /api/guilds/${guildId}/config | Status: Error - ${error.message}`);
         res.status(500).json({ error: "Failed to fetch server configuration" });
     }
 });
@@ -290,6 +312,7 @@ app.post("/api/guilds/:guildId/config", apiLimiter, verifyApiKey, validateGuildC
     // Validate guild exists
     const guild = client.guilds.cache.get(guildId);
     if (!guild) {
+        client.logAPI(`POST /api/guilds/${guildId}/config | Status: Error - Guild not found`);
         return res.status(404).json({ error: "Guild not found" });
     }
 
@@ -311,6 +334,8 @@ app.post("/api/guilds/:guildId/config", apiLimiter, verifyApiKey, validateGuildC
 
             // Write updated data back to file
             fs.writeFileSync(DATA_PATH, JSON.stringify(data, null, 2), "utf8");
+
+            client.logAPI(`Configuration deleted for guild: ${guild.name} (${guildId}) by ${setupBy}`);
 
             return res.status(200).json({
                 success: true,
@@ -357,6 +382,8 @@ app.post("/api/guilds/:guildId/config", apiLimiter, verifyApiKey, validateGuildC
         // Write updated data back to file
         fs.writeFileSync(DATA_PATH, JSON.stringify(data, null, 2), "utf8");
 
+        client.logAPI(`Configuration updated for guild: ${guild.name} (${guildId}) by ${setupBy} | Bots: ${selectedBots.length}`);
+
         res.status(200).json({
             success: true,
             message: "Configuration updated successfully",
@@ -365,6 +392,7 @@ app.post("/api/guilds/:guildId/config", apiLimiter, verifyApiKey, validateGuildC
         });
     } catch (error) {
         console.error("Update config endpoint error:", error);
+        client.logAPI(`POST /api/guilds/${guildId}/config | Status: Error - ${error.message}`);
         res.status(500).json({ 
             error: "Failed to update server configuration",
             details: error.message 

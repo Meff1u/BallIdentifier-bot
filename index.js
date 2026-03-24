@@ -3,6 +3,7 @@ require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
 const { startServer, initializeServer } = require("./server");
+const { addLog, flushAllBatches, clearAllBatches } = require("./utils/logger");
 
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
@@ -26,6 +27,13 @@ client.identifyCooldowns = new Map();
 client.reportCooldowns = new Map();
 
 client.slashCommands = new Collection();
+
+// Attach logger functions to client
+client.log = (category, message) => addLog(category, message, client);
+client.logDiscord = (message) => client.log("DISCORD", message);
+client.logImage = (message) => client.log("IMAGE", message);
+client.logAPI = (message) => client.log("API", message);
+client.logGeneral = (message) => client.log("GENERAL", message);
 
 // Load commands
 const commandsPath = path.join(__dirname, "commands");
@@ -51,6 +59,12 @@ fs.readdirSync(eventsPath)
         const handler = (...args) => event.execute(...args, client);
         event.once ? client.once(event.name, handler) : client.on(event.name, handler);
     });
+
+// Handle disconnect - flush pending logs
+client.on("shardDisconnect", async () => {
+    console.log("[Bot] Disconnect detected, flushing pending logs...");
+    await flushAllBatches(client);
+});
 
 client.once("ready", async () => {
     const rest = new REST({ version: "10" }).setToken(TOKEN);
@@ -131,6 +145,21 @@ process.on("unhandledRejection", (reason, promise) => {
 
 process.on("uncaughtException", (error) => {
     handleError("Uncaught Exception", error.stack || String(error));
+});
+
+// Handle graceful shutdown
+process.on("SIGINT", async () => {
+    console.log("[Bot] Gracefully shutting down...");
+    await flushAllBatches(client);
+    await client.destroy();
+    process.exit(0);
+});
+
+process.on("SIGTERM", async () => {
+    console.log("[Bot] Gracefully shutting down...");
+    await flushAllBatches(client);
+    await client.destroy();
+    process.exit(0);
 });
 
 client.login(TOKEN);

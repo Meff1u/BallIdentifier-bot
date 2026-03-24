@@ -24,6 +24,7 @@ module.exports = {
     once: true,
     async execute(client) {
         console.log(`✅ ${client.user.tag} ready`);
+        client.logDiscord(`🤖 Bot started: ${client.user.tag} | Guilds: ${client.guilds.cache.size}`);
         
         // Initialize DBL client
         client.dbl = createDjsClient(process.env.DBL_TOKEN, client);

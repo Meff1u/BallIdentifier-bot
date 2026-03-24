@@ -22,6 +22,9 @@ module.exports = {
                                    m.components[0]?.components[0]?.label?.includes("Catch");
             
             if (isCatchMessage) {
+                const botName = m.author.username;
+                client.logImage(`📸 Spawn detected from ${botName} in ${m.guild.name}`);
+                
                 const data = readJsonFile(DATA_PATH, { guilds: {} });
                 
                 const guildConfig = data.guilds?.[m.guildId]?.notifier;
@@ -134,10 +137,15 @@ async function notify(m, client, settings, info) {
                 .replace("{role}", `<@&${selectedRole}>`),
         });
         
+        // Log the identification result
+        const status = bestMatch.diff <= 20 ? "✅ Identified" : "⚠️ Unknown";
+        client.logImage(`${status}: ${ballName} (diff: ${bestMatch.diff}) | Server: ${m.guild.name}`);
+        
         if (bestMatch.diff <= 20) {
             console.log(`Sent reply for ${m.guild.name} with country: ${bestMatch.country}`);
         }
     } catch (error) {
         console.error("Error processing image:", error);
+        client.logImage(`❌ Image processing error: ${error.message}`);
     }
 }

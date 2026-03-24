@@ -39,6 +39,14 @@ const COLORS = {
     DISABLED: 0x808080,
 };
 
+// Log thread IDs
+const LOG_IDS = {
+    DISCORD: "1462201646405652482",
+    IMAGE: "1462201441023430942",
+    API: "1485975095066497024",
+    GENERAL: "1462200615160643584"
+};
+
 // File paths
 const DATA_FILE = "data.json";
 const UPVOTES_FILE = "upvotes.json";
@@ -53,6 +61,7 @@ module.exports = {
     INACTIVITY_TIMEOUT,
     NEXT_SPAWN_DELAY,
     COLORS,
+    LOG_IDS,
     DATA_FILE,
     UPVOTES_FILE,
     BALLSLIST_FILE,
