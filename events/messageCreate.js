@@ -7,7 +7,7 @@ const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fet
 
 // Import shared utilities
 const { SUPPORTED_BOT_IDS, BOT_DATA_KEYS } = require("../utils/constants");
-const { readJsonFile, compareHashes, getAssetsPath, processImageHash } = require("../utils/helpers");
+const { readJsonFile, writeJsonFile, compareHashes, getAssetsPath, processImageHash } = require("../utils/helpers");
 
 // Local constants
 const DATA_PATH = getAssetsPath("data.json");
@@ -23,7 +23,6 @@ module.exports = {
             
             if (isCatchMessage) {
                 const botName = m.author.username;
-                client.logImage(`📸 Spawn detected from ${botName} in ${m.guild.name}`);
                 
                 const data = readJsonFile(DATA_PATH, { guilds: {} });
                 
@@ -102,6 +101,7 @@ async function handleEval(m, client) {
  * Send notification for spawn
  */
 async function notify(m, client, settings, info) {
+    client.logImage(`📸 Spawn detected from ${botName} in ${m.guild.name}`);
     const { customMessage, selectedRole } = settings;
     
     // If no ball placeholder, send simple notification
@@ -143,6 +143,17 @@ async function notify(m, client, settings, info) {
         
         if (bestMatch.diff <= 20) {
             console.log(`Sent reply for ${m.guild.name} with country: ${bestMatch.country}`);
+            
+            // Increment identifyAmount counter
+            const data = readJsonFile(DATA_PATH, { guilds: {} });
+            if (!data.guilds[m.guildId]) {
+                data.guilds[m.guildId] = {};
+            }
+            if (!data.guilds[m.guildId].identifyAmount) {
+                data.guilds[m.guildId].identifyAmount = 0;
+            }
+            data.guilds[m.guildId].identifyAmount++;
+            writeJsonFile(DATA_PATH, data);
         }
     } catch (error) {
         console.error("Error processing image:", error);

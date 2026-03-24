@@ -180,12 +180,17 @@ app.get("/api/stats", generalLimiter, (req, res) => {
     // Fetch app data and read user data in parallel
     Promise.all([
         client.application.fetch(),
-        Promise.resolve(readJsonFile(DATA_PATH, { users: {} })),
+        Promise.resolve(readJsonFile(DATA_PATH, { users: {}, guilds: {} })),
     ]).then(([appData, data]) => {
         const users = data.users || {};
-        const identifiedBalls = Object.values(users).reduce(
+        const guilds = data.guilds || {};
+        const usersIdentified = Object.values(users).reduce(
             (acc, u) => acc + (u.identifyAmount || 0), 0
         );
+        const guildsIdentified = Object.values(guilds).reduce(
+            (acc, g) => acc + (g.identifyAmount || 0), 0
+        );
+        const identifiedBalls = usersIdentified + guildsIdentified;
         const userCount = Math.max(appData.approximateUserInstallCount, Object.keys(users).length);
 
         client?.logAPI?.(`GET /api/stats | Guilds: ${client.guilds.cache.size} | Users: ${userCount}`);
