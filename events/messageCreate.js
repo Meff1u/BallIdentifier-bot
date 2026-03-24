@@ -22,8 +22,6 @@ module.exports = {
                                    m.components[0]?.components[0]?.label?.includes("Catch");
             
             if (isCatchMessage) {
-                const botName = m.author.username;
-                
                 const data = readJsonFile(DATA_PATH, { guilds: {} });
                 
                 const guildConfig = data.guilds?.[m.guildId]?.notifier;
@@ -101,7 +99,7 @@ async function handleEval(m, client) {
  * Send notification for spawn
  */
 async function notify(m, client, settings, info) {
-    client.logImage(`📸 Spawn detected from ${botName} in ${m.guild.name}`);
+    client.logImage(`📸 Spawn detected from ${m.author.username} in ${m.guild.name}`);
     const { customMessage, selectedRole } = settings;
     
     // If no ball placeholder, send simple notification
