@@ -148,7 +148,7 @@ module.exports = {
                 .setColor(0xa020f0)
                 .setTitle(compareData.country)
                 .setDescription(
-                    `**Similarity:** ${100 - compareData.diff}%\n**Rarity:** ${rarity ? `t${rarity}` : "Not found"}\n- **Artist:** ${artist}`
+                    `**Similarity:** ${100 - compareData.diff}%\n**Rarity:** ${rarity ? `t${rarity}` : "Not found"}\n**Artist:** ${artist}`
                 )
                 .setThumbnail(imageUrl)
                 .setFooter({
