@@ -44,7 +44,7 @@ module.exports = {
             .addFields(
                 {
                     name: "Supported Bots",
-                    value: "- Ballsdex\n- FoodDex",
+                    value: "- Ballsdex\n- FoodDex\n- HistoryDex",
                     inline: true,
                 },
                 {

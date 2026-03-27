@@ -5,19 +5,22 @@
 // Supported bot IDs for identification
 const SUPPORTED_BOT_IDS = [
     "999736048596816014",    // Ballsdex
-    "1433922711561699393"   // FoodDex
+    "1433922711561699393",   // FoodDex
+    "1120942938126553190"   // HistoryDex
 ];
 
 // Bot ID to name mapping
 const BOT_NAMES = {
     "999736048596816014": "Ballsdex",
-    "1433922711561699393": "FoodDex"
+    "1433922711561699393": "FoodDex",
+    "1120942938126553190": "HistoryDex"
 };
 
 // Bot ID to data key mapping
 const BOT_DATA_KEYS = {
     "999736048596816014": "BD",
-    "1433922711561699393": "FD"
+    "1433922711561699393": "FD",
+    "1120942938126553190": "HD"
 };
 
 // URLs

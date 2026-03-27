@@ -124,6 +124,7 @@ module.exports = {
 
             const imageUrl = buildImageUrl(config.dex, compareData.country);
             const rarity = client.rarities[config.dKey]?.[compareData.country]?.rarity;
+            const artist = client.rarities[config.dKey]?.[compareData.country]?.artist || "Unknown";
             
             // Log the identification
             await client.sendLog({
@@ -147,7 +148,7 @@ module.exports = {
                 .setColor(0xa020f0)
                 .setTitle(compareData.country)
                 .setDescription(
-                    `**Similarity:** ${100 - compareData.diff}%\n**Rarity:** ${rarity ? `t${rarity}` : "Not found"}`
+                    `**Similarity:** ${100 - compareData.diff}%\n**Rarity:** ${rarity ? `t${rarity}` : "Not found"}\n- **Artist:** ${artist}`
                 )
                 .setThumbnail(imageUrl)
                 .setFooter({

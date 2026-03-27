@@ -15,7 +15,7 @@ const DBL_POLL_INTERVAL = 180000; // 3 minutes
 const HASH_URLS = Object.fromEntries(
     Object.entries(BOT_DATA_KEYS).map(([, key]) => [
         key,
-        `${ASSETS_BASE_URL}/jsons/${key === "BD" ? "Ballsdex" : "FoodDex"}`,
+        `${ASSETS_BASE_URL}/jsons/${key === "BD" ? "Ballsdex" : key === "FD" ? "FoodDex" : "HistoryDex"}`,
     ])
 );
 
