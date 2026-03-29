@@ -99,7 +99,6 @@ async function handleEval(m, client) {
  * Send notification for spawn
  */
 async function notify(m, client, settings, info) {
-    client.logImage(`📸 Spawn detected from ${m.author.username} in ${m.guild.name}`);
     const { customMessage, selectedRole } = settings;
     
     // If no ball placeholder, send simple notification
