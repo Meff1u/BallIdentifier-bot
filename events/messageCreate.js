@@ -128,10 +128,17 @@ async function notify(m, client, settings, info) {
             ? "Unknown (probably new spawn art)" 
             : bestMatch.country;
 
+        const foundBall = client.rarities[BOT_DATA_KEYS[m.author.id]]?.[bestMatch.country];
+        
+        const rarity = foundBall ? foundBall.rarity : "Unknown";
+        const artist = foundBall ? foundBall.artist : "Unknown";
+
         m.reply({
             content: customMessage
                 .replace("{ball}", ballName)
-                .replace("{role}", `<@&${selectedRole}>`),
+                .replace("{role}", `<@&${selectedRole}>`)
+                .replace("{rarity}", rarity)
+                .replace("{artist}", artist),
         });
         
         // Log the identification result
