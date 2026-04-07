@@ -1,12 +1,13 @@
 const sharp = require("sharp");
 const fs = require("fs");
 const path = require("path");
+const FormData = require("form-data");
 const { imageHash } = require("image-hash");
 
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
 // Import shared utilities
-const { SUPPORTED_BOT_IDS, BOT_DATA_KEYS } = require("../utils/constants");
+const { SUPPORTED_BOT_IDS, BOT_DATA_KEYS, BOT_NAMES, COLORS } = require("../utils/constants");
 const { readJsonFile, writeJsonFile, compareHashes, getAssetsPath, processImageHash } = require("../utils/helpers");
 
 // Local constants
@@ -100,17 +101,10 @@ async function handleEval(m, client) {
  */
 async function notify(m, client, settings, info) {
     const { customMessage, selectedRole } = settings;
-    
-    // If no ball placeholder, send simple notification
-    if (!customMessage.includes("{ball}")) {
-        return m.reply({
-            content: customMessage.replace("{ball}", "").replace("{role}", `<@&${selectedRole}>`),
-        });
-    }
 
     try {
         // Process image to identify ball
-        const { hash } = await processImageHash(m.attachments.first().url, m.id);
+        const { hash, buffer: imageBuffer } = await processImageHash(m.attachments.first().url, m.id);
 
         // Find best match
         let bestMatch = { diff: Infinity, country: "" };
@@ -135,7 +129,7 @@ async function notify(m, client, settings, info) {
 
         m.reply({
             content: customMessage
-                .replace("{ball}", ballName)
+                .replace("{ball}", customMessage.includes("{ball}") ? ballName : "")
                 .replace("{role}", `<@&${selectedRole}>`)
                 .replace("{rarity}", rarity)
                 .replace("{artist}", artist),
@@ -158,6 +152,34 @@ async function notify(m, client, settings, info) {
             }
             data.guilds[m.guildId].identifyAmount++;
             writeJsonFile(DATA_PATH, data);
+        } else if (bestMatch.diff > 20) {
+            // Send report for unknown spawn art
+            const webhookUrl = process.env.REPORT_WEBHOOK_URL;
+            if (webhookUrl) {
+                try {
+                    const botDex = BOT_NAMES[m.author.id] || "Unknown";
+                    const form = new FormData();
+                    form.append("payload_json", JSON.stringify({
+                        embeds: [{
+                            title: "Unknown spawn art report (AutoNotifier)",
+                            color: COLORS.ERROR,
+                            fields: [
+                                { name: "Server", value: m.guild.name },
+                                { name: "Best match", value: `${bestMatch.country} (${bestMatch.diff} diff)` },
+                                { name: "Bot", value: botDex },
+                                { name: "Message Link", value: `[Link](${m.url})` },
+                                { name: "Target Spawn URL", value: m.attachments.first().url },
+                            ],
+                            thumbnail: { url: m.attachments.first().url },
+                            timestamp: new Date().toISOString(),
+                        }],
+                    }));
+                    form.append("file", imageBuffer, m.attachments.first().name || `${m.id}.png`);
+                    await fetch(webhookUrl, { method: "POST", body: form });
+                } catch (e) {
+                    console.error("Error sending auto-notifier report:", e);
+                }
+            }
         }
     } catch (error) {
         console.error("Error processing image:", error);

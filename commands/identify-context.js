@@ -123,7 +123,7 @@ module.exports = {
                            : 0xff0000;
 
             const imageUrl = buildImageUrl(config.dex, compareData.country);
-            const rarity = client.rarities[config.dKey]?.[compareData.country]?.rarity;
+            const rarity = client.rarities[config.dKey]?.[compareData.country]?.rarity || "Unknown";
             const artist = client.rarities[config.dKey]?.[compareData.country]?.artist || "Unknown";
             
             // Log the identification
