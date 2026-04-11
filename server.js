@@ -340,7 +340,7 @@ app.post("/api/guilds/:guildId/config", apiLimiter, verifyApiKey, validateGuildC
             // Write updated data back to file
             fs.writeFileSync(DATA_PATH, JSON.stringify(data, null, 2), "utf8");
 
-            client.logAPI(`Configuration deleted for guild: ${guild.name} (${guildId}) by ${setupBy}`);
+            client.logAPI(`POST /api/guilds/${guildId}/config | Configuration deleted for guild: ${guild.name} (${guildId}) by ${setupBy}`);
 
             return res.status(200).json({
                 success: true,
@@ -387,7 +387,7 @@ app.post("/api/guilds/:guildId/config", apiLimiter, verifyApiKey, validateGuildC
         // Write updated data back to file
         fs.writeFileSync(DATA_PATH, JSON.stringify(data, null, 2), "utf8");
 
-        client.logAPI(`Configuration updated for guild: ${guild.name} (${guildId}) by ${setupBy} | Bots: ${selectedBots.length}`);
+        client.logAPI(`POST /api/guilds/${guildId}/config | Configuration updated for guild: ${guild.name} (${guildId}) by ${setupBy} | Bots: ${selectedBots.length}`);
 
         res.status(200).json({
             success: true,

@@ -124,8 +124,8 @@ async function notify(m, client, settings, info) {
 
         const foundBall = client.rarities[BOT_DATA_KEYS[m.author.id]]?.[bestMatch.country];
         
-        const rarity = foundBall ? foundBall.rarity : "Unknown";
-        const artist = foundBall ? foundBall.artist : "Unknown";
+        const rarity = (ballName.includes("Unknown") || !foundBall) ? "Unknown" : foundBall.rarity;
+        const artist = (ballName.includes("Unknown") || !foundBall) ? "Unknown" : foundBall.artist;
 
         m.reply({
             content: customMessage
@@ -137,7 +137,7 @@ async function notify(m, client, settings, info) {
         
         // Log the identification result
         const status = bestMatch.diff <= 20 ? "✅ Identified" : "⚠️ Unknown";
-        client.logImage(`${status}: ${ballName} (diff: ${bestMatch.diff}) | Server: ${m.guild.name}`);
+        client.logImage(`[${m.guild.name}] ${status}: ${ballName} (diff: ${bestMatch.diff})`);
         
         if (bestMatch.diff <= 20) {
             console.log(`Sent reply for ${m.guild.name} with country: ${bestMatch.country}`);
@@ -183,6 +183,6 @@ async function notify(m, client, settings, info) {
         }
     } catch (error) {
         console.error("Error processing image:", error);
-        client.logImage(`❌ Image processing error: ${error.message}`);
+        client.logImage(`[${m.guild.name}] ❌ Image processing error: ${error.message}`);
     }
 }
