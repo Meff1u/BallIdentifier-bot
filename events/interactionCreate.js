@@ -16,6 +16,19 @@ const DATA_PATH = getAssetsPath("data.json");
 module.exports = {
     name: "interactionCreate",
     async execute(interaction, client) {
+        // Autocomplete interactions
+        if (interaction.isAutocomplete()) {
+            const command = client.slashCommands.get(interaction.commandName);
+            if (!command || !command.autocomplete) return;
+            
+            try {
+                await command.autocomplete(interaction);
+            } catch (error) {
+                console.error(`Error handling autocomplete for ${interaction.commandName}:`, error);
+            }
+            return;
+        }
+        
         // Slash commands and context menus
         if (interaction.isChatInputCommand() || interaction.isContextMenuCommand()) {
             const command = client.slashCommands.get(interaction.commandName);
@@ -101,6 +114,11 @@ module.exports = {
                         {
                             name: "v2.3.0 - Dashboard",
                             value: "A new dashboard has been implemented for easier management of your bot settings.\n- Access your dashboard at [ballidentifier.xyz/dashboard](https://ballidentifier.xyz/dashboard).",
+                            inline: false,
+                        },
+                        {
+                            name: "v2.3.6 - /info command",
+                            value: "Added /info command to get information about specific balls.",
                             inline: false,
                         }
                     )
