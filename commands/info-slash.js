@@ -80,7 +80,11 @@ module.exports = {
             .setTitle(ballName)
             .setDescription(description)
             .setColor(COLORS.PRIMARY)
-            .setThumbnail(buildImageUrl(dexName, ballName));
+            .setThumbnail(buildImageUrl(dexName, ballName))
+            .setFooter({
+                text: dexName,
+                iconURL: `https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets/icons/${encodeURIComponent(dexName)}.png`,
+            });
 
         await interaction.reply({
             embeds: [embed],
