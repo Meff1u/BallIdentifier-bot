@@ -114,7 +114,7 @@ module.exports = {
             .setAccentColor(COLORS.PRIMARY);
 
         container.addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(`**${ballName}**`),
+            new TextDisplayBuilder().setContent(`# **${ballName}**`),
         );
 
         const galleryItem = new MediaGalleryItemBuilder()
