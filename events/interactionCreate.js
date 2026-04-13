@@ -3,6 +3,10 @@ const {
     EmbedBuilder,
     ButtonBuilder,
     ButtonStyle,
+    ContainerBuilder,
+    TextDisplayBuilder,
+    SeparatorBuilder,
+    SeparatorSpacingSize,
 } = require("discord.js");
 const FormData = require("form-data");
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
@@ -91,6 +95,55 @@ module.exports = {
 
         // Buttons
         else if (interaction.isButton()) {
+            // Handle collectors button
+            if (interaction.customId.startsWith("collectors_")) {
+                const parts = interaction.customId.split("_");
+                const dataKey = parts[1];
+                const ballId = parseInt(parts[2], 10);
+
+                const rarities = client.rarities?.[dataKey];
+                if (!rarities) {
+                    return interaction.reply({
+                        content: "Data not found.",
+                        flags: MessageFlags.Ephemeral,
+                    });
+                }
+
+                // Find ball by ID
+                const ballEntry = Object.entries(rarities).find(([_, data]) => data.id === ballId);
+                if (!ballEntry || !ballEntry[1].collectors) {
+                    return interaction.reply({
+                        content: "No collectors data found.",
+                        flags: MessageFlags.Ephemeral,
+                    });
+                }
+
+                const [ballName, ballData] = ballEntry;
+                const collectors = ballData.collectors;
+
+                // Format collectors list
+                const collectorsList = collectors.length > 0 
+                    ? collectors.map(c => `- <@${c}> ($${c})`).join("\n")
+                    : "No collectors yet.";
+
+                const container = new ContainerBuilder()
+                    .setAccentColor(COLORS.PRIMARY)
+                    .addTextDisplayComponents(
+                        new TextDisplayBuilder().setContent(`Collectors of **${ballName}:**`)
+                    )
+                    .addSeparatorComponents(
+                        new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true)
+                    )
+                    .addTextDisplayComponents(
+                        new TextDisplayBuilder().setContent(collectorsList)
+                    );
+
+                return interaction.reply({
+                    components: [container],
+                    flags: [MessageFlags.Ephemeral, MessageFlags.IsComponentsV2],
+                });
+            }
+
             if (interaction.customId === "changelogs") {
                 const embed = new EmbedBuilder()
                     .setColor(COLORS.INFO)

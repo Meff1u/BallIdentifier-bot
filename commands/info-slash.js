@@ -1,10 +1,22 @@
-const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require("discord.js");
+const { 
+    SlashCommandBuilder, 
+    MessageFlags, 
+    ContainerBuilder, 
+    TextDisplayBuilder, 
+    MediaGalleryBuilder, 
+    MediaGalleryItemBuilder, 
+    SeparatorBuilder, 
+    SeparatorSpacingSize, 
+    ButtonBuilder, 
+    ButtonStyle, 
+    SectionBuilder 
+} = require("discord.js");
 
 // Import shared utilities
 const { SUPPORTED_BOT_IDS, BOT_NAMES, BOT_DATA_KEYS, COLORS } = require("../utils/constants");
 
 const buildImageUrl = (dex, ballName) => {
-    return `https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets/dexes/${encodeURIComponent(dex)}/${encodeURIComponent(ballName)}.png`;
+    return `https://ballidentifier.xyz/assets/dexes/${encodeURIComponent(dex)}/compressed/${encodeURIComponent(ballName)}.webp`;
 };
 
 const slashBuilder = new SlashCommandBuilder()
@@ -44,51 +56,109 @@ module.exports = {
 
         const dexName = BOT_NAMES[botId];
         const dataKey = BOT_DATA_KEYS[botId];
-        const ballName = options.getString("name");
+        let ballName = options.getString("name");
         const rarities = client.rarities?.[dataKey];
 
-        if (!rarities || !rarities[ballName]) {
+        if (!rarities) {
             return interaction.reply({
                 content: `Entry **${ballName}** not found in ${dexName}.`,
                 flags: MessageFlags.Ephemeral,
             });
         }
 
-        const ballData = rarities[ballName];
-        const descriptionParts = [];
+        let ballData = rarities[ballName];
+
+        if (!ballData) {
+            const inputAsNumber = parseInt(ballName, 10);
+            if (!isNaN(inputAsNumber)) {
+                const foundEntry = Object.entries(rarities).find(([_, data]) => data.id === inputAsNumber);
+                if (foundEntry) {
+                    ballData = foundEntry[1];
+                    ballName = foundEntry[0];
+                }
+            }
+        }
+
+        if (!ballData) {
+            return interaction.reply({
+                content: `Entry **${ballName}** not found in ${dexName}.`,
+                flags: MessageFlags.Ephemeral,
+            });
+        }
+
+        const detailsParts = [];
 
         if (ballData.rarity !== undefined) {
-            descriptionParts.push(`**Rarity:** \`t${ballData.rarity}\``);
-        }
-
-        if (ballData.artist) {
-            descriptionParts.push(`**Artist:** \`${ballData.artist}\``);
-        }
-
-        if (ballData.id !== undefined) {
-            descriptionParts.push(`**ID:** \`${ballData.id}\``);
+            detailsParts.push(`- Rarity: \`t${ballData.rarity}\``);
         }
 
         if (ballData.wave !== undefined) {
-            descriptionParts.push(`**Wave:** \`${ballData.wave}\``);
+            detailsParts.push(`- Wave: \`${ballData.wave}\``);
         }
 
-        const description =
-            descriptionParts.length > 0 ? descriptionParts.join("\n") : "No information available.";
+        if (ballData.common_value !== undefined) {
+            detailsParts.push(`- Common value: \`${ballData.common_value}\``);
+        }
 
-        const embed = new EmbedBuilder()
-            .setTitle(ballName)
-            .setDescription(description)
-            .setColor(COLORS.PRIMARY)
-            .setThumbnail(buildImageUrl(dexName, ballName))
-            .setFooter({
-                text: dexName,
-                iconURL: `https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets/icons/${encodeURIComponent(dexName)}.png`,
-            });
+        if (ballData.collector_requirement !== undefined) {
+            detailsParts.push(`- Collector requirement: \`${ballData.collector_requirement}\``);
+        }
+
+        if (ballData.demand !== undefined) {
+            detailsParts.push(`- Demand tier: \`${ballData.demand}\``);
+        }
+
+        const detailsText = detailsParts.length > 0 ? detailsParts.join("\n") : "No additional information available.";
+
+        const container = new ContainerBuilder()
+            .setAccentColor(COLORS.PRIMARY);
+
+        container.addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(`**${ballName}**`),
+        );
+
+        const galleryItem = new MediaGalleryItemBuilder()
+            .setURL(buildImageUrl(dexName, ballName));
+        
+        if (ballData.artist) {
+            galleryItem.setDescription(`spawn art made by ${ballData.artist}`);
+        }
+
+        container.addMediaGalleryComponents(
+            new MediaGalleryBuilder().addItems(galleryItem),
+        );
+
+        container.addSeparatorComponents(
+            new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true),
+        );
+
+        container.addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(`**Details**:\n${detailsText}`),
+        );
+        container.addSeparatorComponents(
+            new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true),
+        );
+
+        const section = new SectionBuilder()
+            .addTextDisplayComponents(
+                new TextDisplayBuilder().setContent(`-# ID: \`${ballData.id}\``),
+            );
+
+        if (ballData.collectors) {
+            section.setButtonAccessory(
+                new ButtonBuilder()
+                    .setStyle(ButtonStyle.Primary)
+                    .setLabel("Collectors")
+                    .setEmoji({ name: "🏆" })
+                    .setCustomId(`collectors_${dataKey}_${ballData.id}`),
+            );
+        }
+
+        container.addSectionComponents(section);
 
         await interaction.reply({
-            embeds: [embed],
-            flags: MessageFlags.Ephemeral,
+            components: [container],
+            flags: [MessageFlags.Ephemeral, MessageFlags.IsComponentsV2]
         });
     },
 
