@@ -92,6 +92,10 @@ module.exports = {
             detailsParts.push(`- Rarity: \`t${ballData.rarity}\``);
         }
 
+        if (ballData.artist) {
+            detailsParts.push(`- Artist: \`${ballData.artist}\``);
+        }
+
         if (ballData.wave !== undefined) {
             detailsParts.push(`- Wave: \`${ballData.wave}\``);
         }
@@ -119,10 +123,6 @@ module.exports = {
 
         const galleryItem = new MediaGalleryItemBuilder()
             .setURL(buildImageUrl(dexName, ballName));
-        
-        if (ballData.artist) {
-            galleryItem.setDescription(`spawn art made by ${ballData.artist}`);
-        }
 
         container.addMediaGalleryComponents(
             new MediaGalleryBuilder().addItems(galleryItem),
@@ -145,20 +145,20 @@ module.exports = {
             );
 
         if (ballData.collectors) {
-            section.setButtonAccessory(
-                new ButtonBuilder()
-                    .setStyle(ButtonStyle.Primary)
-                    .setLabel("Collectors")
-                    .setEmoji({ name: "🏆" })
-                    .setCustomId(`collectors_${dataKey}_${ballData.id}`),
-            );
+            const button = new ButtonBuilder()
+                .setStyle(ButtonStyle.Primary)
+                .setLabel("Collectors")
+                .setEmoji("🏆")
+                .setCustomId(`collectors_${dataKey}_${ballData.id}`);
+            
+            section.setButtonAccessory(button);
         }
 
         container.addSectionComponents(section);
 
         await interaction.reply({
             components: [container],
-            flags: [MessageFlags.Ephemeral, MessageFlags.IsComponentsV2]
+            flags: [MessageFlags.Ephemeral, MessageFlags.IsComponentsV2],
         });
     },
 
