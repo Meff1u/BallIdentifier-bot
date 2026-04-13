@@ -33,7 +33,7 @@ SUPPORTED_BOT_IDS.forEach((botId) => {
             .addStringOption((option) =>
                 option
                     .setName("name")
-                    .setDescription("The entry to get info about.")
+                    .setDescription("Name or ID of entry to get info about.")
                     .setRequired(true)
                     .setAutocomplete(true),
             ),

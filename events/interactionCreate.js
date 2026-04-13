@@ -123,7 +123,7 @@ module.exports = {
 
                 // Format collectors list
                 const collectorsList = collectors.length > 0 
-                    ? collectors.map(c => `- <@${c}>\n   -# ${c}`).join("\n")
+                    ? collectors.map(c => `- <@${c}>\n > ${c}`).join("\n")
                     : "No collectors yet.";
 
                 const container = new ContainerBuilder()
