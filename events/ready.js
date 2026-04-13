@@ -3,7 +3,7 @@ const { createDjsClient } = require("discordbotlist");
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
 // Import shared utilities
-const { ASSETS_BASE_URL, BOT_DATA_KEYS } = require("../utils/constants");
+const { ASSETS_BASE_URL, BOT_NAMES, BOT_DATA_KEYS } = require("../utils/constants");
 const { readJsonFile, writeJsonFile, getAssetsPath } = require("../utils/helpers");
 
 // Local constants
@@ -13,9 +13,9 @@ const REFRESH_INTERVAL = 60 * 60 * 1000; // 1 hour
 const DBL_POLL_INTERVAL = 180000; // 3 minutes
 
 const HASH_URLS = Object.fromEntries(
-    Object.entries(BOT_DATA_KEYS).map(([, key]) => [
+    Object.entries(BOT_DATA_KEYS).map(([botId, key]) => [
         key,
-        `${ASSETS_BASE_URL}/jsons/${key === "BD" ? "Ballsdex" : key === "FD" ? "FoodDex" : "HistoryDex"}`,
+        `${ASSETS_BASE_URL}/jsons/${BOT_NAMES[botId]}`,
     ])
 );
 

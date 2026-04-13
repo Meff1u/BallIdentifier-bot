@@ -100,8 +100,8 @@ module.exports = {
             detailsParts.push(`- Common value: \`${ballData.common_value}\``);
         }
 
-        if (ballData.collector_requirement !== undefined) {
-            detailsParts.push(`- Collector requirement: \`${ballData.collector_requirement}\``);
+        if (ballData.cc !== undefined) {
+            detailsParts.push(`- Collector requirement: \`${ballData.cc}\``);
         }
 
         if (ballData.demand !== undefined) {
