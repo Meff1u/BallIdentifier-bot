@@ -136,6 +136,12 @@ module.exports = {
                     )
                     .addTextDisplayComponents(
                         new TextDisplayBuilder().setContent(collectorsList)
+                    )
+                    .addSeparatorComponents(
+                        new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true)
+                    )
+                    .addTextDisplayComponents(
+                        new TextDisplayBuilder().setContent("-# That list may be outdated or not updated with new collectors. If you know something i don't, let me know! (<@334411435633541121> | @meffiu)")
                     );
 
                 return interaction.reply({
