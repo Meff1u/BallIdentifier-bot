@@ -71,6 +71,14 @@ module.exports = {
                 flags: MessageFlags.Ephemeral,
             });
         }
+
+        // Guild check
+        if (!message.guild) {
+            return interaction.reply({
+                content: "This command can only be used on messages within a server.",
+                flags: MessageFlags.Ephemeral,
+            });
+        }
         
         if (!message.attachments?.size) {
             return interaction.reply({
@@ -171,7 +179,6 @@ module.exports = {
                 });
 
                 // Set up report collector
-                console.log(interaction.channel);
                 const collector = interaction.channel.createMessageComponentCollector({
                     filter: (i) => i.customId === "report_wrong_answer" && i.user.id === user.id,
                     time: 60000,

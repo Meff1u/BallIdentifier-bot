@@ -40,7 +40,7 @@ module.exports = {
             
             // Log command usage
             const commandType = interaction.isChatInputCommand() ? "Slash" : "Context Menu";
-            const userTag = `${interaction.user.username}#${interaction.user.discriminator || "0"}`;
+            const userTag = `${interaction.user.username}`;
             const guildName = interaction.guild?.name || "DM";
             client.logDiscord(`${commandType} Command: \`${interaction.commandName}\` | User: ${userTag} | Guild: ${guildName}`);
             
