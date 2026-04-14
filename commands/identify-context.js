@@ -2,9 +2,6 @@ const {
     ContextMenuCommandBuilder,
     ApplicationCommandType,
     EmbedBuilder,
-    ActionRowBuilder,
-    ButtonBuilder,
-    ButtonStyle,
     MessageFlags,
 } = require("discord.js");
 const fs = require("fs");
@@ -137,93 +134,66 @@ module.exports = {
                         value: `- **Dex:** ${config.dex}\n- **Country:** ${compareData.country}\n- **Diff:** ${compareData.diff}\n- **Rarity:** ${rarity ? `t${rarity}` : "Not found"}`,
                         inline: false,
                     },
-                    ...(compareData.diff >= 16 ? [{ name: "Target Spawn Art", value: "\u200B" }] : []),
+                    ...(compareData.diff >= 20 ? [{ name: "Target Spawn Art", value: "\u200B" }] : []),
                 ],
                 thumbnail: imageUrl,
-                image: compareData.diff >= 16 ? message.attachments.first().url : null,
+                image: compareData.diff >= 20 ? message.attachments.first().url : null,
                 color: logColor,
             });
 
             // Create result embed
             const embed = new EmbedBuilder()
-                .setColor(0xa020f0)
+                .setColor(compareData.diff <= 10 ? COLORS.SUCCESS 
+                         : compareData.diff <= 15 ? COLORS.WARNING 
+                         : compareData.diff <= 20 ? 0xe69138
+                         : COLORS.ERROR)
                 .setTitle(compareData.country)
                 .setDescription(
                     `**Similarity:** \`${100 - compareData.diff}%\`\n**Rarity:** \`${rarity ? `t${rarity}` : "Not found"}\`\n**Artist:** \`${artist}\``
                 )
                 .setThumbnail(imageUrl)
                 .setFooter({
-                    text: `You have identified ${(data.users[user.id]?.identifyAmount || 0) + 1} balls!`,
+                    text: `You have identified ${(data.users[user.id]?.identifyAmount || 0) + (compareData.diff >= 20 ? 0 : 1)} balls!`,
                 });
 
-            // Handle low confidence results with report button
-            if (compareData.diff >= 16) {
-                const reportButton = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder()
-                        .setCustomId("report_wrong_answer")
-                        .setLabel("Wrong answer? - Report")
-                        .setStyle(ButtonStyle.Danger)
-                );
-                
-                await interaction.editReply({
-                    embeds: [embed],
-                    components: [reportButton],
+            // Add auto-report notice for low confidence results
+            if (compareData.diff >= 20) {
+                embed.addFields({
+                    name: "⚠️ Auto-Report Status",
+                    value: "Low confidence match detected - automatically reported for verification"
                 });
+            }
 
-                // Set up report collector
-                const collector = interaction.channel.createMessageComponentCollector({
-                    filter: (i) => i.customId === "report_wrong_answer" && i.user.id === user.id,
-                    time: 60000,
-                    max: 1,
-                });
+            // Reply with result embed
+            await interaction.editReply({ embeds: [embed] });
 
-                collector.on("collect", async (btnInteraction) => {
-                    const cooldown = client.reportCooldowns.get(btnInteraction.user.id);
-                    const now = Date.now();
-                    
-                    if (cooldown && now - cooldown < COOLDOWN_DURATION) {
-                        const left = Math.ceil((COOLDOWN_DURATION - (now - cooldown)) / 60000);
-                        return btnInteraction.reply({
-                            content: `You can send another report in ${left} min.`,
-                            flags: MessageFlags.Ephemeral,
-                        });
+            // Auto-report low confidence results
+            if (compareData.diff >= 20) {
+                const webhookUrl = process.env.REPORT_WEBHOOK_URL;
+                if (webhookUrl) {
+                    try {
+                        const FormData = require("form-data");
+                        const form = new FormData();
+                        form.append("payload_json", JSON.stringify({
+                            embeds: [{
+                                title: "Wrong answer report",
+                                color: COLORS.ERROR,
+                                fields: [
+                                    { name: "User", value: `${user.tag} (${user.id})` },
+                                    { name: "Detected country", value: `${compareData.country} (${compareData.diff} diff)` },
+                                    { name: "Bot", value: config.dex },
+                                    { name: "Target Spawn URL", value: message.attachments.first().url },
+                                ],
+                                thumbnail: { url: imageUrl },
+                                timestamp: new Date().toISOString(),
+                            }],
+                        }));
+                        form.append("file", imageBuffer, message.attachments.first().name || `${message.id}.png`);
+                        await fetch(webhookUrl, { method: "POST", body: form });
+                    } catch (e) {
+                        console.error("Error sending auto-report:", e);
                     }
-
-                    // Send report webhook
-                    const webhookUrl = process.env.REPORT_WEBHOOK_URL;
-                    if (webhookUrl) {
-                        try {
-                            const FormData = require("form-data");
-                            const form = new FormData();
-                            form.append("payload_json", JSON.stringify({
-                                embeds: [{
-                                    title: "Wrong answer report",
-                                    color: COLORS.ERROR,
-                                    fields: [
-                                        { name: "User", value: `${btnInteraction.user.tag} (${btnInteraction.user.id})` },
-                                        { name: "Detected country", value: `${compareData.country} (${compareData.diff} diff)` },
-                                        { name: "Bot", value: config.dex },
-                                        { name: "Target Spawn URL", value: message.attachments.first().url },
-                                    ],
-                                    thumbnail: { url: imageUrl },
-                                    timestamp: new Date().toISOString(),
-                                }],
-                            }));
-                            form.append("file", imageBuffer, message.attachments.first().name || `${message.id}.png`);
-                            await fetch(webhookUrl, { method: "POST", body: form });
-                        } catch (e) {
-                            console.error("Error sending report:", e);
-                        }
-                    }
-                    
-                    client.reportCooldowns.set(btnInteraction.user.id, now);
-                    await btnInteraction.reply({
-                        content: "Report sent. Thank you!",
-                        flags: MessageFlags.Ephemeral,
-                    });
-                });
-            } else {
-                await interaction.editReply({ embeds: [embed] });
+                }
             }
 
             // Update user stats for good matches
