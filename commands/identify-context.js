@@ -80,8 +80,9 @@ module.exports = {
         }
         
         if (!SUPPORTED_BOT_IDS.includes(message.author.id)) {
+            const supportedBots = SUPPORTED_BOT_IDS.map(id => BOT_NAMES[id]).join(", ");
             return interaction.reply({
-                content: "This command can only be used on messages from: Ballsdex, DynastyDex, Empireballs, HistoryDex",
+                content: `This command can only be used on messages from: ${supportedBots}.`,
                 flags: MessageFlags.Ephemeral,
             });
         }
@@ -170,6 +171,7 @@ module.exports = {
                 });
 
                 // Set up report collector
+                console.log(interaction.channel);
                 const collector = interaction.channel.createMessageComponentCollector({
                     filter: (i) => i.customId === "report_wrong_answer" && i.user.id === user.id,
                     time: 60000,
