@@ -21,8 +21,15 @@ module.exports = {
         .setDescription("Manage your notification preferences."),
 
     async execute(interaction) {
+        if (interaction.guildId || !interaction.channel) {
+            return interaction.reply({
+                content: "Please use this command in DMs (<@510775326310268930>) to manage your notification preferences.",
+                flags: MessageFlags.Ephemeral,
+            });
+        }
+
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        
+
         const { user } = interaction;
         let data = readJsonFile(DATA_PATH, { users: {} });
 
