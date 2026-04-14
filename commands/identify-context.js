@@ -71,14 +71,6 @@ module.exports = {
                 flags: MessageFlags.Ephemeral,
             });
         }
-
-        // Guild check
-        if (!message.guild) {
-            return interaction.reply({
-                content: "This command can only be used on messages within a server.",
-                flags: MessageFlags.Ephemeral,
-            });
-        }
         
         if (!message.attachments?.size) {
             return interaction.reply({
