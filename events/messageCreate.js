@@ -8,7 +8,7 @@ const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fet
 
 // Import shared utilities
 const { SUPPORTED_BOT_IDS, BOT_DATA_KEYS, BOT_NAMES, COLORS } = require("../utils/constants");
-const { readJsonFile, writeJsonFile, compareHashes, getAssetsPath, processImageHash } = require("../utils/helpers");
+const { readJsonFile, writeJsonFile, getAssetsPath, processImageHash, findBestMatch } = require("../utils/helpers");
 
 // Local constants
 const DATA_PATH = getAssetsPath("data.json");
@@ -107,15 +107,7 @@ async function notify(m, client, settings, info) {
         const { hash, buffer: imageBuffer } = await processImageHash(m.attachments.first().url, m.id);
 
         // Find best match
-        let bestMatch = { diff: Infinity, country: "" };
-        
-        for (const [hKey, country] of Object.entries(info.hashes)) {
-            const diff = compareHashes(hash, hKey);
-            if (diff < bestMatch.diff) {
-                bestMatch = { diff, country };
-            }
-            if (diff === 0) break;
-        }
+        let bestMatch = findBestMatch(hash, info.hashes);
 
         const minDiff = bestMatch.country == "Mali Empire" ? 25 : 20;
 

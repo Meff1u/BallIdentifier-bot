@@ -10,6 +10,24 @@ const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fet
 const TEMP_PATH = path.join(__dirname, "../tempImages");
 
 /**
+ * Find the best matching country based on perceptual hash
+ * @param {string} hash - The hash to compare
+ * @param {Object} hashList - Object mapping hashes to countries
+ * @returns {Object} Best match with diff and country
+ */
+function findBestMatch(hash, hashList) {
+    let bestMatch = { diff: Infinity, country: null };
+    for (const [hKey, country] of Object.entries(hashList)) {
+        const diff = compareHashes(hash, hKey);
+        if (diff < bestMatch.diff) {
+            bestMatch = { diff, country };
+        }
+        if (diff === 0) break;
+    }
+    return bestMatch;
+}
+
+/**
  * Process image from URL and compute perceptual hash
  * @param {string} imageUrl - URL of the image to process
  * @param {string} uniqueId - Unique identifier for temp file naming
@@ -20,7 +38,7 @@ async function processImageHash(imageUrl, uniqueId) {
     const arrayBuffer = await response.arrayBuffer();
     const imageBuffer = Buffer.from(arrayBuffer);
     const tempFile = path.join(TEMP_PATH, `${uniqueId}.png`);
-    
+
     await sharp(imageBuffer)
         .resize(100, 100)
         .flatten({ background: { r: 0, g: 0, b: 0 } })
@@ -32,9 +50,9 @@ async function processImageHash(imageUrl, uniqueId) {
             error ? reject(error) : resolve(data);
         });
     });
-    
+
     fs.unlinkSync(tempFile);
-    
+
     return { hash, buffer: imageBuffer };
 }
 
@@ -87,13 +105,13 @@ function formatDuration(ms) {
     const min = Math.floor((ms / (1000 * 60)) % 60);
     const hr = Math.floor((ms / (1000 * 60 * 60)) % 24);
     const d = Math.floor(ms / (1000 * 60 * 60 * 24));
-    
+
     const parts = [];
     if (d > 0) parts.push(`${d}d`);
     if (hr > 0) parts.push(`${hr}h`);
     if (min > 0) parts.push(`${min}m`);
     parts.push(`${sec}s`);
-    
+
     return parts.join(" ");
 }
 
@@ -107,7 +125,7 @@ function formatDuration(ms) {
 function checkCooldown(cooldowns, userId, duration) {
     const cooldown = cooldowns.get(userId);
     const now = Date.now();
-    
+
     if (cooldown && now - cooldown < duration) {
         return Math.ceil((duration - (now - cooldown)) / 60000);
     }
@@ -130,8 +148,7 @@ function setCooldown(cooldowns, userId) {
  * @returns {boolean}
  */
 function isUpvoter(upvotes, userId) {
-    return Array.isArray(upvotes?.upvotes) && 
-           upvotes.upvotes.some((v) => v.user_id === userId);
+    return Array.isArray(upvotes?.upvotes) && upvotes.upvotes.some((v) => v.user_id === userId);
 }
 
 /**
@@ -141,7 +158,8 @@ function isUpvoter(upvotes, userId) {
  * @returns {string} Full URL
  */
 function buildBallImageUrl(dex, ballName) {
-    const baseUrl = "https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets";
+    const baseUrl =
+        "https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets";
     return `${baseUrl}/dexes/${encodeURIComponent(dex)}/${encodeURIComponent(ballName)}.png`;
 }
 
@@ -159,6 +177,7 @@ module.exports = {
     writeJsonFile,
     compareHashes,
     formatDuration,
+    findBestMatch,
     checkCooldown,
     setCooldown,
     isUpvoter,
