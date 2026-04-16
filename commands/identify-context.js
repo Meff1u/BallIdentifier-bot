@@ -24,6 +24,7 @@ const {
     setCooldown,
     getAssetsPath,
     processImageHash,
+    findBestMatch,
 } = require("../utils/helpers");
 
 // Lazy-load node-fetch
