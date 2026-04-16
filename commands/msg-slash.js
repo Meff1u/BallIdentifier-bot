@@ -30,7 +30,7 @@ module.exports = {
             await user.send(message);
             return interaction.reply({ content: "DM sent!", flags: MessageFlags.Ephemeral });
         } catch (e) {
-            console.error("Error sending DM:", e);
+            console.error("[MSG] Error sending DM:", e);
             return interaction.reply({ content: "Failed to send DM.", flags: MessageFlags.Ephemeral });
         }
     },

@@ -62,7 +62,7 @@ fs.readdirSync(eventsPath)
 
 // Handle disconnect - flush pending logs
 client.on("shardDisconnect", async () => {
-    console.log("[Bot] Disconnect detected, flushing pending logs...");
+    console.log("[BOT] Disconnect detected, flushing pending logs...");
     await flushAllBatches(client);
 });
 
@@ -77,15 +77,15 @@ client.once("ready", async () => {
     // Register commands in parallel
     const registrations = [
         rest.put(Routes.applicationCommands(appId), { body: globalCommands })
-            .then(() => console.log("✅ Global commands registered."))
-            .catch((err) => console.error("❌ Error registering global commands:", err)),
+            .then(() => console.log("[STARTUP] ✅ Global commands registered."))
+            .catch((err) => console.error("[STARTUP] ❌ Error registering global commands:", err)),
     ];
 
     if (privateCommands.length > 0) {
         registrations.push(
             rest.put(Routes.applicationGuildCommands(appId, PRIVATE_GUILD_ID), { body: privateCommands })
-                .then(() => console.log(`✅ Private commands registered for guild ${PRIVATE_GUILD_ID}.`))
-                .catch((err) => console.error("❌ Error registering private commands:", err))
+                .then(() => console.log(`[STARTUP] ✅ Private commands registered for guild ${PRIVATE_GUILD_ID}.`))
+                .catch((err) => console.error("[STARTUP] ❌ Error registering private commands:", err))
         );
     }
 
@@ -106,7 +106,7 @@ const sendWebhook = async (webhookUrl, payload) => {
             body: JSON.stringify(payload),
         });
     } catch (e) {
-        console.error("Error sending webhook:", e);
+        console.error("[WEBHOOK] Error sending webhook:", e);
     }
 };
 
@@ -149,14 +149,14 @@ process.on("uncaughtException", (error) => {
 
 // Handle graceful shutdown
 process.on("SIGINT", async () => {
-    console.log("[Bot] Gracefully shutting down...");
+    console.log("[BOT] Gracefully shutting down...");
     await flushAllBatches(client);
     await client.destroy();
     process.exit(0);
 });
 
 process.on("SIGTERM", async () => {
-    console.log("[Bot] Gracefully shutting down...");
+    console.log("[BOT] Gracefully shutting down...");
     await flushAllBatches(client);
     await client.destroy();
     process.exit(0);

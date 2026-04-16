@@ -201,7 +201,7 @@ app.get("/api/stats", generalLimiter, (req, res) => {
             identifiedBalls: identifiedBalls,
         });
     }).catch((err) => {
-        console.error("Stats endpoint error:", err);
+        console.error("[API] Stats endpoint error:", err);
         client?.logAPI?.(`GET /api/stats | Status: Error - ${err.message}`);
         res.status(500).json({ error: "Failed to fetch stats" });
     });
@@ -253,7 +253,7 @@ app.get("/api/guilds/:guildId/config", apiLimiter, verifyApiKey, async (req, res
                 )
             ]);
         } catch (fetchError) {
-            console.warn(`Members fetch failed for guild ${guildId}: ${fetchError.message}. Using cached members.`);
+            console.warn(`[API] Members fetch failed for guild ${guildId}: ${fetchError.message}. Using cached members.`);
             client.logAPI(`GET /api/guilds/${guildId}/config | Members fetch timeout, using cache`);
         }
 
@@ -299,7 +299,7 @@ app.get("/api/guilds/:guildId/config", apiLimiter, verifyApiKey, async (req, res
             configuration: guildConfig || { message: "No configuration set up yet" },
         });
     } catch (error) {
-        console.error("Server config endpoint error:", error);
+        console.error("[API] Server config endpoint error:", error);
         client.logAPI(`GET /api/guilds/${guildId}/config | Status: Error - ${error.message}`);
         res.status(500).json({ error: "Failed to fetch server configuration" });
     }
@@ -396,7 +396,7 @@ app.post("/api/guilds/:guildId/config", apiLimiter, verifyApiKey, validateGuildC
             configuration: data.guilds[guildId].notifier,
         });
     } catch (error) {
-        console.error("Update config endpoint error:", error);
+        console.error("[API] Update config endpoint error:", error);
         client.logAPI(`POST /api/guilds/${guildId}/config | Status: Error - ${error.message}`);
         res.status(500).json({ 
             error: "Failed to update server configuration",
@@ -407,7 +407,7 @@ app.post("/api/guilds/:guildId/config", apiLimiter, verifyApiKey, validateGuildC
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-    console.error("Server error:", err);
+    console.error("[API] Server error:", err);
     res.status(500).json({ error: "Internal server error" });
 });
 
@@ -419,8 +419,8 @@ app.use((req, res) => {
 // Start server
 const startServer = () => {
     app.listen(PORT, () => {
-        console.log(`[Express] Server running on http://localhost:${PORT}`);
-        console.log(`[Express] Dashboard API ready at http://localhost:${PORT}/api`);
+        console.log(`[API] Server running on http://localhost:${PORT}`);
+        console.log(`[API] Dashboard API ready at http://localhost:${PORT}/api`);
     });
 };
 

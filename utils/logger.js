@@ -52,7 +52,7 @@ function addLog(category, message, client) {
     const validCategories = ["DISCORD", "IMAGE", "API", "GENERAL"];
     
     if (!validCategories.includes(category)) {
-        console.warn(`[Logger] Invalid category: ${category}`);
+        console.warn(`[LOGGER] Invalid category: ${category}`);
         return;
     }
 
@@ -93,7 +93,7 @@ async function sendBatch(category, client) {
         const channel = await client.channels.fetch(threadId);
         
         if (!channel) {
-            console.error(`[Logger] Thread not found: ${threadId}`);
+            console.error(`[LOGGER] Thread not found: ${threadId}`);
             logBatches.set(category, []);
             return;
         }
@@ -124,9 +124,9 @@ async function sendBatch(category, client) {
             await channel.send({ embeds: [embed] });
         }
 
-        console.log(`[Logger] Sent ${batch.length} ${category} logs`);
+        console.log(`[LOGGER] Sent ${batch.length} ${category} logs`);
     } catch (error) {
-        console.error(`[Logger] Error sending batch for ${category}:`, error);
+        console.error(`[LOGGER] Error sending batch for ${category}:`, error);
     }
 
     // Clear batch and timer

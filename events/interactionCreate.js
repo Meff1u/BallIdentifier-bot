@@ -24,31 +24,35 @@ module.exports = {
         if (interaction.isAutocomplete()) {
             const command = client.slashCommands.get(interaction.commandName);
             if (!command || !command.autocomplete) return;
-            
+
             try {
                 await command.autocomplete(interaction);
             } catch (error) {
-                console.error(`Error handling autocomplete for ${interaction.commandName}:`, error);
+                console.error(`[INTERACTION] Error handling autocomplete for ${interaction.commandName}:`, error);
             }
             return;
         }
-        
+
         // Slash commands and context menus
         if (interaction.isChatInputCommand() || interaction.isContextMenuCommand()) {
             const command = client.slashCommands.get(interaction.commandName);
             if (!command) return;
-            
+
             // Log command usage
             const commandType = interaction.isChatInputCommand() ? "Slash" : "Context Menu";
             const userTag = `${interaction.user.username}`;
             const guildName = interaction.guild?.name || "DM";
-            client.logDiscord(`${commandType} Command: \`${interaction.commandName}\` | User: ${userTag} | Guild: ${guildName}`);
-            
+            client.logDiscord(
+                `${commandType} Command: \`${interaction.commandName}\` | User: ${userTag} | Guild: ${guildName}`,
+            );
+
             try {
                 await command.execute(interaction);
             } catch (error) {
-                console.error(`Error executing command ${interaction.commandName}:`, error);
-                client.logDiscord(`⚠️ Command Error in \`${interaction.commandName}\`: ${error.message}`);
+                console.error(`[INTERACTION] Error executing command ${interaction.commandName}:`, error);
+                client.logDiscord(
+                    `⚠️ Command Error in \`${interaction.commandName}\`: ${error.message}`,
+                );
                 const webhookUrl = process.env.ERROR_WEBHOOK_URL;
                 if (webhookUrl) {
                     try {
@@ -122,26 +126,31 @@ module.exports = {
                 const collectors = ballData.collectors;
 
                 // Format collectors list
-                const collectorsList = collectors.length > 0 
-                    ? collectors.map(c => `- <@${c}>\n > ${c}`).join("\n")
-                    : "No collectors yet.";
+                const collectorsList =
+                    collectors.length > 0
+                        ? collectors.map((c) => `- <@${c}>\n > ${c}`).join("\n")
+                        : "No collectors yet.";
 
                 const container = new ContainerBuilder()
                     .setAccentColor(COLORS.PRIMARY)
                     .addTextDisplayComponents(
-                        new TextDisplayBuilder().setContent(`Collectors of **${ballName}:**`)
+                        new TextDisplayBuilder().setContent(`Collectors of **${ballName}:**`),
                     )
                     .addSeparatorComponents(
-                        new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true)
+                        new SeparatorBuilder()
+                            .setSpacing(SeparatorSpacingSize.Small)
+                            .setDivider(true),
                     )
-                    .addTextDisplayComponents(
-                        new TextDisplayBuilder().setContent(collectorsList)
-                    )
+                    .addTextDisplayComponents(new TextDisplayBuilder().setContent(collectorsList))
                     .addSeparatorComponents(
-                        new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true)
+                        new SeparatorBuilder()
+                            .setSpacing(SeparatorSpacingSize.Small)
+                            .setDivider(true),
                     )
                     .addTextDisplayComponents(
-                        new TextDisplayBuilder().setContent("-# That list may be outdated or not updated with new collectors. If you know something i don't, let me know! (<@334411435633541121> | @meffiu)")
+                        new TextDisplayBuilder().setContent(
+                            "-# That list may be outdated or not updated with new collectors. If you know something i don't, let me know! (<@334411435633541121> | @meffiu)",
+                        ),
                     );
 
                 return interaction.reply({
@@ -179,7 +188,7 @@ module.exports = {
                             name: "v2.3.6 - /info command",
                             value: "Added /info command to get information about specific balls.",
                             inline: false,
-                        }
+                        },
                     )
                     .setTimestamp();
 

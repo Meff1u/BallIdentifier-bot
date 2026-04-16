@@ -209,7 +209,7 @@ module.exports = {
                         );
                         await fetch(webhookUrl, { method: "POST", body: form });
                     } catch (e) {
-                        console.error("Error sending auto-report:", e);
+                        console.error("[IDENTIFY] Error sending auto-report:", e);
                     }
                 }
             }
@@ -240,7 +240,9 @@ module.exports = {
                             ],
                         }),
                     });
-                } catch (e) {}
+                } catch (e) {
+                    console.error("[IDENTIFY] Error sending error report:", e);
+                }
             }
 
             // Re-throw to let the error handler catch it

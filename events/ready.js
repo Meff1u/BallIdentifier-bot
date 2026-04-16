@@ -23,7 +23,7 @@ module.exports = {
     name: "ready",
     once: true,
     async execute(client) {
-        console.log(`✅ ${client.user.tag} ready`);
+        console.log(`[STARTUP] ✅ ${client.user.tag} ready`);
         client.logDiscord(`🤖 Bot started: ${client.user.tag} | Guilds: ${client.guilds.cache.size}`);
         
         // Initialize DBL client
@@ -47,9 +47,9 @@ module.exports = {
                     
                     client.rarities[key] = await raritiesRes.json();
                     client.hashes[key] = await hashesRes.json();
-                    console.log(`✅ Fetched ${key} hashes and rarities`);
+                    console.log(`[DATAS] ✅ Fetched ${key} hashes and rarities`);
                 } catch (error) {
-                    console.error(`❌ Failed to fetch ${key}:`, error.message);
+                    console.error(`[DATAS] ❌ Failed to fetch ${key}:`, error.message);
                 }
             });
             
@@ -76,16 +76,16 @@ module.exports = {
                 
                 if (expiredUsers.length > 0) {
                     await client.upvoteReminder(expiredUsers);
-                    console.log("📤 Sent reminders to expired upvoters:", expiredUsers.length);
+                    console.log(`[DATAS] 📤 Sent reminders to expired upvoters: ${expiredUsers.length}`);
                 }
                 
 
                 writeJsonFile(UPVOTES_PATH, fetchedUpvotes.upvotes);
                 client.upvotes = fetchedUpvotes;
-                console.log(`✅ Fetched ${fetchedUpvotes.upvotes.length} upvotes`);
+                console.log(`[DATAS] ✅ Fetched ${fetchedUpvotes.upvotes.length} upvotes`);
             } catch (error) {
                 client.upvotes = { upvotes: [] };
-                console.error("❌ Failed to fetch upvotes:", error.message);
+                console.error(`[DATAS] ❌ Failed to fetch upvotes:`, error.message);
             }
         };
 
@@ -100,9 +100,9 @@ module.exports = {
                     await user.send(
                         "Your upvote expired! [Upvote](https://discordbotlist.com/bots/ballidentifier/upvote) again!"
                     );
-                    console.log(`📨 Reminder sent to ${userId}`);
+                    console.log(`[DATAS] 📨 Reminder sent to ${userId}`);
                 } catch (error) {
-                    console.error(`❌ Failed to send reminder to ${userId}:`, error.message);
+                    console.error(`[DATAS] ❌ Failed to send reminder to ${userId}:`, error.message);
                 }
             }
         };
@@ -121,9 +121,9 @@ module.exports = {
                 );
                 
                 await client.dbl.postBotStats({ guilds: guilds.size, users: userCount });
-                console.log("✅ DBL stats posted");
+                console.log(`[DATAS] ✅ DBL stats posted`);
             } catch (error) {
-                console.error("❌ DBL stats error:", error.message);
+                console.error(`[DATAS] ❌ DBL stats error:`, error.message);
             }
         };
 
@@ -154,9 +154,9 @@ module.exports = {
                         await user.send(
                             "Thanks for voting!\n-# You can toggle this message in </notifications:1388927499248996473> command"
                         );
-                        console.log(`💖 Thanks sent to ${vote.id}`);
+                        console.log(`[DATAS] 💖 Thanks sent to ${vote.id}`);
                     } catch (error) {
-                        console.error(`❌ Failed to send thanks to ${vote.id}:`, error.message);
+                        console.error(`[DATAS] ❌ Failed to send thanks to ${vote.id}:`, error.message);
                     }
                 }
 
@@ -177,7 +177,7 @@ module.exports = {
                     });
                 }
             } catch (error) {
-                console.error("❌ Error handling vote:", error.message);
+                console.error(`[DATAS] ❌ Error handling vote:`, error.message);
             }
         });
     },
