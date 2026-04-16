@@ -9,7 +9,7 @@ const {
 const { version } = require("../package.json");
 
 // Import shared utilities
-const { COLORS } = require("../utils/constants");
+const { COLORS, SUPPORTED_BOT_IDS, BOT_NAMES } = require("../utils/constants");
 const { readJsonFile, formatDuration, isUpvoter, getAssetsPath } = require("../utils/helpers");
 
 const DATA_PATH = getAssetsPath("data.json");
@@ -36,6 +36,11 @@ module.exports = {
         );
         
         const isUserUpvoted = isUpvoter(client.upvotes, user.id);
+        const supportedBotsList = SUPPORTED_BOT_IDS
+            .map((botId) => BOT_NAMES[botId])
+            .filter(Boolean)
+            .map((name) => `- ${name}`)
+            .join("\n");
 
         const embed = new EmbedBuilder()
             .setTitle("BallIdentifier")
@@ -44,7 +49,7 @@ module.exports = {
             .addFields(
                 {
                     name: "Supported Bots",
-                    value: "- Ballsdex\n- FoodDex\n- HistoryDex",
+                    value: supportedBotsList || "- None configured",
                     inline: true,
                 },
                 {

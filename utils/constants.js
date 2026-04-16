@@ -6,21 +6,24 @@
 const SUPPORTED_BOT_IDS = [
     "999736048596816014",    // Ballsdex
     "1433922711561699393",   // FoodDex
-    "1120942938126553190"   // HistoryDex
+    "1120942938126553190",   // HistoryDex
+    "1425109627636285511"    // JoJoDex
 ];
 
 // Bot ID to name mapping
 const BOT_NAMES = {
     "999736048596816014": "Ballsdex",
     "1433922711561699393": "FoodDex",
-    "1120942938126553190": "HistoryDex"
+    "1120942938126553190": "HistoryDex",
+    "1425109627636285511": "JoJoDex"
 };
 
 // Bot ID to data key mapping
 const BOT_DATA_KEYS = {
     "999736048596816014": "BD",
     "1433922711561699393": "FD",
-    "1120942938126553190": "HD"
+    "1120942938126553190": "HD",
+    "1425109627636285511": "JD"
 };
 
 // URLs
@@ -53,7 +56,6 @@ const LOG_IDS = {
 // File paths
 const DATA_FILE = "data.json";
 const UPVOTES_FILE = "upvotes.json";
-const BALLSLIST_FILE = "ballslist.json";
 
 module.exports = {
     SUPPORTED_BOT_IDS,
@@ -66,6 +68,5 @@ module.exports = {
     COLORS,
     LOG_IDS,
     DATA_FILE,
-    UPVOTES_FILE,
-    BALLSLIST_FILE,
+    UPVOTES_FILE
 };
