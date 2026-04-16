@@ -115,6 +115,8 @@ module.exports = {
                 if (diff === 0) break;
             }
 
+            const minDiff = compareData.country === "Mali Empire" ? 25 : 20;
+
             // Determine log color based on confidence
             const logColor = compareData.diff <= 10 ? COLORS.SUCCESS 
                            : compareData.diff <= 15 ? COLORS.WARNING
@@ -141,8 +143,6 @@ module.exports = {
                 image: compareData.diff >= minDiff ? message.attachments.first().url : null,
                 color: logColor,
             });
-
-            const minDiff = compareData.country === "Mali Empire" ? 25 : 20;
 
             // Create result embed
             const embed = new EmbedBuilder()
