@@ -116,9 +116,10 @@ module.exports = {
             }
 
             // Determine log color based on confidence
-            const logColor = compareData.diff <= 10 ? 0x00ff00 
-                           : compareData.diff <= 15 ? COLORS.ERROR 
-                           : 0xff0000;
+            const logColor = compareData.diff <= 10 ? COLORS.SUCCESS 
+                           : compareData.diff <= 15 ? COLORS.WARNING
+                           : compareData.diff <= 20 ? 0xe69138 
+                           : COLORS.ERROR;
 
             const imageUrl = buildImageUrl(config.dex, compareData.country);
             const rarity = client.rarities[config.dKey]?.[compareData.country]?.rarity || "Unknown";
@@ -134,19 +135,18 @@ module.exports = {
                         value: `- **Dex:** ${config.dex}\n- **Country:** ${compareData.country}\n- **Diff:** ${compareData.diff}\n- **Rarity:** ${rarity ? `t${rarity}` : "Not found"}`,
                         inline: false,
                     },
-                    ...(compareData.diff >= 20 ? [{ name: "Target Spawn Art", value: "\u200B" }] : []),
+                    ...(compareData.diff >= minDiff ? [{ name: "Target Spawn Art", value: "\u200B" }] : []),
                 ],
                 thumbnail: imageUrl,
-                image: compareData.diff >= 20 ? message.attachments.first().url : null,
+                image: compareData.diff >= minDiff ? message.attachments.first().url : null,
                 color: logColor,
             });
 
+            const minDiff = compareData.country === "Mali Empire" ? 25 : 20;
+
             // Create result embed
             const embed = new EmbedBuilder()
-                .setColor(compareData.diff <= 10 ? COLORS.SUCCESS 
-                         : compareData.diff <= 15 ? COLORS.WARNING 
-                         : compareData.diff <= 20 ? 0xe69138
-                         : COLORS.ERROR)
+                .setColor(logColor)
                 .setTitle(compareData.country)
                 .setDescription(
                     `**Similarity:** \`${100 - compareData.diff}%\`\n**Rarity:** \`${rarity ? `t${rarity}` : "Not found"}\`\n**Artist:** \`${artist}\``
@@ -157,7 +157,7 @@ module.exports = {
                 });
 
             // Add auto-report notice for low confidence results
-            if (compareData.diff >= 20) {
+            if (compareData.diff >= minDiff) {
                 embed.addFields({
                     name: "⚠️ Auto-Report Status",
                     value: "Low confidence match detected - automatically reported for verification"
@@ -168,7 +168,7 @@ module.exports = {
             await interaction.editReply({ embeds: [embed] });
 
             // Auto-report low confidence results
-            if (compareData.diff >= 20) {
+            if (compareData.diff >= minDiff) {
                 const webhookUrl = process.env.REPORT_WEBHOOK_URL;
                 if (webhookUrl) {
                     try {
@@ -197,7 +197,7 @@ module.exports = {
             }
 
             // Update user stats for good matches
-            if (compareData.diff <= 15) {
+            if (compareData.diff <= minDiff) {
                 if (!data.users) data.users = {};
                 if (!data.users[user.id]) data.users[user.id] = { identifyAmount: 0 };
                 data.users[user.id].identifyAmount += 1;

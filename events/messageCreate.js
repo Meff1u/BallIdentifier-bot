@@ -117,8 +117,10 @@ async function notify(m, client, settings, info) {
             if (diff === 0) break;
         }
 
+        const minDiff = bestMatch.country == "Mali Empire" ? 25 : 20;
+
         // Determine ball name
-        const ballName = bestMatch.diff > 20 
+        const ballName = bestMatch.diff > minDiff
             ? "Unknown (probably new spawn art)" 
             : bestMatch.country;
 
@@ -136,10 +138,10 @@ async function notify(m, client, settings, info) {
         });
         
         // Log the identification result
-        const status = bestMatch.diff <= 20 ? "✅ Identified" : "⚠️ Unknown";
+        const status = bestMatch.diff <= minDiff ? "✅ Identified" : "⚠️ Unknown";
         client.logImage(`[${m.guild.name}] ${status}: ${ballName} (diff: ${bestMatch.diff})`);
         
-        if (bestMatch.diff <= 20) {
+        if (bestMatch.diff <= minDiff) {
             console.log(`Sent reply for ${m.guild.name} with country: ${bestMatch.country}`);
             
             // Increment identifyAmount counter
@@ -152,7 +154,7 @@ async function notify(m, client, settings, info) {
             }
             data.guilds[m.guildId].identifyAmount++;
             writeJsonFile(DATA_PATH, data);
-        } else if (bestMatch.diff > 20) {
+        } else if (bestMatch.diff > minDiff) {
             // Send report for unknown spawn art
             const webhookUrl = process.env.REPORT_WEBHOOK_URL;
             if (webhookUrl) {
