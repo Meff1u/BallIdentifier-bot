@@ -191,7 +191,7 @@ async function notify(m, client, settings, info) {
                                             value: m.attachments.first().url,
                                         },
                                     ],
-                                    thumbnail: { url: m.attachments.first().url },
+                                    thumbnail: { url: `https://ballidentifier.xyz/assets/dexes/${BOT_NAMES[m.author.id]}/${encodeURIComponent(bestMatch.country)}.png` },
                                     timestamp: new Date().toISOString(),
                                 },
                             ],
