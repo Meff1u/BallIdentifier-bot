@@ -52,7 +52,7 @@ module.exports = {
         const embed = new EmbedBuilder()
             .setTitle("BallIdentifier")
             .setFooter({
-                text: `v${version} by @meffiu | discord.js ${dependencies["discord.js"].replace("^", "")}`,
+                text: `v${version} by @meffiu | discord.js ${dependencies["discord.js"].replace("^", "v")}`,
             })
             .setColor(COLORS.LOG)
             .addFields(
@@ -65,9 +65,9 @@ module.exports = {
                     name: "Statistics",
                     value: [
                         `- **Uptime:** ${formatDuration(client.uptime)}`,
-                        `- **Approximate user count:** ${Math.max(app.approximateUserInstallCount, Object.keys(users).length)}`,
+                        `- **Users:** ${Math.max(app.approximateUserInstallCount, Object.keys(users).length)}`,
                         `- **Guilds:** ${guilds.size}`,
-                        `- **Identified balls:** ${identifiedBalls}`,
+                        `- **Identified:** ${identifiedBalls}`,
                         `- **Upvoted:** ${isUserUpvoted ? "✅" : "❌"}`,
                     ].join("\n"),
                     inline: true,
