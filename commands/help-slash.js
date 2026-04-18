@@ -6,7 +6,7 @@ const {
     ButtonBuilder,
     ButtonStyle,
 } = require("discord.js");
-const { version } = require("../package.json");
+const { version, dependencies } = require("../package.json");
 
 // Import shared utilities
 const { COLORS, SUPPORTED_BOT_IDS, BOT_NAMES } = require("../utils/constants");
@@ -18,38 +18,41 @@ module.exports = {
     data: new SlashCommandBuilder()
         .setName("help")
         .setDescription("Useful information about the bot."),
-        
+
     async execute(interaction) {
         const { client, user } = interaction;
-        
+
         // Fetch data in parallel
         const [app, guilds] = await Promise.all([
             client.application.fetch(),
             client.guilds.fetch(),
         ]);
-        
+
         // Read user data
         const data = readJsonFile(DATA_PATH, { users: {} });
         const users = data.users || {};
         const guildData = data.guilds || {};
         const usersIdentified = Object.values(users).reduce(
-            (acc, u) => acc + (u.identifyAmount || 0), 0
+            (acc, u) => acc + (u.identifyAmount || 0),
+            0,
         );
         const guildsIdentified = Object.values(guildData).reduce(
-            (acc, g) => acc + (g.identifyAmount || 0), 0
+            (acc, g) => acc + (g.identifyAmount || 0),
+            0,
         );
         const identifiedBalls = usersIdentified + guildsIdentified;
-        
+
         const isUserUpvoted = isUpvoter(client.upvotes, user.id);
-        const supportedBotsList = SUPPORTED_BOT_IDS
-            .map((botId) => BOT_NAMES[botId])
+        const supportedBotsList = SUPPORTED_BOT_IDS.map((botId) => BOT_NAMES[botId])
             .filter(Boolean)
             .map((name) => `- ${name}`)
             .join("\n");
 
         const embed = new EmbedBuilder()
             .setTitle("BallIdentifier")
-            .setFooter({ text: `v${version} by @meffiu` })
+            .setFooter({
+                text: `v${version} by @meffiu | discord.js ${dependencies["discord.js"].replace("^", "")}`,
+            })
             .setColor(COLORS.LOG)
             .addFields(
                 {
@@ -77,9 +80,11 @@ module.exports = {
                     name: "How to Use",
                     value: 'Right-click on a message with an image from one of the supported bots and select "Identify" (image below)',
                     inline: true,
-                }
+                },
             )
-            .setImage("https://github.com/Meff1u/BallIdentifier-bot/blob/main/assets/tutorial.png?raw=true");
+            .setImage(
+                "https://github.com/Meff1u/BallIdentifier-bot/blob/main/assets/tutorial.png?raw=true",
+            );
 
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
@@ -93,7 +98,7 @@ module.exports = {
             new ButtonBuilder()
                 .setLabel("Upvote Me")
                 .setStyle(ButtonStyle.Link)
-                .setURL("https://discordbotlist.com/bots/ballidentifier/upvote")
+                .setURL("https://discordbotlist.com/bots/ballidentifier/upvote"),
         );
 
         await interaction.reply({
