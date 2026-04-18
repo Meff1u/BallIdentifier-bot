@@ -20,6 +20,7 @@ module.exports = {
         .setDescription("Useful information about the bot."),
 
     async execute(interaction) {
+        await interaction.deferReply({ ephemeral: true });
         const { client, user } = interaction;
 
         // Fetch data in parallel
@@ -101,7 +102,7 @@ module.exports = {
                 .setURL("https://discordbotlist.com/bots/ballidentifier/upvote"),
         );
 
-        await interaction.reply({
+        await interaction.editReply({
             embeds: [embed],
             components: [row],
             flags: MessageFlags.Ephemeral,
