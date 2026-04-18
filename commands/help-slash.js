@@ -31,9 +31,14 @@ module.exports = {
         // Read user data
         const data = readJsonFile(DATA_PATH, { users: {} });
         const users = data.users || {};
-        const identifyAmount = Object.values(users).reduce(
+        const guildData = data.guilds || {};
+        const usersIdentified = Object.values(users).reduce(
             (acc, u) => acc + (u.identifyAmount || 0), 0
         );
+        const guildsIdentified = Object.values(guildData).reduce(
+            (acc, g) => acc + (g.identifyAmount || 0), 0
+        );
+        const identifiedBalls = usersIdentified + guildsIdentified;
         
         const isUserUpvoted = isUpvoter(client.upvotes, user.id);
         const supportedBotsList = SUPPORTED_BOT_IDS
@@ -58,7 +63,7 @@ module.exports = {
                         `- **Uptime:** ${formatDuration(client.uptime)}`,
                         `- **Approximate user count:** ${Math.max(app.approximateUserInstallCount, Object.keys(users).length)}`,
                         `- **Guilds:** ${guilds.size}`,
-                        `- **Identified balls:** ${identifyAmount}`,
+                        `- **Identified balls:** ${identifiedBalls}`,
                         `- **Upvoted:** ${isUserUpvoted ? "✅" : "❌"}`,
                     ].join("\n"),
                     inline: true,
