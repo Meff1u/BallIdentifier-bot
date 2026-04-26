@@ -92,7 +92,7 @@ module.exports = {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
         // Check if message has a catch button
-        if (message.components[0]?.components[0]?.type !== 2) {
+        if (message.components[0]?.components[0]?.type !== 2 || message.content.includes("Caught on")) {
             return interaction.editReply({
                 content: "This message doesn't appear to be a spawn message.",
                 flags: MessageFlags.Ephemeral,
@@ -113,7 +113,7 @@ module.exports = {
             // Find best match
             let bestMatch = findBestMatch(hash, hashes);
 
-            const minDiff = bestMatch.country === "Mali Empire" ? 25 : 20;
+            const minDiff = ["Mali Empire", "Burkina Faso"].includes(bestMatch.country) ? 25 : 20;
 
             // Determine log color based on confidence
             const logColor =

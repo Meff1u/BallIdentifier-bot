@@ -58,12 +58,13 @@ async function handleEval(m, client) {
 
         let result = await eval(`(async () => { ${code} })()`);
 
+        // Do not send a reply when the evaluated result is explicitly null.
+        if (result === null) return;
+
         let output =
             result === undefined
                 ? "undefined"
-                : result === null
-                  ? "null"
-                  : typeof result === "object"
+            : typeof result === "object"
                     ? JSON.stringify(result, null, 2)
                     : String(result);
 
@@ -126,7 +127,7 @@ async function notify(m, client, settings, info) {
         // Find best match
         let bestMatch = findBestMatch(hash, info.hashes);
 
-        const minDiff = bestMatch.country == "Mali Empire" ? 25 : 20;
+        const minDiff = ["Mali Empire", "Burkina Faso"].includes(bestMatch.country) ? 25 : 20;
 
         // Determine ball name
         const ballName =
