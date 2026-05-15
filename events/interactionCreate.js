@@ -14,6 +14,7 @@ const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fet
 // Import shared utilities
 const { COLORS, INACTIVITY_TIMEOUT } = require("../utils/constants");
 const { readJsonFile, writeJsonFile, getAssetsPath } = require("../utils/helpers");
+const { buildCollectorsView } = require("../utils/collectors");
 
 const DATA_PATH = getAssetsPath("data.json");
 
@@ -84,7 +85,21 @@ module.exports = {
         }
         // String Select Menus
         else if (interaction.isStringSelectMenu()) {
-            // No string select menus handling needed
+            if (interaction.customId.startsWith("collectors:")) {
+                const [, dataKey, pageString] = interaction.customId.split(":");
+                const selectedBallName = interaction.values[0];
+                const page = parseInt(pageString, 10) || 0;
+                const view = buildCollectorsView(interaction.client, dataKey, selectedBallName, page);
+
+                if (view.error) {
+                    return interaction.reply({
+                        content: view.error,
+                        flags: MessageFlags.Ephemeral,
+                    });
+                }
+
+                return interaction.update(view);
+            }
         }
 
         // Role Select Menus
@@ -99,6 +114,23 @@ module.exports = {
 
         // Buttons
         else if (interaction.isButton()) {
+            if (interaction.customId.startsWith("collectors:")) {
+                const [, dataKey, pageString, direction, selectedBallEncoded] = interaction.customId.split(":");
+                const currentPage = parseInt(pageString, 10) || 0;
+                const selectedBallName = decodeURIComponent(selectedBallEncoded || "");
+                const nextPage = direction === "next" ? currentPage + 1 : currentPage - 1;
+                const view = buildCollectorsView(interaction.client, dataKey, selectedBallName, nextPage);
+
+                if (view.error) {
+                    return interaction.reply({
+                        content: view.error,
+                        flags: MessageFlags.Ephemeral,
+                    });
+                }
+
+                return interaction.update(view);
+            }
+
             // Handle collectors button
             if (interaction.customId.startsWith("collectors_")) {
                 const parts = interaction.customId.split("_");
