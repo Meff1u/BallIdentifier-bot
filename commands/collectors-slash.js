@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, MessageFlags } = require("discord.js");
+const { SlashCommandBuilder, MessageFlags, InteractionContextType } = require("discord.js");
 
 const { SUPPORTED_BOT_IDS, BOT_NAMES, BOT_DATA_KEYS } = require("../utils/constants");
 const { getDexChoices, buildCollectorsView } = require("../utils/collectors");
@@ -6,6 +6,7 @@ const { getDexChoices, buildCollectorsView } = require("../utils/collectors");
 const slashBuilder = new SlashCommandBuilder()
     .setName("collectors")
     .setDescription("Browse collectors for countryballs.")
+    .setContexts(InteractionContextType.BotDM, InteractionContextType.Guild, InteractionContextType.PrivateChannel)
     .addStringOption((option) =>
         option
             .setName("dex")

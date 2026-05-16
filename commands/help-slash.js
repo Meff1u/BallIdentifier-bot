@@ -5,6 +5,7 @@ const {
     ActionRowBuilder,
     ButtonBuilder,
     ButtonStyle,
+    InteractionContextType
 } = require("discord.js");
 const { version, dependencies } = require("../package.json");
 
@@ -17,7 +18,8 @@ const DATA_PATH = getAssetsPath("data.json");
 module.exports = {
     data: new SlashCommandBuilder()
         .setName("help")
-        .setDescription("Useful information about the bot."),
+        .setDescription("Useful information about the bot.")
+        .setContexts(InteractionContextType.BotDM, InteractionContextType.Guild, InteractionContextType.PrivateChannel),
 
     async execute(interaction) {
         await interaction.deferReply({ ephemeral: true });

@@ -2,6 +2,7 @@ const {
     SlashCommandBuilder,
     MessageFlags,
     EmbedBuilder,
+    InteractionContextType
 } = require("discord.js");
 
 // Import shared utilities
@@ -10,7 +11,9 @@ const { COLORS } = require("../utils/constants");
 module.exports = {
     data: new SlashCommandBuilder()
         .setName("notifier")
-        .setDescription("Setup notifier configuration."),
+        .setDescription("Setup notifier configuration.")
+        .setContexts(InteractionContextType.Guild),
+
     async execute(interaction) {
         const embed = new EmbedBuilder()
             .setColor(COLORS.INFO)

@@ -5,6 +5,7 @@ const {
     ButtonBuilder,
     ButtonStyle,
     MessageFlags,
+    InteractionContextType
 } = require("discord.js");
 
 // Import shared utilities
@@ -18,7 +19,8 @@ const getStatusEmoji = (value) => (value ? "✅" : "❌");
 module.exports = {
     data: new SlashCommandBuilder()
         .setName("notifications")
-        .setDescription("Manage your notification preferences."),
+        .setDescription("Manage your notification preferences.")
+        .setContexts(InteractionContextType.BotDM),
 
     async execute(interaction) {
         if (interaction.guildId || !interaction.channel) {

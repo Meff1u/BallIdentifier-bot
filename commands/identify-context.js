@@ -25,6 +25,7 @@ const {
     getAssetsPath,
     processImageHash,
     findBestMatch,
+    InteractionContextType
 } = require("../utils/helpers");
 
 // Lazy-load node-fetch
@@ -44,7 +45,8 @@ const buildImageUrl = (dex, country) =>
 module.exports = {
     data: new ContextMenuCommandBuilder()
         .setName("Identify")
-        .setType(ApplicationCommandType.Message),
+        .setType(ApplicationCommandType.Message)
+        .setContexts(InteractionContextType.Guild),
 
     async execute(interaction) {
         const { client, user, targetMessage: message } = interaction;

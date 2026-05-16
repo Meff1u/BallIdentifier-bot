@@ -9,7 +9,8 @@ const {
     SeparatorSpacingSize, 
     ButtonBuilder, 
     ButtonStyle, 
-    SectionBuilder 
+    SectionBuilder,
+    InteractionContextType
 } = require("discord.js");
 
 // Import shared utilities
@@ -21,7 +22,8 @@ const buildImageUrl = (dex, ballName) => {
 
 const slashBuilder = new SlashCommandBuilder()
     .setName("info")
-    .setDescription("Get information about a countryball.");
+    .setDescription("Get information about a countryball.")
+    .setContexts(InteractionContextType.BotDM, InteractionContextType.Guild, InteractionContextType.PrivateChannel);
 
 SUPPORTED_BOT_IDS.forEach((botId) => {
     const botName = BOT_NAMES[botId];
