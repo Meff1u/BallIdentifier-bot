@@ -3,6 +3,7 @@ const {
     ApplicationCommandType,
     EmbedBuilder,
     MessageFlags,
+    InteractionContextType
 } = require("discord.js");
 const fs = require("fs");
 
@@ -24,8 +25,7 @@ const {
     setCooldown,
     getAssetsPath,
     processImageHash,
-    findBestMatch,
-    InteractionContextType
+    findBestMatch
 } = require("../utils/helpers");
 
 // Lazy-load node-fetch
