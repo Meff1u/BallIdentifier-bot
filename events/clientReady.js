@@ -20,7 +20,7 @@ const HASH_URLS = Object.fromEntries(
 );
 
 module.exports = {
-    name: "ready",
+    name: "clientReady",
     once: true,
     async execute(client) {
         console.log(`[STARTUP] ✅ ${client.user.tag} ready`);

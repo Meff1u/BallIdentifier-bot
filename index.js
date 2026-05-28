@@ -9,7 +9,7 @@ const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fet
 
 const TOKEN = process.env.TOKEN;
 const PRIVATE_GUILD_ID = "379676234566729742";
-const PRIVATE_COMMANDS = ["refresh", "msg"];
+const PRIVATE_COMMANDS = ["refresh", "msg", "bdcompare"];
 
 const client = new Client({
     intents: [
@@ -66,7 +66,7 @@ client.on("shardDisconnect", async () => {
     await flushAllBatches(client);
 });
 
-client.once("ready", async () => {
+client.once("clientReady", async () => {
     const rest = new REST({ version: "10" }).setToken(TOKEN);
     const appId = client.user.id;
 

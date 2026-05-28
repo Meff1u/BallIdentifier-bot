@@ -7,6 +7,11 @@ const {
     TextDisplayBuilder,
     SeparatorBuilder,
     SeparatorSpacingSize,
+    ActionRowBuilder,
+    ModalBuilder,
+    TextInputBuilder,
+    TextInputStyle,
+    WebhookClient,
 } = require("discord.js");
 const FormData = require("form-data");
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
@@ -14,7 +19,13 @@ const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fet
 // Import shared utilities
 const { COLORS, INACTIVITY_TIMEOUT } = require("../utils/constants");
 const { readJsonFile, writeJsonFile, getAssetsPath } = require("../utils/helpers");
-const { buildCollectorsView } = require("../utils/collectors");
+const {
+    PAGE_SIZE,
+    buildCollectorsView,
+    findCollectorEntry,
+    getCollectorBalls,
+    getCollectorsSession,
+} = require("../utils/collectors");
 
 const DATA_PATH = getAssetsPath("data.json");
 
@@ -86,10 +97,26 @@ module.exports = {
         // String Select Menus
         else if (interaction.isStringSelectMenu()) {
             if (interaction.customId.startsWith("collectors:")) {
-                const [, dataKey, pageString] = interaction.customId.split(":");
+                const [, sessionId, action] = interaction.customId.split(":");
+                if (action !== "select") return;
+
+                const session = getCollectorsSession(sessionId);
+                if (!session) {
+                    return interaction.reply({
+                        content: "Collectors session expired. Please run /collectors again.",
+                        flags: MessageFlags.Ephemeral,
+                    });
+                }
+
+                const dataKey = session.dataKey;
                 const selectedBallName = interaction.values[0];
-                const page = parseInt(pageString, 10) || 0;
-                const view = buildCollectorsView(interaction.client, dataKey, selectedBallName, page);
+                const view = buildCollectorsView(
+                    interaction.client,
+                    dataKey,
+                    selectedBallName,
+                    Number(session.page) || 0,
+                    sessionId,
+                );
 
                 if (view.error) {
                     return interaction.reply({
@@ -109,17 +136,121 @@ module.exports = {
 
         // Modals
         else if (interaction.isModalSubmit()) {
-            // No modal handling needed
+            if (interaction.customId.startsWith("collectors-search:")) {
+                const [, sessionId] = interaction.customId.split(":");
+                const session = getCollectorsSession(sessionId);
+
+                if (!session) {
+                    return interaction.reply({
+                        content: "Collectors session expired. Please run /collectors again.",
+                        flags: MessageFlags.Ephemeral,
+                    });
+                }
+
+                const dataKey = session.dataKey;
+                const rarities = interaction.client.rarities?.[dataKey];
+
+                if (!rarities) {
+                    return interaction.reply({
+                        content: `Collectors data for this dex is not available yet.`,
+                        flags: MessageFlags.Ephemeral,
+                    });
+                }
+
+                const query = interaction.fields.getTextInputValue("query");
+                const foundEntry = findCollectorEntry(rarities, query);
+
+                if (!foundEntry) {
+                    return interaction.reply({
+                        content: `No entry found for **${query}**.`,
+                        flags: MessageFlags.Ephemeral,
+                    });
+                }
+
+                const collectors = Array.isArray(foundEntry.data.collectors) ? foundEntry.data.collectors : [];
+                if (collectors.length === 0) {
+                    return interaction.reply({
+                        content: `Entry **${foundEntry.name}** has no collectors.`,
+                        flags: MessageFlags.Ephemeral,
+                    });
+                }
+
+                const collectorBalls = getCollectorBalls(rarities);
+                const selectedIndex = collectorBalls.findIndex((ball) => ball.name === foundEntry.name);
+                const page = selectedIndex >= 0 ? Math.floor(selectedIndex / PAGE_SIZE) : 0;
+                const view = buildCollectorsView(
+                    interaction.client,
+                    dataKey,
+                    foundEntry.name,
+                    page,
+                    sessionId,
+                );
+
+                if (view.error) {
+                    return interaction.reply({
+                        content: view.error,
+                        flags: MessageFlags.Ephemeral,
+                    });
+                }
+
+                await interaction.deferReply({ ephemeral: true });
+
+                try {
+                    const webhook = new WebhookClient({
+                        id: interaction.applicationId,
+                        token: session.token,
+                    });
+
+                    await webhook.editMessage("@original", view);
+                    await interaction.deleteReply();
+                } catch (error) {
+                    console.error(`[INTERACTION] Error updating collectors search result:`, error);
+                    await interaction.editReply({
+                        content: "Failed to update collectors view.",
+                    });
+                }
+            }
         }
 
         // Buttons
         else if (interaction.isButton()) {
             if (interaction.customId.startsWith("collectors:")) {
-                const [, dataKey, pageString, direction, selectedBallEncoded] = interaction.customId.split(":");
-                const currentPage = parseInt(pageString, 10) || 0;
-                const selectedBallName = decodeURIComponent(selectedBallEncoded || "");
-                const nextPage = direction === "next" ? currentPage + 1 : currentPage - 1;
-                const view = buildCollectorsView(interaction.client, dataKey, selectedBallName, nextPage);
+                const [, sessionId, action] = interaction.customId.split(":");
+                const session = getCollectorsSession(sessionId);
+
+                if (!session) {
+                    return interaction.reply({
+                        content: "Collectors session expired. Please run /collectors again.",
+                        flags: MessageFlags.Ephemeral,
+                    });
+                }
+
+                if (action === "search") {
+                    const modal = new ModalBuilder()
+                        .setCustomId(`collectors-search:${sessionId}`)
+                        .setTitle("Search collectors");
+
+                    const input = new TextInputBuilder()
+                        .setCustomId("query")
+                        .setLabel("Name or ID")
+                        .setStyle(TextInputStyle.Short)
+                        .setRequired(true)
+                        .setPlaceholder("Enter a name or ID");
+
+                    modal.addComponents(new ActionRowBuilder().addComponents(input));
+                    return interaction.showModal(modal);
+                }
+
+                const currentPage = Number(session.page) || 0;
+                const selectedBallName = session.selectedBallName;
+                const nextPage = action === "next" ? currentPage + 1 : currentPage - 1;
+                const view = buildCollectorsView(
+                    interaction.client,
+                    session.dataKey,
+                    selectedBallName,
+                    nextPage,
+                    sessionId,
+                );
 
                 if (view.error) {
                     return interaction.reply({

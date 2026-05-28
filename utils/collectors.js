@@ -10,10 +10,84 @@ const {
     SectionBuilder,
     ThumbnailBuilder,
 } = require("discord.js");
+const { randomUUID } = require("crypto");
 
 const { SUPPORTED_BOT_IDS, BOT_NAMES, BOT_DATA_KEYS, COLORS, ASSETS_BASE_URL } = require("./constants");
 
 const PAGE_SIZE = 25;
+const COLLECTOR_SESSION_TTL = 15 * 60 * 1000;
+const collectorSessions = new Map();
+
+function createCollectorsSession(data) {
+    const sessionId = randomUUID().replace(/-/g, "").slice(0, 12);
+
+    collectorSessions.set(sessionId, {
+        ...data,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+    });
+
+    return sessionId;
+}
+
+function getCollectorsSession(sessionId) {
+    const session = collectorSessions.get(sessionId);
+
+    if (!session) return null;
+
+    if (Date.now() - session.updatedAt > COLLECTOR_SESSION_TTL) {
+        collectorSessions.delete(sessionId);
+        return null;
+    }
+
+    return session;
+}
+
+function updateCollectorsSession(sessionId, data) {
+    const session = getCollectorsSession(sessionId);
+
+    if (!session) return null;
+
+    const nextSession = {
+        ...session,
+        ...data,
+        updatedAt: Date.now(),
+    };
+
+    collectorSessions.set(sessionId, nextSession);
+
+    return nextSession;
+}
+
+function getCollectorBalls(rarities) {
+    return Object.entries(rarities)
+        .filter(([, ballData]) => Array.isArray(ballData.collectors) && ballData.collectors.length > 0)
+        .map(([name, ballData]) => ({ name, data: ballData }));
+}
+
+function findCollectorEntry(rarities, query) {
+    const normalizedQuery = String(query || "").trim();
+
+    if (!normalizedQuery) return null;
+
+    const entries = Object.entries(rarities);
+    const normalizedName = normalizedQuery.toLowerCase();
+
+    const byName = entries.find(([name]) => name.toLowerCase() === normalizedName);
+    if (byName) {
+        return { name: byName[0], data: byName[1] };
+    }
+
+    const inputAsNumber = Number.parseInt(normalizedQuery, 10);
+    if (!Number.isNaN(inputAsNumber)) {
+        const byId = entries.find(([, data]) => Number(data.id) === inputAsNumber);
+        if (byId) {
+            return { name: byId[0], data: byId[1] };
+        }
+    }
+
+    return null;
+}
 
 function getDexChoices(focusedValue = "") {
     const query = focusedValue.toLowerCase();
@@ -25,23 +99,16 @@ function getDexChoices(focusedValue = "") {
         .map((dexName) => ({ name: dexName, value: dexName }));
 }
 
-function buildCollectorsView(client, dataKey, selectedBallName, page = 0) {
+function buildCollectorsView(client, dataKey, selectedBallName, page = 0, sessionId) {
     const rarities = client.rarities?.[dataKey];
 
     if (!rarities) return { error: "Data not found." };
 
-    const collectorBalls = Object.entries(rarities)
-        .filter(
-            ([, ballData]) => Array.isArray(ballData.collectors) && ballData.collectors.length > 0,
-        )
-        .map(([name, ballData]) => ({ name, data: ballData }));
+    const collectorBalls = getCollectorBalls(rarities);
 
     if (collectorBalls.length === 0) return { error: "No collectors found for this dex." };
 
-    const selectedIndex = Math.max(
-        0,
-        collectorBalls.findIndex((ball) => ball.name === selectedBallName),
-    );
+    const selectedIndex = collectorBalls.findIndex((ball) => ball.name === selectedBallName);
     const selectedBall = collectorBalls[selectedIndex >= 0 ? selectedIndex : 0];
     const pageCount = Math.ceil(collectorBalls.length / PAGE_SIZE);
     const currentPage = Math.max(0, Math.min(page, pageCount - 1));
@@ -49,6 +116,14 @@ function buildCollectorsView(client, dataKey, selectedBallName, page = 0) {
         currentPage * PAGE_SIZE,
         currentPage * PAGE_SIZE + PAGE_SIZE,
     );
+
+    if (sessionId) {
+        updateCollectorsSession(sessionId, {
+            dataKey,
+            selectedBallName: selectedBall.name,
+            page: currentPage,
+        });
+    }
 
     const collectors = selectedBall.data.collectors || [];
     const collectorsList = collectors.length
@@ -75,7 +150,7 @@ function buildCollectorsView(client, dataKey, selectedBallName, page = 0) {
         .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
 
     const selectMenu = new StringSelectMenuBuilder()
-        .setCustomId(`collectors:${dataKey}:${currentPage}`)
+        .setCustomId(`collectors:${sessionId}:select`)
         .setPlaceholder("Select an entry")
         .addOptions(
             pageBalls.map(({ name, data }) => ({
@@ -92,24 +167,29 @@ function buildCollectorsView(client, dataKey, selectedBallName, page = 0) {
         new TextDisplayBuilder().setContent(`-# Entries with collectors: ${collectorBalls.length} | Page: ${currentPage + 1}/${pageCount}`),
     );
 
+    const searchButton = new ButtonBuilder()
+        .setCustomId(`collectors:${sessionId}:search`)
+        .setStyle(ButtonStyle.Secondary)
+        .setLabel("🔎");
+
     if (pageCount > 1) {
         const prevButton = new ButtonBuilder()
-            .setCustomId(
-                `collectors:${dataKey}:${currentPage}:prev:${encodeURIComponent(selectedBall.name)}`,
-            )
+            .setCustomId(`collectors:${sessionId}:prev`)
             .setStyle(ButtonStyle.Primary)
             .setLabel("◄")
             .setDisabled(currentPage === 0);
 
         const nextButton = new ButtonBuilder()
-            .setCustomId(
-                `collectors:${dataKey}:${currentPage}:next:${encodeURIComponent(selectedBall.name)}`,
-            )
+            .setCustomId(`collectors:${sessionId}:next`)
             .setStyle(ButtonStyle.Primary)
             .setLabel("►")
             .setDisabled(currentPage === pageCount - 1);
 
-        container.addActionRowComponents(new ActionRowBuilder().addComponents(prevButton, nextButton));
+        container.addActionRowComponents(
+            new ActionRowBuilder().addComponents(prevButton, searchButton, nextButton),
+        );
+    } else {
+        container.addActionRowComponents(new ActionRowBuilder().addComponents(searchButton));
     }
 
     container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
@@ -123,4 +203,12 @@ function buildCollectorsView(client, dataKey, selectedBallName, page = 0) {
     return { components: [container] };
 }
 
-module.exports = { PAGE_SIZE, getDexChoices, buildCollectorsView };
+module.exports = {
+    PAGE_SIZE,
+    getDexChoices,
+    createCollectorsSession,
+    getCollectorsSession,
+    findCollectorEntry,
+    getCollectorBalls,
+    buildCollectorsView,
+};

@@ -1,7 +1,7 @@
 const { SlashCommandBuilder, MessageFlags, InteractionContextType } = require("discord.js");
 
 const { SUPPORTED_BOT_IDS, BOT_NAMES, BOT_DATA_KEYS } = require("../utils/constants");
-const { getDexChoices, buildCollectorsView } = require("../utils/collectors");
+const { getDexChoices, createCollectorsSession, buildCollectorsView } = require("../utils/collectors");
 
 const slashBuilder = new SlashCommandBuilder()
     .setName("collectors")
@@ -51,7 +51,13 @@ module.exports = {
             });
         }
 
-        const view = buildCollectorsView(client, dataKey, collectorBalls[0], 0);
+        const sessionId = createCollectorsSession({
+            token: interaction.token,
+            dataKey,
+            selectedBallName: collectorBalls[0],
+            page: 0,
+        });
+        const view = buildCollectorsView(client, dataKey, collectorBalls[0], 0, sessionId);
 
         return interaction.reply({
             ...view,
