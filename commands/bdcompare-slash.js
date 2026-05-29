@@ -52,7 +52,7 @@ module.exports = {
             }
 
             return interaction.editReply({
-                content: bestMatch.country,
+                content: `${bestMatch.country}\n${bestMatch.diff}`,
             });
         } catch (error) {
             console.error("[BDCOMPARE] Error comparing image:", error);
