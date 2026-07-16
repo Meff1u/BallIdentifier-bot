@@ -20,6 +20,15 @@ const buildImageUrl = (dex, ballName) => {
     return `https://ballidentifier.xyz/assets/dexes/${encodeURIComponent(dex)}/compressed/${encodeURIComponent(ballName)}.webp`;
 };
 
+const toSubcommandName = (name) =>
+    name
+        .toLowerCase()
+        .replace(/\s+/g, "-")
+        .replace(/[^\p{Ll}\p{Lm}\p{Lo}\p{N}\p{sc=Devanagari}\p{sc=Thai}_-]+/gu, "");
+
+const getBotIdFromSubcommand = (subcommandName) =>
+    SUPPORTED_BOT_IDS.find((id) => toSubcommandName(BOT_NAMES[id]) === subcommandName);
+
 const slashBuilder = new SlashCommandBuilder()
     .setName("info")
     .setDescription("Get information about a countryball.")
@@ -30,7 +39,7 @@ SUPPORTED_BOT_IDS.forEach((botId) => {
 
     slashBuilder.addSubcommand((subcommand) =>
         subcommand
-            .setName(botName.toLowerCase())
+            .setName(toSubcommandName(botName))
             .setDescription(`Get information about a ${botName} entry.`)
             .addStringOption((option) =>
                 option
@@ -47,7 +56,7 @@ module.exports = {
     async execute(interaction) {
         const { client, options } = interaction;
         const subcommand = options.getSubcommand();
-        const botId = SUPPORTED_BOT_IDS.find((id) => BOT_NAMES[id].toLowerCase() === subcommand);
+        const botId = getBotIdFromSubcommand(subcommand);
 
         if (!botId) {
             return interaction.reply({
@@ -171,7 +180,7 @@ module.exports = {
         if (commandName !== "info") return;
 
         const subcommand = options.getSubcommand();
-        const botId = SUPPORTED_BOT_IDS.find((id) => BOT_NAMES[id].toLowerCase() === subcommand);
+        const botId = getBotIdFromSubcommand(subcommand);
 
         if (!botId) return;
 
