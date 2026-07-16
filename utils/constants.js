@@ -8,7 +8,7 @@ const SUPPORTED_BOT_IDS = [
     "1433922711561699393",   // FoodDex
     "1120942938126553190",   // HistoryDex
     "1425109627636285511",   // JoJoDex
-    "1500173453880197162"    // Empireballs
+    "1500173453880197162"    // Empireballs Reboot
 ];
 
 // Bot ID to name mapping
@@ -17,7 +17,7 @@ const BOT_NAMES = {
     "1433922711561699393": "FoodDex",
     "1120942938126553190": "HistoryDex",
     "1425109627636285511": "JoJoDex",
-    "1500173453880197162": "Empireballs"
+    "1500173453880197162": "Empireballs Reboot"
 };
 
 // Bot ID to data key mapping
