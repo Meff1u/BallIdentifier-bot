@@ -26,10 +26,10 @@ module.exports = {
         const { client, user } = interaction;
 
         // Fetch data in parallel
-        const [app, guilds] = await Promise.all([
+        const [app] = await Promise.all([
             client.application.fetch(),
-            client.guilds.fetch(),
         ]);
+        const guildCount = client.guilds.cache.size;
 
         // Read user data
         const data = readJsonFile(DATA_PATH, { users: {} });
@@ -68,7 +68,7 @@ module.exports = {
                     value: [
                         `- **Uptime:** ${formatDuration(client.uptime)}`,
                         `- **Users:** ${Math.max(app.approximateUserInstallCount, Object.keys(users).length)}`,
-                        `- **Guilds:** ${guilds.size}`,
+                        `- **Guilds:** ${guildCount}`,
                         `- **Identified:** ${identifiedBalls}`,
                         `- **Upvoted:** ${isUserUpvoted ? "✅" : "❌"}`,
                     ].join("\n"),

@@ -109,9 +109,8 @@ module.exports = {
 
         client.postDBLStats = async () => {
             try {
-                const [app, guilds] = await Promise.all([
+                const [app] = await Promise.all([
                     client.application.fetch(),
-                    client.guilds.fetch(),
                 ]);
                 
                 const data = readJsonFile(DATA_PATH, { users: {} });
@@ -120,7 +119,7 @@ module.exports = {
                     Object.keys(data.users || {}).length
                 );
                 
-                await client.dbl.postBotStats({ guilds: guilds.size, users: userCount });
+                await client.dbl.postBotStats({ guilds: client.guilds.cache.size, users: userCount });
                 console.log(`[DATAS] ✅ DBL stats posted`);
             } catch (error) {
                 console.error(`[DATAS] ❌ DBL stats error:`, error.message);
