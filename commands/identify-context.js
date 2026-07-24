@@ -40,7 +40,7 @@ const BOT_CONFIG = Object.fromEntries(
 );
 
 const buildImageUrl = (dex, country) =>
-    `${ASSETS_BASE_URL}/dexes/${dex}/${encodeURIComponent(country)}.png`;
+    `${ASSETS_BASE_URL}/dexes/${encodeURIComponent(dex)}/${encodeURIComponent(country)}.png`;
 
 module.exports = {
     data: new ContextMenuCommandBuilder()
