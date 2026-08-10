@@ -42,6 +42,44 @@ const BOT_CONFIG = Object.fromEntries(
 const buildImageUrl = (dex, country) =>
     `${ASSETS_BASE_URL}/dexes/${encodeURIComponent(dex)}/${encodeURIComponent(country)}.png`;
 
+function getSpawnMessageData(message) {
+    const legacyAttachment = message.attachments?.first?.();
+
+    const isLegacySpawn =
+        message.attachments?.size === 1 &&
+        message.components?.[0]?.components?.[0]?.label?.includes("Catch");
+
+    const v2ImageItem = message.components?.[1]?.items?.[0];
+    const v2ImageUrl = v2ImageItem?.media?.url;
+    const v2ButtonLabel = message.components?.at(-1)?.components?.[0]?.label;
+    const isV2Spawn = Boolean(v2ImageUrl && v2ButtonLabel?.includes("Catch"));
+
+    if (isLegacySpawn && legacyAttachment?.url) {
+        return {
+            isSpawn: true,
+            imageUrl: legacyAttachment.url,
+            imageName: legacyAttachment.name || `${message.id}.png`,
+            messageType: "legacy",
+        };
+    }
+
+    if (isV2Spawn) {
+        return {
+            isSpawn: true,
+            imageUrl: v2ImageUrl,
+            imageName: `${message.id}.png`,
+            messageType: "components-v2",
+        };
+    }
+
+    return {
+        isSpawn: false,
+        imageUrl: null,
+        imageName: null,
+        messageType: null,
+    };
+}
+
 module.exports = {
     data: new ContextMenuCommandBuilder()
         .setName("Identify")
@@ -50,6 +88,7 @@ module.exports = {
 
     async execute(interaction) {
         const { client, user, targetMessage: message } = interaction;
+        const spawnData = getSpawnMessageData(message);
 
         // Check upvoter status and cooldown
         if (!isUpvoter(client.upvotes, user.id)) {
@@ -76,13 +115,6 @@ module.exports = {
             });
         }
 
-        if (!message.attachments?.size) {
-            return interaction.reply({
-                content: "No attachments found in the message.",
-                flags: MessageFlags.Ephemeral,
-            });
-        }
-
         if (!SUPPORTED_BOT_IDS.includes(message.author.id)) {
             const supportedBots = SUPPORTED_BOT_IDS.map((id) => BOT_NAMES[id]).join(", ");
             return interaction.reply({
@@ -94,7 +126,7 @@ module.exports = {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
         // Check if message has a catch button
-        if (message.components[0]?.components[0]?.type !== 2 || message.content.includes("Caught on")) {
+        if (!spawnData.isSpawn || message.content.includes("Caught on")) {
             return interaction.editReply({
                 content: "This message doesn't appear to be a spawn message.",
                 flags: MessageFlags.Ephemeral,
@@ -108,7 +140,7 @@ module.exports = {
 
             // Process image and get hash
             const { hash, buffer: imageBuffer } = await processImageHash(
-                message.attachments.first().url,
+                spawnData.imageUrl,
                 message.id,
             );
 
@@ -146,7 +178,7 @@ module.exports = {
                         : []),
                 ],
                 thumbnail: imageUrl,
-                image: bestMatch.diff >= minDiff ? message.attachments.first().url : null,
+                image: bestMatch.diff >= minDiff ? spawnData.imageUrl : null,
                 color: logColor,
             });
 
@@ -196,7 +228,7 @@ module.exports = {
                                             { name: "Bot", value: config.dex },
                                             {
                                                 name: "Target Spawn URL",
-                                                value: message.attachments.first().url,
+                                                value: spawnData.imageUrl,
                                             },
                                         ],
                                         thumbnail: { url: imageUrl },
@@ -208,7 +240,7 @@ module.exports = {
                         form.append(
                             "file",
                             imageBuffer,
-                            message.attachments.first().name || `${message.id}.png`,
+                            spawnData.imageName || `${message.id}.png`,
                         );
                         await fetch(webhookUrl, { method: "POST", body: form });
                     } catch (e) {

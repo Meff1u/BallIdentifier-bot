@@ -20,22 +20,67 @@ const {
 const DATA_PATH = getAssetsPath("data.json");
 const ADMIN_ID = "334411435633541121";
 
+/**
+ * Extract catch message metadata for both legacy and components-v2 message formats.
+ */
+function getCatchMessageData(m) {
+    const legacyAttachment = m.attachments?.first?.();
+
+    const isOldCatchMessage =
+        m.attachments?.size === 1 &&
+        m.components?.[0]?.components?.[0]?.label?.includes("Catch");
+
+    const v2ImageItem = m.components?.[1]?.items?.[0];
+    const v2ImageUrl = v2ImageItem?.media?.url;
+    const v2ButtonLabel = m.components?.at(-1)?.components?.[0]?.label;
+
+    const isNewCatchMessage = Boolean(v2ImageUrl && v2ButtonLabel?.includes("Catch"));
+
+    if (isOldCatchMessage && legacyAttachment?.url) {
+        return {
+            isCatchMessage: true,
+            imageUrl: legacyAttachment.url,
+            imageName: legacyAttachment.name || `${m.id}.png`,
+            messageType: "legacy",
+        };
+    }
+
+    if (isNewCatchMessage) {
+        return {
+            isCatchMessage: true,
+            imageUrl: v2ImageUrl,
+            imageName: `${m.id}.png`,
+            messageType: "components-v2",
+        };
+    }
+
+    return {
+        isCatchMessage: false,
+        imageUrl: null,
+        imageName: null,
+        messageType: null,
+    };
+}
+
 module.exports = {
     name: "messageCreate",
     async execute(m, client) {
         // Handle bot spawn messages for notifier
         if (m.author.bot && SUPPORTED_BOT_IDS.includes(m.author.id)) {
-            const isCatchMessage =
-                m.components?.[1].items?.[0] === 1 &&
-                m.components?.at(-1)?.components[0]?.label?.includes("Catch");
+            const catchData = getCatchMessageData(m);
 
-            if (isCatchMessage) {
+            if (catchData.isCatchMessage) {
                 const data = readJsonFile(DATA_PATH, { guilds: {} });
 
                 const guildConfig = data.guilds?.[m.guildId]?.notifier;
-                if (guildConfig?.selectedBots.includes(m.author.id)) {
+                if (guildConfig?.selectedBots?.includes(m.author.id)) {
                     const hashKey = BOT_DATA_KEYS[m.author.id];
-                    await notify(m, client, guildConfig, { hashes: client.hashes[hashKey] });
+                    await notify(m, client, guildConfig, {
+                        hashes: client.hashes[hashKey],
+                        imageUrl: catchData.imageUrl,
+                        imageName: catchData.imageName,
+                        messageType: catchData.messageType,
+                    });
                 }
             }
             return;
@@ -116,13 +161,15 @@ async function handleEval(m, client) {
  */
 async function notify(m, client, settings, info) {
     const { customMessage, selectedRole } = settings;
+    const { imageUrl, imageName } = info;
 
     try {
         // Process image to identify ball
-        const { hash, buffer: imageBuffer } = await processImageHash(
-            m.attachments.first().url,
-            m.id,
-        );
+        if (!imageUrl) {
+            throw new Error("Missing spawn image URL for catch message");
+        }
+
+        const { hash, buffer: imageBuffer } = await processImageHash(imageUrl, m.id);
 
         // Find best match
         let bestMatch = findBestMatch(hash, info.hashes);
@@ -189,7 +236,7 @@ async function notify(m, client, settings, info) {
                                         { name: "Message Link", value: `[Link](${m.url})` },
                                         {
                                             name: "Target Spawn URL",
-                                            value: m.attachments.first().url,
+                                            value: imageUrl,
                                         },
                                     ],
                                     thumbnail: { url: `https://ballidentifier.xyz/assets/dexes/${BOT_NAMES[m.author.id]}/${encodeURIComponent(bestMatch.country)}.png` },
@@ -198,7 +245,7 @@ async function notify(m, client, settings, info) {
                             ],
                         }),
                     );
-                    form.append("file", imageBuffer, m.attachments.first().name || `${m.id}.png`);
+                    form.append("file", imageBuffer, imageName || `${m.id}.png`);
                     await fetch(webhookUrl, { method: "POST", body: form });
                 } catch (e) {
                     console.error("[NOTIFIER] Error sending auto-notifier report:", e);
