@@ -26,8 +26,8 @@ module.exports = {
         // Handle bot spawn messages for notifier
         if (m.author.bot && SUPPORTED_BOT_IDS.includes(m.author.id)) {
             const isCatchMessage =
-                m.attachments.size === 1 &&
-                m.components[0]?.components[0]?.label?.includes("Catch");
+                m.components?.[1].items?.[0] === 1 &&
+                m.components?.at(-1)?.components[0]?.label?.includes("Catch");
 
             if (isCatchMessage) {
                 const data = readJsonFile(DATA_PATH, { guilds: {} });
