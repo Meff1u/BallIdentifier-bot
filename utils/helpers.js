@@ -12,13 +12,13 @@ const TEMP_PATH = path.join(__dirname, "../tempImages");
 /**
  * Find the best matching country based on perceptual hash
  * @param {string} hash - The hash to compare
- * @param {Object} hashList - Object mapping hashes to countries
+ * @param {Object} hashList - Object mapping countries to hashes
  * @returns {Object} Best match with diff and country
  */
 function findBestMatch(hash, hashList) {
     let bestMatch = { diff: Infinity, country: null };
-    for (const [hKey, country] of Object.entries(hashList)) {
-        const diff = compareHashes(hash, hKey);
+    for (const [country, referenceHash] of Object.entries(hashList)) {
+        const diff = compareHashes(hash, referenceHash);
         if (diff < bestMatch.diff) {
             bestMatch = { diff, country };
         }
