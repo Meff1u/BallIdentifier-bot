@@ -69,7 +69,7 @@ module.exports = {
                         `- **Uptime:** ${formatDuration(client.uptime)}`,
                         `- **Users:** ${Math.max(app.approximateUserInstallCount, Object.keys(users).length)}`,
                         `- **Guilds:** ${guildCount}`,
-                        `- **Identified:** ${identifiedBalls}`,
+                        `- **Identified:** ${Number(identifiedBalls).toLocaleString('en-US')}`,
                         `- **Upvoted:** ${isUserUpvoted ? "✅" : "❌"}`,
                     ].join("\n"),
                     inline: true,

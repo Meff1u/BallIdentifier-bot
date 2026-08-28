@@ -7,7 +7,7 @@ const { imageHash } = require("image-hash");
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
 // Import shared utilities
-const { SUPPORTED_BOT_IDS, BOT_DATA_KEYS, BOT_NAMES, COLORS } = require("../utils/constants");
+const { SUPPORTED_BOT_IDS, BOT_DATA_KEYS, BOT_NAMES, COLORS, SPAWN_BUTTON_LABELS } = require("../utils/constants");
 const {
     readJsonFile,
     writeJsonFile,
@@ -28,13 +28,13 @@ function getCatchMessageData(m) {
 
     const isOldCatchMessage =
         m.attachments?.size === 1 &&
-        m.components?.[0]?.components?.[0]?.label?.includes("Catch");
+        SPAWN_BUTTON_LABELS.some(text => m.components?.[0]?.components?.[0]?.label?.includes(text));
 
     const v2ImageItem = m.components?.[1]?.items?.[0];
     const v2ImageUrl = v2ImageItem?.media?.url;
     const v2ButtonLabel = m.components?.at(-1)?.components?.[0]?.label;
 
-    const isNewCatchMessage = Boolean(v2ImageUrl && v2ButtonLabel?.includes("Catch"));
+    const isNewCatchMessage = Boolean(v2ImageUrl && SPAWN_BUTTON_LABELS.some(text => v2ButtonLabel?.includes(text)));
 
     if (isOldCatchMessage && legacyAttachment?.url) {
         return {

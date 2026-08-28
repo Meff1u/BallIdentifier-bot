@@ -15,6 +15,7 @@ const {
     ASSETS_BASE_URL,
     COOLDOWN_DURATION,
     COLORS,
+    SPAWN_BUTTON_LABELS
 } = require("../utils/constants");
 const {
     readJsonFile,
@@ -47,12 +48,12 @@ function getSpawnMessageData(message) {
 
     const isLegacySpawn =
         message.attachments?.size === 1 &&
-        message.components?.[0]?.components?.[0]?.label?.includes("Catch");
+        SPAWN_BUTTON_LABELS.some(text => message.components?.[0]?.components?.[0]?.label?.includes(text));
 
     const v2ImageItem = message.components?.[1]?.items?.[0];
     const v2ImageUrl = v2ImageItem?.media?.url;
     const v2ButtonLabel = message.components?.at(-1)?.components?.[0]?.label;
-    const isV2Spawn = Boolean(v2ImageUrl && v2ButtonLabel?.includes("Catch"));
+    const isV2Spawn = Boolean(v2ImageUrl && SPAWN_BUTTON_LABELS.some(text => v2ButtonLabel?.includes(text)));
 
     if (isLegacySpawn && legacyAttachment?.url) {
         return {

@@ -63,6 +63,8 @@ const LOG_IDS = {
 const DATA_FILE = "data.json";
 const UPVOTES_FILE = "upvotes.json";
 
+const SPAWN_BUTTON_LABELS = ['Annex!', 'Catch']
+
 module.exports = {
     SUPPORTED_BOT_IDS,
     BOT_NAMES,
@@ -74,5 +76,6 @@ module.exports = {
     COLORS,
     LOG_IDS,
     DATA_FILE,
-    UPVOTES_FILE
+    UPVOTES_FILE,
+    SPAWN_BUTTON_LABELS
 };
