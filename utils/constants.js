@@ -9,7 +9,8 @@ const SUPPORTED_BOT_IDS = [
     "1120942938126553190",   // HistoryDex
     "1425109627636285511",   // JoJoDex
     "1500173453880197162",   // Empireballs Reboot
-    "1406796704807915630"    // MapsDex
+    "1406796704807915630",   // MapsDex
+    "1485343094064021625"    // FlagsDex
 ];
 
 // Bot ID to name mapping
@@ -19,7 +20,8 @@ const BOT_NAMES = {
     "1120942938126553190": "HistoryDex",
     "1425109627636285511": "JoJoDex",
     "1500173453880197162": "Empireballs Reboot",
-    "1406796704807915630": "MapsDex"
+    "1406796704807915630": "MapsDex",
+    "1485343094064021625": "FlagsDex"
 };
 
 // Bot ID to data key mapping
@@ -29,7 +31,8 @@ const BOT_DATA_KEYS = {
     "1120942938126553190": "HD",
     "1425109627636285511": "JD",
     "1500173453880197162": "EB",
-    "1406796704807915630": "MD"
+    "1406796704807915630": "MD",
+    "1485343094064021625": "FLD"
 };
 
 // URLs
@@ -63,7 +66,7 @@ const LOG_IDS = {
 const DATA_FILE = "data.json";
 const UPVOTES_FILE = "upvotes.json";
 
-const SPAWN_BUTTON_LABELS = ['Annex!', 'Catch']
+const SPAWN_BUTTON_LABELS = ['Annex!', 'Catch'];
 
 module.exports = {
     SUPPORTED_BOT_IDS,
