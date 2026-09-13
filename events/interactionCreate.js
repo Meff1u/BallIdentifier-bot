@@ -13,7 +13,6 @@ const {
     TextInputStyle,
     WebhookClient,
 } = require("discord.js");
-const FormData = require("form-data");
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
 // Import shared utilities

@@ -3,8 +3,6 @@ const {
     MessageFlags, 
     ContainerBuilder, 
     TextDisplayBuilder, 
-    MediaGalleryBuilder, 
-    MediaGalleryItemBuilder, 
     SeparatorBuilder, 
     SeparatorSpacingSize, 
     ButtonBuilder, 
@@ -15,10 +13,6 @@ const {
 
 // Import shared utilities
 const { SUPPORTED_BOT_IDS, BOT_NAMES, BOT_DATA_KEYS, COLORS } = require("../utils/constants");
-
-const buildImageUrl = (dex, ballName) => {
-    return `https://ballidentifier.xyz/assets/dexes/${encodeURIComponent(dex)}/compressed/${encodeURIComponent(ballName)}.webp`;
-};
 
 const toSubcommandName = (name) =>
     name
@@ -126,14 +120,6 @@ module.exports = {
 
         container.addTextDisplayComponents(
             new TextDisplayBuilder().setContent(`# **${ballName}**`),
-        );
-
-        const galleryItem = new MediaGalleryItemBuilder()
-            .setURL(buildImageUrl(dexName, ballName))
-            .setDescription(`spawn art made by ${ballData.artist}`);
-
-        container.addMediaGalleryComponents(
-            new MediaGalleryBuilder().addItems(galleryItem),
         );
 
         container.addSeparatorComponents(

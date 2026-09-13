@@ -35,13 +35,13 @@ const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fet
 // Local constants
 const DATA_PATH = getAssetsPath("data.json");
 
+const buildImageUrl = (dex, country) =>
+    `${ASSETS_BASE_URL}/dexes/${encodeURIComponent(dex)}/${encodeURIComponent(country)}.png`;
+
 // Bot config with dex names
 const BOT_CONFIG = Object.fromEntries(
     SUPPORTED_BOT_IDS.map((id) => [id, { dex: BOT_NAMES[id], dKey: BOT_DATA_KEYS[id] }]),
 );
-
-const buildImageUrl = (dex, country) =>
-    `${ASSETS_BASE_URL}/dexes/${encodeURIComponent(dex)}/${encodeURIComponent(country)}.png`;
 
 function getSpawnMessageData(message) {
     const legacyAttachment = message.attachments?.first?.();
@@ -140,7 +140,7 @@ module.exports = {
             const data = readJsonFile(DATA_PATH, { users: {} });
 
             // Process image and get hash
-            const { hash, buffer: imageBuffer } = await processImageHash(
+            const { hash } = await processImageHash(
                 spawnData.imageUrl,
                 message.id,
             );
@@ -174,9 +174,6 @@ module.exports = {
                         value: `- **Dex:** ${config.dex}\n- **Country:** ${bestMatch.country}\n- **Diff:** ${bestMatch.diff}\n- **Rarity:** ${rarity ? `t${rarity}` : "Not found"}`,
                         inline: false,
                     },
-                    ...(bestMatch.diff >= minDiff
-                        ? [{ name: "Target Spawn Art", value: "\u200B" }]
-                        : []),
                 ],
                 thumbnail: imageUrl,
                 image: bestMatch.diff >= minDiff ? spawnData.imageUrl : null,
@@ -190,7 +187,6 @@ module.exports = {
                 .setDescription(
                     `**Similarity:** \`${100 - bestMatch.diff}%\`\n**Rarity:** \`${rarity ? `t${rarity}` : "Not found"}\`\n**Artist:** \`${artist}\``,
                 )
-                .setThumbnail(imageUrl)
                 .setFooter({
                     text: `You have identified ${(data.users[user.id]?.identifyAmount || 0) + (bestMatch.diff >= 20 ? 0 : 1)} balls!`,
                 });
@@ -211,39 +207,25 @@ module.exports = {
                 const webhookUrl = process.env.REPORT_WEBHOOK_URL;
                 if (webhookUrl) {
                     try {
-                        const FormData = require("form-data");
-                        const form = new FormData();
-                        form.append(
-                            "payload_json",
-                            JSON.stringify({
-                                embeds: [
-                                    {
-                                        title: "Wrong answer report",
-                                        color: COLORS.ERROR,
-                                        fields: [
-                                            { name: "User", value: `${user.tag} (${user.id})` },
-                                            {
-                                                name: "Detected country",
-                                                value: `${bestMatch.country} (${bestMatch.diff} diff)`,
-                                            },
-                                            { name: "Bot", value: config.dex },
-                                            {
-                                                name: "Target Spawn URL",
-                                                value: spawnData.imageUrl,
-                                            },
-                                        ],
-                                        thumbnail: { url: imageUrl },
-                                        timestamp: new Date().toISOString(),
-                                    },
-                                ],
+                        await fetch(webhookUrl, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                                embeds: [{
+                                    title: "Wrong answer report",
+                                    color: COLORS.ERROR,
+                                    fields: [
+                                        { name: "User", value: `${user.tag} (${user.id})` },
+                                        {
+                                            name: "Detected country",
+                                            value: `${bestMatch.country} (${bestMatch.diff} diff)`,
+                                        },
+                                        { name: "Bot", value: config.dex },
+                                    ],
+                                    timestamp: new Date().toISOString(),
+                                }],
                             }),
-                        );
-                        form.append(
-                            "file",
-                            imageBuffer,
-                            spawnData.imageName || `${message.id}.png`,
-                        );
-                        await fetch(webhookUrl, { method: "POST", body: form });
+                        });
                     } catch (e) {
                         console.error("[IDENTIFY] Error sending auto-report:", e);
                     }

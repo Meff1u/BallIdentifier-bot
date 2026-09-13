@@ -8,11 +8,10 @@ const {
     SeparatorBuilder,
     SeparatorSpacingSize,
     SectionBuilder,
-    ThumbnailBuilder,
 } = require("discord.js");
 const { randomUUID } = require("crypto");
 
-const { SUPPORTED_BOT_IDS, BOT_NAMES, BOT_DATA_KEYS, COLORS, ASSETS_BASE_URL } = require("./constants");
+const { SUPPORTED_BOT_IDS, BOT_NAMES, BOT_DATA_KEYS, COLORS } = require("./constants");
 
 const PAGE_SIZE = 25;
 const COLLECTOR_SESSION_TTL = 15 * 60 * 1000;
@@ -130,18 +129,10 @@ function buildCollectorsView(client, dataKey, selectedBallName, page = 0, sessio
         ? collectors.map((c) => `- <@${c}>\n > ${c}`).join("\n")
         : "No collectors yet.";
 
-    const botIdForKey = Object.keys(BOT_DATA_KEYS).find((id) => BOT_DATA_KEYS[id] === dataKey);
-    const dexNameForUrl = botIdForKey ? BOT_NAMES[botIdForKey] : dataKey;
-
     const container = new ContainerBuilder()
         .setAccentColor(COLORS.PRIMARY)
         .addSectionComponents(
             new SectionBuilder()
-                .setThumbnailAccessory(
-                    new ThumbnailBuilder().setURL(
-                        `${ASSETS_BASE_URL}/dexes/${encodeURIComponent(dexNameForUrl)}/compressed/${encodeURIComponent(selectedBall.name)}.webp`,
-                    ),
-                )
                 .addTextDisplayComponents(
                     new TextDisplayBuilder().setContent(`**Collectors of ${selectedBall.name}**`),
                     new TextDisplayBuilder().setContent(collectorsList),
