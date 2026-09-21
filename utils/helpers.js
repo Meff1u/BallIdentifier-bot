@@ -158,8 +158,7 @@ function isUpvoter(upvotes, userId) {
  * @returns {string} Full URL
  */
 function buildBallImageUrl(dex, ballName) {
-    const baseUrl =
-        "https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets";
+    const baseUrl = "https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets";
     return `${baseUrl}/dexes/${encodeURIComponent(dex)}/${encodeURIComponent(ballName)}.png`;
 }
 
@@ -170,6 +169,71 @@ function buildBallImageUrl(dex, ballName) {
  */
 function getAssetsPath(filename) {
     return path.join(__dirname, "../assets", filename);
+}
+
+/**
+ * Send a report to a thread in the report channel using components v2
+ * @param {object} client - Discord client
+ * @param {string} dexName - Name of the dex (e.g., "Ballsdex")
+ * @param {object} containerBuilder - ContainerBuilder for message content
+ * @param {object} options - Additional options (files array with {attachment, name})
+ * @returns {Promise<boolean>} Success status
+ */
+async function sendThreadReport(client, dexName, containerBuilder, options = {}) {
+    const { MessageFlags } = require("discord.js");
+    const REPORT_CHANNEL_ID = process.env.REPORT_CHANNEL_ID;
+
+    if (!REPORT_CHANNEL_ID) {
+        console.error("[REPORT] REPORT_CHANNEL_ID not configured");
+        return false;
+    }
+
+    try {
+        const channel = await client.channels.fetch(REPORT_CHANNEL_ID);
+
+        if (!channel || !channel.isTextBased()) {
+            console.error("[REPORT] Report channel not found or is not text-based");
+            return false;
+        }
+
+        let thread = null;
+
+        const archivedThreads = await channel.threads.fetchArchived({ limit: 100 });
+        thread = archivedThreads.threads.find((t) => t.name === dexName);
+
+        if (!thread) {
+            const activeThreads = await channel.threads.fetch();
+            thread = activeThreads.threads.find((t) => t.name === dexName);
+        }
+
+        if (!thread) {
+            thread = await channel.threads.create({
+                name: dexName,
+                autoArchiveDuration: 60, // Archive after 1 hour of inactivity
+            });
+            console.log(`[REPORT] Created new thread for ${dexName}`);
+        } else if (thread.archived) {
+            // Unarchive thread if needed
+            await thread.edit({ archived: false });
+            console.log(`[REPORT] Unarchived thread for ${dexName}`);
+        }
+
+        const messagePayload = {
+            components: [containerBuilder],
+            flags: MessageFlags.IsComponentsV2,
+        };
+
+        if (options.files && Array.isArray(options.files)) {
+            messagePayload.files = options.files;
+        }
+
+        await thread.send(messagePayload);
+        console.log(`[REPORT] Sent report to ${dexName} thread`);
+        return true;
+    } catch (error) {
+        console.error("[REPORT] Error sending thread report:", error);
+        return false;
+    }
 }
 
 module.exports = {
@@ -184,4 +248,5 @@ module.exports = {
     buildBallImageUrl,
     getAssetsPath,
     processImageHash,
+    sendThreadReport,
 };

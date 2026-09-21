@@ -3,18 +3,13 @@ const fs = require("fs");
 const path = require("path");
 const FormData = require("form-data");
 const { imageHash } = require("image-hash");
+const { ContainerBuilder, TextDisplayBuilder, SeparatorBuilder, SeparatorSpacingSize } = require("discord.js");
 
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
 // Import shared utilities
 const { SUPPORTED_BOT_IDS, BOT_DATA_KEYS, BOT_NAMES, COLORS, SPAWN_BUTTON_LABELS } = require("../utils/constants");
-const {
-    readJsonFile,
-    writeJsonFile,
-    getAssetsPath,
-    processImageHash,
-    findBestMatch,
-} = require("../utils/helpers");
+const { readJsonFile, writeJsonFile, getAssetsPath, processImageHash, findBestMatch, sendThreadReport } = require("../utils/helpers");
 
 // Local constants
 const DATA_PATH = getAssetsPath("data.json");
@@ -26,15 +21,13 @@ const ADMIN_ID = "334411435633541121";
 function getCatchMessageData(m) {
     const legacyAttachment = m.attachments?.first?.();
 
-    const isOldCatchMessage =
-        m.attachments?.size === 1 &&
-        SPAWN_BUTTON_LABELS.some(text => m.components?.[0]?.components?.[0]?.label?.includes(text));
+    const isOldCatchMessage = m.attachments?.size === 1 && SPAWN_BUTTON_LABELS.some((text) => m.components?.[0]?.components?.[0]?.label?.includes(text));
 
     const v2ImageItem = m.components?.[1]?.items?.[0];
     const v2ImageUrl = v2ImageItem?.media?.url;
     const v2ButtonLabel = m.components?.at(-1)?.components?.[0]?.label;
 
-    const isNewCatchMessage = Boolean(v2ImageUrl && SPAWN_BUTTON_LABELS.some(text => v2ButtonLabel?.includes(text)));
+    const isNewCatchMessage = Boolean(v2ImageUrl && SPAWN_BUTTON_LABELS.some((text) => v2ButtonLabel?.includes(text)));
 
     if (isOldCatchMessage && legacyAttachment?.url) {
         return {
@@ -106,12 +99,7 @@ async function handleEval(m, client) {
         // Do not send a reply when the evaluated result is explicitly null.
         if (result === null) return;
 
-        let output =
-            result === undefined
-                ? "undefined"
-            : typeof result === "object"
-                    ? JSON.stringify(result, null, 2)
-                    : String(result);
+        let output = result === undefined ? "undefined" : typeof result === "object" ? JSON.stringify(result, null, 2) : String(result);
 
         // Redact sensitive info
         if (process.env.BOT_TOKEN) {
@@ -135,10 +123,7 @@ async function handleEval(m, client) {
     } catch (error) {
         let errorMessage = error.message || String(error);
         if (process.env.BOT_TOKEN) {
-            errorMessage = errorMessage.replace(
-                new RegExp(process.env.BOT_TOKEN, "g"),
-                "[REDACTED]",
-            );
+            errorMessage = errorMessage.replace(new RegExp(process.env.BOT_TOKEN, "g"), "[REDACTED]");
         }
 
         // Handle long error messages the same way
@@ -177,8 +162,7 @@ async function notify(m, client, settings, info) {
         const minDiff = ["Mali Empire", "Burkina Faso"].includes(bestMatch.country) ? 25 : 20;
 
         // Determine ball name
-        const ballName =
-            bestMatch.diff > minDiff ? "Unknown (probably new spawn art)" : bestMatch.country;
+        const ballName = bestMatch.diff > minDiff ? "Unknown (probably new spawn art)" : bestMatch.country;
 
         const foundBall = client.rarities[BOT_DATA_KEYS[m.author.id]]?.[bestMatch.country];
 
@@ -214,42 +198,45 @@ async function notify(m, client, settings, info) {
             writeJsonFile(DATA_PATH, data);
         } else if (bestMatch.diff > minDiff) {
             // Send report for unknown spawn art
-            const webhookUrl = process.env.REPORT_WEBHOOK_URL;
-            if (webhookUrl) {
-                try {
-                    const botDex = BOT_NAMES[m.author.id] || "Unknown";
-                    const form = new FormData();
-                    form.append(
-                        "payload_json",
-                        JSON.stringify({
-                            embeds: [
-                                {
-                                    title: "Unknown spawn art report (AutoNotifier)",
-                                    color: COLORS.ERROR,
-                                    fields: [
-                                        { name: "Server", value: m.guild.name },
-                                        {
-                                            name: "Best match",
-                                            value: `${bestMatch.country} (${bestMatch.diff} diff)`,
-                                        },
-                                        { name: "Bot", value: botDex },
-                                        { name: "Message Link", value: `[Link](${m.url})` },
-                                        {
-                                            name: "Target Spawn URL",
-                                            value: imageUrl,
-                                        },
-                                    ],
-                                    thumbnail: { url: `https://ballidentifier.xyz/assets/dexes/${BOT_NAMES[m.author.id]}/${encodeURIComponent(bestMatch.country)}.png` },
-                                    timestamp: new Date().toISOString(),
-                                },
-                            ],
-                        }),
-                    );
-                    form.append("file", imageBuffer, imageName || `${m.id}.png`);
-                    await fetch(webhookUrl, { method: "POST", body: form });
-                } catch (e) {
-                    console.error("[NOTIFIER] Error sending auto-notifier report:", e);
-                }
+            try {
+                const botDex = BOT_NAMES[m.author.id] || "Unknown";
+                const matchImageUrl = `https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets/dexes/${encodeURIComponent(botDex)}/${encodeURIComponent(bestMatch.country)}.png`;
+
+                // Fetch match image
+                const matchImageRes = await fetch(matchImageUrl);
+                const matchImageBuffer = await matchImageRes.buffer();
+
+                // Build components v2 container
+                const container = new ContainerBuilder().setAccentColor(COLORS.ERROR);
+
+                container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`# ⚠️ Unknown Spawn Art Report`));
+                container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+                container.addTextDisplayComponents(
+                    new TextDisplayBuilder().setContent(
+                        `**Report Details:**\n` +
+                            `- **Server:** ${m.guild.name}\n` +
+                            `- **Bot:** ${botDex}\n` +
+                            `- **Best Match:** ${bestMatch.country}\n` +
+                            `- **Difference:** ${bestMatch.diff}\n` +
+                            `- **Message:** [Link](${m.url})`,
+                    ),
+                );
+                container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+                container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**Detected Spawn Art:**`));
+                container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`![spawn](attachment://spawn.png)`));
+                container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+                container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**Best Matching Entry:**`));
+                container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`![match](attachment://match.png)`));
+
+                // Send report to thread
+                await sendThreadReport(client, botDex, container, {
+                    files: [
+                        { attachment: imageBuffer, name: "spawn.png" },
+                        { attachment: matchImageBuffer, name: "match.png" },
+                    ],
+                });
+            } catch (e) {
+                console.error("[NOTIFIER] Error sending auto-notifier report:", e);
             }
         }
     } catch (error) {
