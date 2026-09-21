@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const { startServer, initializeServer } = require("./server");
 const { addLog, flushAllBatches, clearAllBatches } = require("./utils/logger");
+const { closeDatabase, initializeDatabase } = require("./utils/database");
 
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
@@ -69,6 +70,12 @@ client.on("shardDisconnect", async () => {
 client.once("clientReady", async () => {
     const rest = new REST({ version: "10" }).setToken(TOKEN);
     const appId = client.user.id;
+
+    try {
+        await initializeDatabase();
+    } catch (error) {
+        console.error("[DATABASE] MongoDB unavailable:", error.message);
+    }
 
     // Separate global and private commands
     const globalCommands = slashCommandsArray.filter((cmd) => !PRIVATE_COMMANDS.includes(cmd.name));
@@ -151,6 +158,7 @@ process.on("uncaughtException", (error) => {
 process.on("SIGINT", async () => {
     console.log("[BOT] Gracefully shutting down...");
     await flushAllBatches(client);
+    await closeDatabase();
     await client.destroy();
     process.exit(0);
 });
@@ -158,6 +166,7 @@ process.on("SIGINT", async () => {
 process.on("SIGTERM", async () => {
     console.log("[BOT] Gracefully shutting down...");
     await flushAllBatches(client);
+    await closeDatabase();
     await client.destroy();
     process.exit(0);
 });

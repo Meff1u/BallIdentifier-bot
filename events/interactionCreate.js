@@ -19,6 +19,12 @@ const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fet
 const { COLORS, INACTIVITY_TIMEOUT } = require("../utils/constants");
 const { readJsonFile, writeJsonFile, getAssetsPath } = require("../utils/helpers");
 const {
+    ballsdexRequest,
+    deleteStoredCollection,
+    removeApiKey,
+    saveApiKey,
+} = require("../utils/ballsdex");
+const {
     PAGE_SIZE,
     buildCollectorsView,
     findCollectorEntry,
@@ -135,6 +141,33 @@ module.exports = {
 
         // Modals
         else if (interaction.isModalSubmit()) {
+            if (interaction.customId === "ballsdex-link") {
+                const apiKey = interaction.fields.getTextInputValue("api-key").trim();
+
+                await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+                try {
+                    const profile = await ballsdexRequest(apiKey, "/me");
+                    const linkedAccountId = String(profile.discord_id || profile.id || "");
+
+                    if (linkedAccountId !== interaction.user.id) {
+                        return interaction.editReply({
+                            content: "That API key belongs to a different Discord account.",
+                        });
+                    }
+
+                    saveApiKey(interaction.user.id, apiKey);
+                    return interaction.editReply({
+                        content: "Your Ballsdex account has been linked securely.",
+                    });
+                } catch (error) {
+                    console.error("[BALLSDEX] Failed to link account:", error);
+                    return interaction.editReply({
+                        content: `Could not link your Ballsdex account: ${error.message}`,
+                    });
+                }
+            }
+
             if (interaction.customId.startsWith("collectors-search:")) {
                 const [, sessionId] = interaction.customId.split(":");
                 const session = getCollectorsSession(sessionId);
@@ -213,6 +246,49 @@ module.exports = {
 
         // Buttons
         else if (interaction.isButton()) {
+            if (interaction.customId === "ballsdex-link:start") {
+                const modal = new ModalBuilder()
+                    .setCustomId("ballsdex-link")
+                    .setTitle("Link Ballsdex account");
+                const apiKeyInput = new TextInputBuilder()
+                    .setCustomId("api-key")
+                    .setLabel("Ballsdex API key")
+                    .setStyle(TextInputStyle.Short)
+                    .setRequired(true)
+                    .setMinLength(10)
+                    .setMaxLength(200)
+                    .setPlaceholder("bdx_live_...");
+
+                modal.addComponents(new ActionRowBuilder().addComponents(apiKeyInput));
+                return interaction.showModal(modal);
+            }
+
+            if (interaction.customId.startsWith("ballsdex-unlink:")) {
+                const action = interaction.customId.split(":")[1];
+
+                if (action === "cancel") {
+                    return interaction.update({
+                        content: "Your Ballsdex account remains linked.",
+                        components: [],
+                    });
+                }
+
+                const wasRemoved = removeApiKey(interaction.user.id);
+                if (wasRemoved) {
+                    try {
+                        await deleteStoredCollection(interaction.user.id);
+                    } catch (error) {
+                        console.error("[BALLSDEX] Failed to delete stored collection:", error);
+                    }
+                }
+                return interaction.update({
+                    content: wasRemoved
+                        ? "Your Ballsdex account has been unlinked. The encrypted API key and saved collection data were removed."
+                        : "No linked Ballsdex account was found.",
+                    components: [],
+                });
+            }
+
             if (interaction.customId.startsWith("collectors:")) {
                 const [, sessionId, action] = interaction.customId.split(":");
                 const session = getCollectorsSession(sessionId);
