@@ -222,13 +222,6 @@ async function notify(m, client, settings, info) {
                     ),
                 );
                 container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-                container.addTextDisplayComponents(
-                    new TextDisplayBuilder().setContent(`**Detected Spawn Art (below)**`),
-                );
-                container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-                container.addTextDisplayComponents(
-                    new TextDisplayBuilder().setContent(`**Best Matching Entry (below)**`),
-                );
 
                 // Build media gallery with both images
                 container.addMediaGalleryComponents(
