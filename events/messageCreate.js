@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const FormData = require("form-data");
 const { imageHash } = require("image-hash");
-const { ContainerBuilder, TextDisplayBuilder, SeparatorBuilder, SeparatorSpacingSize, MediaGalleryBuilder } = require("discord.js");
+const { ContainerBuilder, TextDisplayBuilder, SeparatorBuilder, SeparatorSpacingSize, MediaGalleryBuilder, MediaGalleryItemBuilder } = require("discord.js");
 
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
@@ -231,19 +231,20 @@ async function notify(m, client, settings, info) {
                 );
 
                 // Build media gallery with both images
-                const mediaGallery = new MediaGalleryBuilder()
-                    .addMediaItem({
-                        media: { url: "attachment://spawn.png" },
-                        description: "Detected Spawn Art",
-                    })
-                    .addMediaItem({
-                        media: { url: "attachment://match.png" },
-                        description: "Best Matching Entry",
-                    });
+                container.addMediaGalleryComponents(
+                    new MediaGalleryBuilder()
+                        .addItems(
+                            new MediaGalleryItemBuilder()
+                                .setURL("attachment://spawn.png")
+                                .setDescription("Detected Spawn Art"),
+                            new MediaGalleryItemBuilder()
+                                .setURL("attachment://match.png")
+                                .setDescription("Best Matching Entry"),
+                        ),
+                );
 
                 // Send report to thread
                 await sendThreadReport(client, botDex, container, {
-                    mediaGallery,
                     files: [
                         { attachment: imageBuffer, name: "spawn.png" },
                         { attachment: matchImageBuffer, name: "match.png" },

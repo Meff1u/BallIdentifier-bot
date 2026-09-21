@@ -9,6 +9,7 @@ const {
     SeparatorBuilder,
     SeparatorSpacingSize,
     MediaGalleryBuilder,
+    MediaGalleryItemBuilder,
 } = require("discord.js");
 const fs = require("fs");
 
@@ -214,19 +215,20 @@ module.exports = {
                     );
 
                     // Build media gallery with both images
-                    const mediaGallery = new MediaGalleryBuilder()
-                        .addMediaItem({
-                            media: { url: "attachment://spawn.png" },
-                            description: "Detected Spawn Art",
-                        })
-                        .addMediaItem({
-                            media: { url: "attachment://match.png" },
-                            description: "Best Matching Entry",
-                        });
+                    container.addMediaGalleryComponents(
+                        new MediaGalleryBuilder()
+                            .addItems(
+                                new MediaGalleryItemBuilder()
+                                    .setURL("attachment://spawn.png")
+                                    .setDescription("Detected Spawn Art"),
+                                new MediaGalleryItemBuilder()
+                                    .setURL("attachment://match.png")
+                                    .setDescription("Best Matching Entry"),
+                            ),
+                    );
 
                     // Send report to thread
                     await sendThreadReport(client, config.dex, container, {
-                        mediaGallery,
                         files: [
                             { attachment: spawnImageBuffer, name: "spawn.png" },
                             { attachment: matchImageBuffer, name: "match.png" },
