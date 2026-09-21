@@ -223,6 +223,12 @@ async function sendThreadReport(client, dexName, containerBuilder, options = {})
             flags: MessageFlags.IsComponentsV2,
         };
 
+        // Add media gallery if provided
+        if (options.mediaGallery) {
+            messagePayload.components.push(options.mediaGallery);
+        }
+
+        // Add files if provided
         if (options.files && Array.isArray(options.files)) {
             messagePayload.files = options.files;
         }

@@ -8,6 +8,7 @@ const {
     TextDisplayBuilder,
     SeparatorBuilder,
     SeparatorSpacingSize,
+    MediaGalleryBuilder,
 } = require("discord.js");
 const fs = require("fs");
 
@@ -202,14 +203,30 @@ module.exports = {
                         ),
                     );
                     container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-                    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**Detected Spawn Art:**`));
-                    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`![spawn](attachment://spawn.png)`));
-                    container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-                    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**Best Matching Entry:**`));
-                    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`![match](attachment://match.png)`));
+                    container.addTextDisplayComponents(
+                        new TextDisplayBuilder().setContent(`**Detected Spawn Art (below)**`),
+                    );
+                    container.addSeparatorComponents(
+                        new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true),
+                    );
+                    container.addTextDisplayComponents(
+                        new TextDisplayBuilder().setContent(`**Best Matching Entry (below)**`),
+                    );
+
+                    // Build media gallery with both images
+                    const mediaGallery = new MediaGalleryBuilder()
+                        .addMediaItem({
+                            media: { url: "attachment://spawn.png" },
+                            description: "Detected Spawn Art",
+                        })
+                        .addMediaItem({
+                            media: { url: "attachment://match.png" },
+                            description: "Best Matching Entry",
+                        });
 
                     // Send report to thread
                     await sendThreadReport(client, config.dex, container, {
+                        mediaGallery,
                         files: [
                             { attachment: spawnImageBuffer, name: "spawn.png" },
                             { attachment: matchImageBuffer, name: "match.png" },
