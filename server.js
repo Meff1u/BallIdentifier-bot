@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
@@ -23,7 +24,15 @@ app.use(
 );
 
 // Request size limit - 1KB to prevent DoS attacks
-app.use(express.json({ limit: "1kb" }));
+// rawBody is kept so request signatures can be verified
+app.use(
+    express.json({
+        limit: "1kb",
+        verify: (req, res, buf) => {
+            req.rawBody = buf.toString("utf8");
+        },
+    })
+);
 
 let client;
 
@@ -87,26 +96,37 @@ setInterval(() => {
     }
 }, 30 * 60 * 1000);
 
-// Middleware to verify API key for protected endpoints
-const verifyApiKey = (req, res, next) => {
-    const apiKey = process.env.API_KEY;
-    
-    if (!apiKey) {
-        return res.status(500).json({ error: "API key not configured" });
+// Max allowed difference between request timestamp and server time
+const SIGNATURE_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutes
+
+const verifySignature = (req, res, next) => {
+    const secret = process.env.BOT_API_SECRET;
+
+    if (!secret) {
+        return res.status(500).json({ error: "API secret not configured" });
     }
-    
-    const authHeader = req.headers.authorization;
-    
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        return res.status(401).json({ error: "Missing or invalid authorization header" });
+
+    const timestamp = req.get("X-Timestamp");
+    const signature = req.get("X-Signature") || "";
+
+    if (!timestamp || !/^\d+$/.test(timestamp) || !/^[a-f0-9]{64}$/i.test(signature)) {
+        return res.status(401).json({ error: "Missing or invalid signature headers" });
     }
-    
-    const token = authHeader.substring(7);
-    
-    if (token !== apiKey) {
-        return res.status(403).json({ error: "Invalid API key" });
+
+    if (Math.abs(Date.now() - Number(timestamp)) > SIGNATURE_MAX_AGE_MS) {
+        return res.status(401).json({ error: "Request expired" });
     }
-    
+
+    const expected = crypto
+        .createHmac("sha256", secret)
+        .update(`${timestamp}.${req.method}.${req.originalUrl}.${req.rawBody || ""}`)
+        .digest("hex");
+
+    if (!crypto.timingSafeEqual(Buffer.from(signature.toLowerCase(), "hex"), Buffer.from(expected, "hex"))) {
+        client?.logAPI?.(`${req.method} ${req.originalUrl} | Status: Rejected - invalid signature`);
+        return res.status(403).json({ error: "Invalid signature" });
+    }
+
     next();
 };
 
@@ -208,7 +228,7 @@ app.get("/api/stats", generalLimiter, (req, res) => {
 });
 
 // Get list of guilds where bot is present
-app.get("/api/guilds", apiLimiter, verifyApiKey, (req, res) => {
+app.get("/api/guilds", apiLimiter, verifySignature, (req, res) => {
     if (!client) {
         client?.logAPI?.(`GET /api/guilds | Status: Error - Bot not connected`);
         return res.status(503).json({ error: "Discord bot not connected" });
@@ -230,7 +250,7 @@ app.get("/api/guilds", apiLimiter, verifyApiKey, (req, res) => {
 });
 
 // Get server configuration
-app.get("/api/guilds/:guildId/config", apiLimiter, verifyApiKey, async (req, res) => {
+app.get("/api/guilds/:guildId/config", apiLimiter, verifySignature, async (req, res) => {
     if (!client) {
         return res.status(503).json({ error: "Discord bot not connected" });
     }
@@ -306,7 +326,7 @@ app.get("/api/guilds/:guildId/config", apiLimiter, verifyApiKey, async (req, res
 });
 
 // Update server configuration
-app.post("/api/guilds/:guildId/config", apiLimiter, verifyApiKey, validateGuildConfigInput, (req, res) => {
+app.post("/api/guilds/:guildId/config", apiLimiter, verifySignature, validateGuildConfigInput, (req, res) => {
     if (!client) {
         return res.status(503).json({ error: "Discord bot not connected" });
     }
