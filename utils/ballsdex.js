@@ -1,12 +1,11 @@
 const crypto = require("crypto");
 
-const { readJsonFile, writeJsonFile, getAssetsPath } = require("./helpers");
+const { getData, updateData } = require("./helpers");
 const { getDatabase } = require("./database");
 
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
 const API_BASE_URL = "https://ballsdex.com/api/v1";
-const DATA_PATH = getAssetsPath("data.json");
 const ENCRYPTION_ALGORITHM = "aes-256-gcm";
 const PAGE_REQUEST_DELAY = 1100;
 const SPECIAL_WRITE_BATCH_SIZE = 500;
@@ -310,29 +309,28 @@ async function deleteStoredCollection(discordUserId) {
 }
 
 function getSavedApiKey(userId) {
-    const data = readJsonFile(DATA_PATH, { users: {} });
-    return data.users?.[userId]?.ballsdex?.apiKey || null;
+    return getData().users[userId]?.ballsdex?.apiKey || null;
 }
 
 function saveApiKey(userId, apiKey) {
-    const data = readJsonFile(DATA_PATH, { users: {} });
-    if (!data.users) data.users = {};
-    if (!data.users[userId]) data.users[userId] = {};
-
-    data.users[userId].ballsdex = {
-        apiKey: encryptApiKey(apiKey),
-        linkedAt: new Date().toISOString(),
-    };
-    writeJsonFile(DATA_PATH, data);
+    const encryptedKey = encryptApiKey(apiKey);
+    updateData((data) => {
+        data.users[userId] ??= {};
+        data.users[userId].ballsdex = {
+            apiKey: encryptedKey,
+            linkedAt: new Date().toISOString(),
+        };
+    });
 }
 
 function removeApiKey(userId) {
-    const data = readJsonFile(DATA_PATH, { users: {} });
-    if (!data.users?.[userId]?.ballsdex) return false;
+    if (!getSavedApiKey(userId)) return false;
 
-    delete data.users[userId].ballsdex;
-    writeJsonFile(DATA_PATH, data);
-    return true;
+    return updateData((data) => {
+        if (!data.users[userId]?.ballsdex) return false;
+        delete data.users[userId].ballsdex;
+        return true;
+    });
 }
 
 module.exports = {
@@ -346,4 +344,4 @@ module.exports = {
     removeApiKey,
     saveApiKey,
     syncCollection,
-};
+};

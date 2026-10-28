@@ -1,20 +1,20 @@
-const sharp = require("sharp");
+const { ContainerBuilder, TextDisplayBuilder, SeparatorBuilder, SeparatorSpacingSize, MediaGalleryBuilder, MediaGalleryItemBuilder } = require("discord.js");
 const fs = require("fs");
 const path = require("path");
-const FormData = require("form-data");
-const { imageHash } = require("image-hash");
-const { ContainerBuilder, TextDisplayBuilder, SeparatorBuilder, SeparatorSpacingSize, MediaGalleryBuilder, MediaGalleryItemBuilder } = require("discord.js");
-
-const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
 // Import shared utilities
-const { SUPPORTED_BOT_IDS, BOT_DATA_KEYS, BOT_NAMES, COLORS, SPAWN_BUTTON_LABELS } = require("../utils/constants");
-const { readJsonFile, writeJsonFile, getAssetsPath, processImageHash, findBestMatch, sendThreadReport } = require("../utils/helpers");
-
-// Local constants
-const DATA_PATH = getAssetsPath("data.json");
-const ADMIN_ID = "334411435633541121";
-const PRIVATE_GUILD_ID = "379676234566729742";
+const { SUPPORTED_BOT_IDS, BOT_DATA_KEYS, BOT_NAMES, COLORS, ADMIN_ID } = require("../utils/constants");
+const {
+    getData,
+    updateData,
+    processImageHash,
+    downloadBuffer,
+    findBestMatch,
+    getMatchThreshold,
+    getSpawnMessageData,
+    buildBallImageUrl,
+    sendThreadReport,
+} = require("../utils/helpers");
 
 // Environment variables whose values must never appear in .eval output
 const SECRET_ENV_KEYS = [
@@ -47,66 +47,21 @@ function redactSecrets(text, clientToken) {
     return output;
 }
 
-/**
- * Extract catch message metadata for both legacy and components-v2 message formats.
- */
-function getCatchMessageData(m) {
-    const legacyAttachment = m.attachments?.first?.();
-
-    const isOldCatchMessage = m.attachments?.size === 1 && SPAWN_BUTTON_LABELS.some((text) => m.components?.[0]?.components?.[0]?.label?.includes(text));
-
-    const v2ImageItem = m.components?.[1]?.items?.[0];
-    const v2ImageUrl = v2ImageItem?.media?.url;
-    const v2ButtonLabel = m.components?.at(-1)?.components?.[0]?.label;
-
-    const isNewCatchMessage = Boolean(v2ImageUrl && SPAWN_BUTTON_LABELS.some((text) => v2ButtonLabel?.includes(text)));
-
-    if (isOldCatchMessage && legacyAttachment?.url) {
-        return {
-            isCatchMessage: true,
-            imageUrl: legacyAttachment.url,
-            imageName: legacyAttachment.name || `${m.id}.png`,
-            messageType: "legacy",
-        };
-    }
-
-    if (isNewCatchMessage) {
-        return {
-            isCatchMessage: true,
-            imageUrl: v2ImageUrl,
-            imageName: `${m.id}.png`,
-            messageType: "components-v2",
-        };
-    }
-
-    return {
-        isCatchMessage: false,
-        imageUrl: null,
-        imageName: null,
-        messageType: null,
-    };
-}
-
 module.exports = {
     name: "messageCreate",
     async execute(m, client) {
         // Handle bot spawn messages for notifier
         if (m.author.bot && SUPPORTED_BOT_IDS.includes(m.author.id)) {
-            const catchData = getCatchMessageData(m);
+            // Cheap checks first: most guilds have no notifier configured
+            const guildConfig = getData().guilds[m.guildId]?.notifier;
+            if (!guildConfig?.selectedBots?.includes(m.author.id)) return;
 
-            if (catchData.isCatchMessage) {
-                const data = readJsonFile(DATA_PATH, { guilds: {} });
-
-                const guildConfig = data.guilds?.[m.guildId]?.notifier;
-                if (guildConfig?.selectedBots?.includes(m.author.id)) {
-                    const hashKey = BOT_DATA_KEYS[m.author.id];
-                    await notify(m, client, guildConfig, {
-                        hashes: client.hashes[hashKey],
-                        imageUrl: catchData.imageUrl,
-                        imageName: catchData.imageName,
-                        messageType: catchData.messageType,
-                    });
-                }
+            const spawnData = getSpawnMessageData(m);
+            if (spawnData.isSpawn) {
+                await notify(m, client, guildConfig, {
+                    hashes: client.hashes?.[BOT_DATA_KEYS[m.author.id]],
+                    imageUrl: spawnData.imageUrl,
+                });
             }
             return;
         }
@@ -170,115 +125,104 @@ async function handleEval(m, client) {
 }
 
 /**
+ * Fill placeholders in the notifier message (every occurrence)
+ */
+function formatNotifierMessage(template, values) {
+    return template
+        .replaceAll("{ball}", values.ball)
+        .replaceAll("{role}", `<@&${values.role}>`)
+        .replaceAll("{rarity}", values.rarity)
+        .replaceAll("{artist}", values.artist);
+}
+
+/**
  * Send notification for spawn
  */
 async function notify(m, client, settings, info) {
     const { customMessage, selectedRole } = settings;
-    const { imageUrl, imageName } = info;
+    const { imageUrl, hashes } = info;
+    const guildName = m.guild?.name || m.guildId;
 
     try {
+        if (!imageUrl) throw new Error("Missing spawn image URL for catch message");
+        if (!hashes) throw new Error(`Hashes for ${BOT_NAMES[m.author.id]} are not loaded yet`);
+
         // Process image to identify ball
-        if (!imageUrl) {
-            throw new Error("Missing spawn image URL for catch message");
-        }
+        const { hash, buffer: imageBuffer } = await processImageHash(imageUrl);
+        const bestMatch = findBestMatch(hash, hashes);
+        const isConfident = bestMatch.diff <= getMatchThreshold(bestMatch.country);
 
-        const { hash, buffer: imageBuffer } = await processImageHash(imageUrl, m.id);
+        const ballName = isConfident ? bestMatch.country : "Unknown (probably new spawn art)";
+        const foundBall = isConfident ? client.rarities?.[BOT_DATA_KEYS[m.author.id]]?.[bestMatch.country] : null;
 
-        // Find best match
-        let bestMatch = findBestMatch(hash, info.hashes);
-
-        const minDiff = ["Mali Empire", "Burkina Faso"].includes(bestMatch.country) ? 25 : 20;
-
-        // Determine ball name
-        const ballName = bestMatch.diff > minDiff ? "Unknown (probably new spawn art)" : bestMatch.country;
-
-        const foundBall = client.rarities[BOT_DATA_KEYS[m.author.id]]?.[bestMatch.country];
-
-        const rarity = ballName.includes("Unknown") || !foundBall ? "Unknown" : foundBall.rarity;
-        const artist = ballName.includes("Unknown") || !foundBall ? "Unknown" : foundBall.artist;
-
-        m.reply({
-            content: customMessage
-                .replace("{ball}", customMessage.includes("{ball}") ? ballName : "")
-                .replace("{role}", `<@&${selectedRole}>`)
-                .replace("{rarity}", rarity)
-                .replace("{artist}", artist),
-            // Only the configured role may be pinged
-            allowedMentions: { parse: [], roles: [selectedRole], repliedUser: false },
-        });
+        await m
+            .reply({
+                content: formatNotifierMessage(customMessage, {
+                    ball: ballName,
+                    role: selectedRole,
+                    rarity: foundBall?.rarity ?? "Unknown",
+                    artist: foundBall?.artist ?? "Unknown",
+                }),
+                // Only the configured role may be pinged
+                allowedMentions: { parse: [], roles: [selectedRole], repliedUser: false },
+            })
+            .catch((error) => {
+                client.logImage(`[${guildName}] ❌ Could not send notifier message: ${error.message}`);
+            });
 
         // Log the identification result
-        const status = bestMatch.diff <= minDiff ? "✅ Identified" : "⚠️ Unknown";
-        client.logImage(`[${m.guild.name}] ${status}: ${ballName} (diff: ${bestMatch.diff})`);
+        client.logImage(`[${guildName}] ${isConfident ? "✅ Identified" : "⚠️ Unknown"}: ${ballName} (diff: ${bestMatch.diff})`);
 
-        if (bestMatch.diff <= minDiff) {
+        if (isConfident) {
             console.log(
-                `[NOTIFIER] Guild: ${m.guild.name} | Best match: ${bestMatch.country} (${BOT_NAMES[m.author.id] || "Unknown Bot"}) | Diff: ${bestMatch.diff}`,
+                `[NOTIFIER] Guild: ${guildName} | Best match: ${bestMatch.country} (${BOT_NAMES[m.author.id] || "Unknown Bot"}) | Diff: ${bestMatch.diff}`,
             );
 
-            // Increment identifyAmount counter
-            const data = readJsonFile(DATA_PATH, { guilds: {} });
-            if (!data.guilds[m.guildId]) {
-                data.guilds[m.guildId] = {};
-            }
-            if (!data.guilds[m.guildId].identifyAmount) {
-                data.guilds[m.guildId].identifyAmount = 0;
-            }
-            data.guilds[m.guildId].identifyAmount++;
-            writeJsonFile(DATA_PATH, data);
-        } else if (bestMatch.diff > minDiff) {
-            // Send report for unknown spawn art
-            try {
-                const botDex = BOT_NAMES[m.author.id] || "Unknown";
-                const matchImageUrl = `https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets/dexes/${encodeURIComponent(botDex)}/${encodeURIComponent(bestMatch.country)}.png`;
+            // Increment identifyAmount counter (atomic read-modify-write)
+            updateData((data) => {
+                data.guilds[m.guildId] ??= {};
+                data.guilds[m.guildId].identifyAmount = (data.guilds[m.guildId].identifyAmount || 0) + 1;
+            });
+            return;
+        }
 
-                // Fetch match image
-                const matchImageRes = await fetch(matchImageUrl);
-                const matchImageBuffer = await matchImageRes.buffer();
+        // Send report for unknown spawn art
+        try {
+            const botDex = BOT_NAMES[m.author.id] || "Unknown";
+            const matchImageBuffer = await downloadBuffer(buildBallImageUrl(botDex, bestMatch.country));
 
-                // Build components v2 container
-                const container = new ContainerBuilder().setAccentColor(COLORS.ERROR);
+            const container = new ContainerBuilder().setAccentColor(COLORS.ERROR);
+            container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`# ⚠️ Unknown Spawn Art Report`));
+            container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+            container.addTextDisplayComponents(
+                new TextDisplayBuilder().setContent(
+                    `**Report Details:**\n` +
+                        `- **Server:** ${guildName}\n` +
+                        `- **Bot:** ${botDex}\n` +
+                        `- **Best Match:** ${bestMatch.country}\n` +
+                        `- **Difference:** ${bestMatch.diff}\n` +
+                        `- **Message:** [Link](${m.url})`,
+                ),
+            );
+            container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+            container.addMediaGalleryComponents(
+                new MediaGalleryBuilder().addItems(
+                    new MediaGalleryItemBuilder().setURL("attachment://spawn.png").setDescription("Detected Spawn Art"),
+                    new MediaGalleryItemBuilder().setURL("attachment://match.png").setDescription("Best Matching Entry"),
+                ),
+            );
 
-                container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`# ⚠️ Unknown Spawn Art Report`));
-                container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-                container.addTextDisplayComponents(
-                    new TextDisplayBuilder().setContent(
-                        `**Report Details:**\n` +
-                            `- **Server:** ${m.guild.name}\n` +
-                            `- **Bot:** ${botDex}\n` +
-                            `- **Best Match:** ${bestMatch.country}\n` +
-                            `- **Difference:** ${bestMatch.diff}\n` +
-                            `- **Message:** [Link](${m.url})`,
-                    ),
-                );
-                container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-
-                // Build media gallery with both images
-                container.addMediaGalleryComponents(
-                    new MediaGalleryBuilder()
-                        .addItems(
-                            new MediaGalleryItemBuilder()
-                                .setURL("attachment://spawn.png")
-                                .setDescription("Detected Spawn Art"),
-                            new MediaGalleryItemBuilder()
-                                .setURL("attachment://match.png")
-                                .setDescription("Best Matching Entry"),
-                        ),
-                );
-
-                // Send report to thread
-                await sendThreadReport(client, botDex, container, {
-                    files: [
-                        { attachment: imageBuffer, name: "spawn.png" },
-                        { attachment: matchImageBuffer, name: "match.png" },
-                    ],
-                });
-            } catch (e) {
-                console.error("[NOTIFIER] Error sending auto-notifier report:", e);
-            }
+            await sendThreadReport(client, botDex, container, {
+                files: [
+                    { attachment: imageBuffer, name: "spawn.png" },
+                    { attachment: matchImageBuffer, name: "match.png" },
+                ],
+            });
+        } catch (e) {
+            console.error("[NOTIFIER] Error sending auto-notifier report:", e);
         }
     } catch (error) {
         console.error("[NOTIFIER] Error processing image:", error);
-        client.logImage(`[${m.guild.name}] ❌ Image processing error: ${error.message}`);
+        client.logImage(`[${guildName}] ❌ Image processing error: ${error.message}`);
     }
 }

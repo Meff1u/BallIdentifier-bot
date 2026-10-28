@@ -1,7 +1,6 @@
 const { SlashCommandBuilder, MessageFlags } = require("discord.js");
 
-const ADMIN_USER_ID = "334411435633541121";
-const ADMIN_GUILD_ID = "379676234566729742";
+const { ADMIN_ID: ADMIN_USER_ID, PRIVATE_GUILD_ID: ADMIN_GUILD_ID } = require("../utils/constants");
 
 const { processImageHash, findBestMatch } = require("../utils/helpers");
 

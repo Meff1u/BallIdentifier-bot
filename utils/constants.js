@@ -68,6 +68,17 @@ const UPVOTES_FILE = "upvotes.json";
 
 const SPAWN_BUTTON_LABELS = ['Annex!', 'Catch'];
 
+// Admin / private guild (admin-only commands and .eval)
+const ADMIN_ID = "334411435633541121";
+const PRIVATE_GUILD_ID = "379676234566729742";
+
+// Max hash difference for a confident match (some entries need a looser threshold)
+const DEFAULT_MATCH_THRESHOLD = 20;
+const MATCH_THRESHOLD_OVERRIDES = {
+    "Mali Empire": 25,
+    "Burkina Faso": 25,
+};
+
 module.exports = {
     SUPPORTED_BOT_IDS,
     BOT_NAMES,
@@ -80,5 +91,9 @@ module.exports = {
     LOG_IDS,
     DATA_FILE,
     UPVOTES_FILE,
-    SPAWN_BUTTON_LABELS
+    SPAWN_BUTTON_LABELS,
+    ADMIN_ID,
+    PRIVATE_GUILD_ID,
+    DEFAULT_MATCH_THRESHOLD,
+    MATCH_THRESHOLD_OVERRIDES,
 };

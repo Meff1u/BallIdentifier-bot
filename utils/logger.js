@@ -83,8 +83,15 @@ function addLog(category, message, client) {
  * @param {object} client - Discord client
  */
 async function sendBatch(category, client) {
+    // Take the current batch and reset immediately, so logs added while sending go to the next batch
     const batch = logBatches.get(category);
-    
+    logBatches.set(category, []);
+    const pendingTimer = batchTimers.get(category);
+    if (pendingTimer) {
+        clearTimeout(pendingTimer);
+        batchTimers.delete(category);
+    }
+
     if (batch.length === 0) return;
 
     const threadId = categoryToThreadId[category];
@@ -94,7 +101,6 @@ async function sendBatch(category, client) {
         
         if (!channel) {
             console.error(`[LOGGER] Thread not found: ${threadId}`);
-            logBatches.set(category, []);
             return;
         }
 
@@ -129,13 +135,6 @@ async function sendBatch(category, client) {
         console.error(`[LOGGER] Error sending batch for ${category}:`, error);
     }
 
-    // Clear batch and timer
-    logBatches.set(category, []);
-    const timer = batchTimers.get(category);
-    if (timer) {
-        clearTimeout(timer);
-        batchTimers.delete(category);
-    }
 }
 
 /**

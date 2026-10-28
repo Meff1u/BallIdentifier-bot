@@ -11,92 +11,37 @@ const {
     MediaGalleryBuilder,
     MediaGalleryItemBuilder,
 } = require("discord.js");
-const fs = require("fs");
 
 // Import shared utilities
-const { SUPPORTED_BOT_IDS, BOT_DATA_KEYS, BOT_NAMES, ASSETS_BASE_URL, COOLDOWN_DURATION, COLORS, SPAWN_BUTTON_LABELS } = require("../utils/constants");
+const { SUPPORTED_BOT_IDS, BOT_DATA_KEYS, BOT_NAMES, COOLDOWN_DURATION, COLORS } = require("../utils/constants");
 const {
-    readJsonFile,
-    writeJsonFile,
-    compareHashes,
+    getData,
+    updateData,
     isUpvoter,
     checkCooldown,
     setCooldown,
-    getAssetsPath,
     processImageHash,
+    downloadBuffer,
     findBestMatch,
+    getMatchThreshold,
+    getSpawnMessageData,
+    buildBallImageUrl,
     sendThreadReport,
 } = require("../utils/helpers");
 
 // Lazy-load node-fetch
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
-// Local constants
-const DATA_PATH = getAssetsPath("data.json");
-
-const buildImageUrl = (dex, country) => `${ASSETS_BASE_URL}/dexes/${encodeURIComponent(dex)}/${encodeURIComponent(country)}.png`;
-
 // Bot config with dex names
 const BOT_CONFIG = Object.fromEntries(SUPPORTED_BOT_IDS.map((id) => [id, { dex: BOT_NAMES[id], dKey: BOT_DATA_KEYS[id] }]));
-
-function getSpawnMessageData(message) {
-    const legacyAttachment = message.attachments?.first?.();
-
-    const isLegacySpawn =
-        message.attachments?.size === 1 && SPAWN_BUTTON_LABELS.some((text) => message.components?.[0]?.components?.[0]?.label?.includes(text));
-
-    const v2ImageItem = message.components?.[1]?.items?.[0];
-    const v2ImageUrl = v2ImageItem?.media?.url;
-    const v2ButtonLabel = message.components?.at(-1)?.components?.[0]?.label;
-    const isV2Spawn = Boolean(v2ImageUrl && SPAWN_BUTTON_LABELS.some((text) => v2ButtonLabel?.includes(text)));
-
-    if (isLegacySpawn && legacyAttachment?.url) {
-        return {
-            isSpawn: true,
-            imageUrl: legacyAttachment.url,
-            imageName: legacyAttachment.name || `${message.id}.png`,
-            messageType: "legacy",
-        };
-    }
-
-    if (isV2Spawn) {
-        return {
-            isSpawn: true,
-            imageUrl: v2ImageUrl,
-            imageName: `${message.id}.png`,
-            messageType: "components-v2",
-        };
-    }
-
-    return {
-        isSpawn: false,
-        imageUrl: null,
-        imageName: null,
-        messageType: null,
-    };
-}
 
 module.exports = {
     data: new ContextMenuCommandBuilder().setName("Identify").setType(ApplicationCommandType.Message).setContexts(InteractionContextType.Guild),
 
     async execute(interaction) {
         const { client, user, targetMessage: message } = interaction;
-        const spawnData = getSpawnMessageData(message);
 
-        // Check upvoter status and cooldown
-        if (!isUpvoter(client.upvotes, user.id)) {
-            const remainingMinutes = checkCooldown(client.identifyCooldowns, user.id, COOLDOWN_DURATION);
-
-            if (remainingMinutes) {
-                return interaction.reply({
-                    content: `You can use this function again in ${remainingMinutes} min. ([Upvoters](https://discordbotlist.com/bots/ballidentifier/upvote) have no cooldown)`,
-                    flags: MessageFlags.Ephemeral,
-                });
-            }
-            setCooldown(client.identifyCooldowns, user.id);
-        }
-
-        // Validate message
+        // Validate message first, so a wrong target doesn't cost the user their cooldown
         if (!message) {
             return interaction.reply({
                 content: "Error while getting message, try again.",
@@ -112,65 +57,93 @@ module.exports = {
             });
         }
 
-        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-        // Check if message has a catch button
+        const spawnData = getSpawnMessageData(message);
         if (!spawnData.isSpawn || message.content.includes("Caught on")) {
-            return interaction.editReply({
+            return interaction.reply({
                 content: "This message doesn't appear to be a spawn message.",
                 flags: MessageFlags.Ephemeral,
             });
         }
 
-        try {
-            const config = BOT_CONFIG[message.author.id];
-            const hashes = client.hashes[config.dKey];
-            const data = readJsonFile(DATA_PATH, { users: {} });
+        const config = BOT_CONFIG[message.author.id];
+        const hashes = client.hashes?.[config.dKey];
+        if (!hashes) {
+            return interaction.reply({
+                content: `${config.dex} data is still loading, try again in a moment.`,
+                flags: MessageFlags.Ephemeral,
+            });
+        }
 
-            // Process image and get hash
-            const { hash } = await processImageHash(spawnData.imageUrl, message.id);
+        // Check upvoter status and cooldown (only for valid spawn messages)
+        if (!isUpvoter(client.upvotes, user.id)) {
+            const remainingMinutes = checkCooldown(client.identifyCooldowns, user.id, COOLDOWN_DURATION);
+
+            if (remainingMinutes) {
+                return interaction.reply({
+                    content: `You can use this function again in ${remainingMinutes} min. ([Upvoters](https://discordbotlist.com/bots/ballidentifier/upvote) have no cooldown)`,
+                    flags: MessageFlags.Ephemeral,
+                });
+            }
+            setCooldown(client.identifyCooldowns, user.id);
+        }
+
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+        try {
+            // Process image and get hash (the downloaded spawn image is reused for the report)
+            const { hash, buffer: spawnImageBuffer } = await processImageHash(spawnData.imageUrl);
 
             // Find best match
-            let bestMatch = findBestMatch(hash, hashes);
-
-            const minDiff = ["Mali Empire", "Burkina Faso"].includes(bestMatch.country) ? 25 : 20;
+            const bestMatch = findBestMatch(hash, hashes);
+            const minDiff = getMatchThreshold(bestMatch.country);
+            const isConfident = bestMatch.diff <= minDiff;
 
             // Determine log color based on confidence
             const logColor = bestMatch.diff <= 10 ? COLORS.SUCCESS : bestMatch.diff <= 15 ? COLORS.WARNING : bestMatch.diff <= 20 ? 0xe69138 : COLORS.ERROR;
 
-            const imageUrl = buildImageUrl(config.dex, bestMatch.country);
-            const rarity = client.rarities[config.dKey]?.[bestMatch.country]?.rarity || "Unknown";
-            const artist = client.rarities[config.dKey]?.[bestMatch.country]?.artist || "Unknown";
+            const imageUrl = buildBallImageUrl(config.dex, bestMatch.country);
+            const ballData = client.rarities?.[config.dKey]?.[bestMatch.country];
+            const rarity = ballData?.rarity;
+            const artist = ballData?.artist || "Unknown";
+            const rarityText = rarity !== undefined ? `t${rarity}` : "Not found";
+
+            // Update user stats for confident matches (atomic read-modify-write)
+            const identifyAmount = isConfident
+                ? updateData((data) => {
+                      data.users[user.id] ??= {};
+                      data.users[user.id].identifyAmount = (data.users[user.id].identifyAmount || 0) + 1;
+                      return data.users[user.id].identifyAmount;
+                  })
+                : getData().users[user.id]?.identifyAmount || 0;
 
             // Log the identification
-            await client.sendLog({
+            client.sendLog({
                 title: "Identify Log",
                 fields: [
                     { name: "User", value: `<@${user.id}> (${user.tag})`, inline: false },
                     {
                         name: "Details",
-                        value: `- **Dex:** ${config.dex}\n- **Country:** ${bestMatch.country}\n- **Diff:** ${bestMatch.diff}\n- **Rarity:** ${rarity ? `t${rarity}` : "Not found"}`,
+                        value: `- **Dex:** ${config.dex}\n- **Country:** ${bestMatch.country}\n- **Diff:** ${bestMatch.diff}\n- **Rarity:** ${rarityText}`,
                         inline: false,
                     },
                 ],
                 thumbnail: imageUrl,
-                image: bestMatch.diff >= minDiff ? spawnData.imageUrl : null,
+                image: isConfident ? null : spawnData.imageUrl,
                 color: logColor,
-            });
+            }).catch((e) => console.error("[IDENTIFY] Failed to send log:", e));
 
             // Create result embed
             const embed = new EmbedBuilder()
                 .setColor(logColor)
                 .setTitle(bestMatch.country)
                 .setDescription(
-                    `**Similarity:** \`${100 - bestMatch.diff}%\`\n**Rarity:** \`${rarity ? `t${rarity}` : "Not found"}\`\n**Artist:** \`${artist}\``,
-                )
-                .setFooter({
-                    text: `You have identified ${(data.users[user.id]?.identifyAmount || 0) + (bestMatch.diff >= 20 ? 0 : 1)} balls!`,
-                });
+                    `**Similarity:** \`${100 - bestMatch.diff}%\`\n**Rarity:** \`${rarityText}\`\n**Artist:** \`${artist}\``,
+                );
+
+            embed.setFooter({ text: `You have identified ${identifyAmount} balls!` });
 
             // Add auto-report notice for low confidence results
-            if (bestMatch.diff >= minDiff) {
+            if (!isConfident) {
                 embed.addFields({
                     name: "⚠️ Auto-Report Status",
                     value: "Low confidence match detected - automatically reported for verification",
@@ -181,12 +154,9 @@ module.exports = {
             await interaction.editReply({ embeds: [embed] });
 
             // Auto-report low confidence results
-            if (bestMatch.diff >= minDiff) {
+            if (!isConfident) {
                 try {
-                    // Fetch both images
-                    const [spawnImageRes, matchImageRes] = await Promise.all([fetch(spawnData.imageUrl), fetch(imageUrl)]);
-
-                    const [spawnImageBuffer, matchImageBuffer] = await Promise.all([spawnImageRes.buffer(), matchImageRes.buffer()]);
+                    const matchImageBuffer = await downloadBuffer(imageUrl);
 
                     // Build components v2 container
                     const container = new ContainerBuilder().setAccentColor(COLORS.ERROR);
@@ -207,15 +177,10 @@ module.exports = {
 
                     // Build media gallery with both images
                     container.addMediaGalleryComponents(
-                        new MediaGalleryBuilder()
-                            .addItems(
-                                new MediaGalleryItemBuilder()
-                                    .setURL("attachment://spawn.png")
-                                    .setDescription("Detected Spawn Art"),
-                                new MediaGalleryItemBuilder()
-                                    .setURL("attachment://match.png")
-                                    .setDescription("Best Matching Entry"),
-                            ),
+                        new MediaGalleryBuilder().addItems(
+                            new MediaGalleryItemBuilder().setURL("attachment://spawn.png").setDescription("Detected Spawn Art"),
+                            new MediaGalleryItemBuilder().setURL("attachment://match.png").setDescription("Best Matching Entry"),
+                        ),
                     );
 
                     // Send report to thread
@@ -228,14 +193,6 @@ module.exports = {
                 } catch (e) {
                     console.error("[IDENTIFY] Error sending auto-report:", e);
                 }
-            }
-
-            // Update user stats for good matches
-            if (bestMatch.diff <= minDiff) {
-                if (!data.users) data.users = {};
-                if (!data.users[user.id]) data.users[user.id] = { identifyAmount: 0 };
-                data.users[user.id].identifyAmount += 1;
-                writeJsonFile(DATA_PATH, data);
             }
         } catch (error) {
             // Log error to webhook

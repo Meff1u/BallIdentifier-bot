@@ -2,12 +2,17 @@ const fs = require("fs");
 const path = require("path");
 const sharp = require("sharp");
 const { imageHash } = require("image-hash");
+const {
+    SPAWN_BUTTON_LABELS,
+    ASSETS_BASE_URL,
+    DEFAULT_MATCH_THRESHOLD,
+    MATCH_THRESHOLD_OVERRIDES,
+} = require("./constants");
 
 // Lazy-load node-fetch
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
-// Temp images path
-const TEMP_PATH = path.join(__dirname, "../tempImages");
+const DATA_PATH = path.join(__dirname, "../assets/data.json");
 
 /**
  * Find the best matching country based on perceptual hash
@@ -28,32 +33,87 @@ function findBestMatch(hash, hashList) {
 }
 
 /**
- * Process image from URL and compute perceptual hash
- * @param {string} imageUrl - URL of the image to process
- * @param {string} uniqueId - Unique identifier for temp file naming
- * @returns {Promise<{hash: string, buffer: Buffer}>} Hash string and original image buffer
+ * Download a URL into a Buffer (throws on HTTP errors)
+ * @param {string} url
+ * @returns {Promise<Buffer>}
  */
-async function processImageHash(imageUrl, uniqueId) {
-    const response = await fetch(imageUrl);
-    const arrayBuffer = await response.arrayBuffer();
-    const imageBuffer = Buffer.from(arrayBuffer);
-    const tempFile = path.join(TEMP_PATH, `${uniqueId}.png`);
+async function downloadBuffer(url) {
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`Failed to download ${url}: HTTP ${response.status}`);
+    }
+    return Buffer.from(await response.arrayBuffer());
+}
 
-    await sharp(imageBuffer)
+/**
+ * Compute the perceptual hash of an image buffer (same pipeline as the website and asset tools:
+ * resize 100x100, flatten on black, PNG, imageHash 20 bits precise)
+ * @param {Buffer} imageBuffer
+ * @returns {Promise<string>}
+ */
+async function hashImageBuffer(imageBuffer) {
+    const png = await sharp(imageBuffer)
         .resize(100, 100)
         .flatten({ background: { r: 0, g: 0, b: 0 } })
         .png()
-        .toFile(tempFile);
+        .toBuffer();
 
-    const hash = await new Promise((resolve, reject) => {
-        imageHash(tempFile, 20, true, (error, data) => {
+    return new Promise((resolve, reject) => {
+        imageHash({ ext: "image/png", data: png }, 20, true, (error, data) => {
             error ? reject(error) : resolve(data);
         });
     });
+}
 
-    fs.unlinkSync(tempFile);
+/**
+ * Process image from URL and compute perceptual hash
+ * @param {string} imageUrl - URL of the image to process
+ * @returns {Promise<{hash: string, buffer: Buffer}>} Hash string and original image buffer
+ */
+async function processImageHash(imageUrl) {
+    const buffer = await downloadBuffer(imageUrl);
+    const hash = await hashImageBuffer(buffer);
+    return { hash, buffer };
+}
 
-    return { hash, buffer: imageBuffer };
+/**
+ * Max allowed hash difference for a confident match of the given entry
+ * @param {string} name - Best matching entry name
+ * @returns {number}
+ */
+function getMatchThreshold(name) {
+    return MATCH_THRESHOLD_OVERRIDES[name] ?? DEFAULT_MATCH_THRESHOLD;
+}
+
+/**
+ * Extract spawn image data from a dex bot message (legacy attachments and components v2)
+ * @param {import("discord.js").Message} message
+ * @returns {{isSpawn: boolean, imageUrl: string|null, imageName: string|null, messageType: string|null}}
+ */
+function getSpawnMessageData(message) {
+    const legacyAttachment = message.attachments?.first?.();
+    const isLegacySpawn =
+        message.attachments?.size === 1 &&
+        SPAWN_BUTTON_LABELS.some((text) => message.components?.[0]?.components?.[0]?.label?.includes(text));
+
+    const v2ImageUrl = message.components?.[1]?.items?.[0]?.media?.url;
+    const v2ButtonLabel = message.components?.at(-1)?.components?.[0]?.label;
+    const isV2Spawn = Boolean(v2ImageUrl && SPAWN_BUTTON_LABELS.some((text) => v2ButtonLabel?.includes(text)));
+
+    if (isLegacySpawn && legacyAttachment?.url) {
+        return {
+            isSpawn: true,
+            imageUrl: legacyAttachment.url,
+            imageName: legacyAttachment.name || `${message.id}.png`,
+            messageType: "legacy",
+        };
+    }
+
+    if (isV2Spawn) {
+        return { isSpawn: true, imageUrl: v2ImageUrl, imageName: `${message.id}.png`, messageType: "components-v2" };
+    }
+
+    return { isSpawn: false, imageUrl: null, imageName: null, messageType: null };
 }
 
 /**
@@ -77,7 +137,60 @@ function readJsonFile(filePath, defaultValue = {}) {
  * @param {number} indent - Indentation level
  */
 function writeJsonFile(filePath, data, indent = 2) {
-    fs.writeFileSync(filePath, JSON.stringify(data, null, indent));
+    // Write to a temp file and rename, so a crash mid-write can never leave a truncated file
+    const tempPath = `${filePath}.tmp`;
+    fs.writeFileSync(tempPath, JSON.stringify(data, null, indent));
+    fs.renameSync(tempPath, filePath);
+}
+
+// Read-only cache of data.json, refreshed when the file changes on disk
+let dataCache = { mtimeMs: -1, size: -1, data: null };
+
+/**
+ * Read data.json (cached).
+ * @returns {{users: object, guilds: object}}
+ */
+function getData() {
+    try {
+        const stat = fs.statSync(DATA_PATH);
+        if (stat.mtimeMs !== dataCache.mtimeMs || stat.size !== dataCache.size) {
+            const data = JSON.parse(fs.readFileSync(DATA_PATH, "utf8"));
+            data.users ??= {};
+            data.guilds ??= {};
+            dataCache = { mtimeMs: stat.mtimeMs, size: stat.size, data };
+        }
+        return dataCache.data;
+    } catch (error) {
+        if (error.code === "ENOENT") return { users: {}, guilds: {} };
+        console.error("[DATA] Failed to read data.json:", error.message);
+        return dataCache.data || { users: {}, guilds: {} };
+    }
+}
+
+/**
+ * Atomically update data.json: read fresh -> mutate -> write, with no await in between,
+ * so concurrent commands can't overwrite each other's changes.
+ * Refuses to write if the existing file can't be parsed (prevents wiping all data).
+ * @param {(data: {users: object, guilds: object}) => any} mutator
+ * @returns {any} Whatever the mutator returns
+ */
+function updateData(mutator) {
+    let data;
+    try {
+        data = JSON.parse(fs.readFileSync(DATA_PATH, "utf8"));
+    } catch (error) {
+        if (error.code !== "ENOENT") {
+            throw new Error(`data.json is unreadable, refusing to overwrite it: ${error.message}`);
+        }
+        data = {};
+    }
+    data.users ??= {};
+    data.guilds ??= {};
+
+    const result = mutator(data);
+    writeJsonFile(DATA_PATH, data);
+    dataCache = { mtimeMs: -1, size: -1, data: null };
+    return result;
 }
 
 /**
@@ -158,8 +271,7 @@ function isUpvoter(upvotes, userId) {
  * @returns {string} Full URL
  */
 function buildBallImageUrl(dex, ballName) {
-    const baseUrl = "https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets";
-    return `${baseUrl}/dexes/${encodeURIComponent(dex)}/${encodeURIComponent(ballName)}.png`;
+    return `${ASSETS_BASE_URL}/dexes/${encodeURIComponent(dex)}/${encodeURIComponent(ballName)}.png`;
 }
 
 /**
@@ -243,6 +355,12 @@ async function sendThreadReport(client, dexName, containerBuilder, options = {})
 }
 
 module.exports = {
+    getData,
+    updateData,
+    downloadBuffer,
+    hashImageBuffer,
+    getMatchThreshold,
+    getSpawnMessageData,
     readJsonFile,
     writeJsonFile,
     compareHashes,

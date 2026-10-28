@@ -4,10 +4,9 @@ const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fet
 
 // Import shared utilities
 const { ASSETS_BASE_URL, BOT_NAMES, BOT_DATA_KEYS } = require("../utils/constants");
-const { readJsonFile, writeJsonFile, getAssetsPath } = require("../utils/helpers");
+const { getData, writeJsonFile, readJsonFile, getAssetsPath } = require("../utils/helpers");
 
 // Local constants
-const DATA_PATH = getAssetsPath("data.json");
 const UPVOTES_PATH = getAssetsPath("upvotes.json");
 const REFRESH_INTERVAL = 60 * 60 * 1000; // 1 hour
 const DBL_POLL_INTERVAL = 180000; // 3 minutes
@@ -30,10 +29,15 @@ module.exports = {
         client.dbl = createDjsClient(process.env.DBL_TOKEN, client);
 
         // Define fetch methods
+        client.hashes = {};
+        client.rarities = {};
+
+        // Builds fresh objects and swaps them in at the end, so lookups never see an empty dataset
+        // mid-refresh; a dex that fails to download keeps its previous data.
         client.fetchHashes = async () => {
-            client.hashes = {};
-            client.rarities = {};
-            
+            const hashes = { ...client.hashes };
+            const rarities = { ...client.rarities };
+
             const fetchPromises = Object.entries(HASH_URLS).map(async ([key, url]) => {
                 try {
                     const [raritiesRes, hashesRes] = await Promise.all([
@@ -45,8 +49,9 @@ module.exports = {
                         throw new Error(`HTTP error`);
                     }
                     
-                    client.rarities[key] = await raritiesRes.json();
-                    client.hashes[key] = await hashesRes.json();
+                    const [rarityData, hashData] = await Promise.all([raritiesRes.json(), hashesRes.json()]);
+                    rarities[key] = rarityData;
+                    hashes[key] = hashData;
                     console.log(`[DATAS] ✅ Fetched ${key} hashes and rarities`);
                 } catch (error) {
                     console.error(`[DATAS] ❌ Failed to fetch ${key}:`, error.message);
@@ -54,6 +59,8 @@ module.exports = {
             });
             
             await Promise.all(fetchPromises);
+            client.hashes = hashes;
+            client.rarities = rarities;
         };
 
         client.fetchUpvotes = async () => {
@@ -90,7 +97,7 @@ module.exports = {
         };
 
         client.upvoteReminder = async (users) => {
-            const data = readJsonFile(DATA_PATH, { users: {} });
+            const data = getData();
             
             for (const { user_id: userId } of users) {
                 if (data.users[userId]?.notifications?.reminder !== true) continue;
@@ -113,7 +120,7 @@ module.exports = {
                     client.application.fetch(),
                 ]);
                 
-                const data = readJsonFile(DATA_PATH, { users: {} });
+                const data = getData();
                 const userCount = Math.max(
                     app.approximateUserInstallCount || 0,
                     Object.keys(data.users || {}).length
@@ -126,14 +133,17 @@ module.exports = {
             }
         };
 
-        // Initial fetch
-        await client.fetchHashes();
-        
         // Start refresh loop
         const refreshLoop = async () => {
-            await client.fetchUpvotes();
-            await client.postDBLStats();
-            setTimeout(refreshLoop, REFRESH_INTERVAL);
+            try {
+                await client.fetchHashes();
+                await client.fetchUpvotes();
+                await client.postDBLStats();
+            } catch (error) {
+                console.error("[DATAS] ❌ Refresh loop error:", error.message);
+            } finally {
+                setTimeout(refreshLoop, REFRESH_INTERVAL);
+            }
         };
         refreshLoop();
 
@@ -144,7 +154,7 @@ module.exports = {
             await client.fetchUpvotes();
             
             try {
-                const data = readJsonFile(DATA_PATH, { users: {} });
+                const data = getData();
                 
                 // Send thanks message if enabled
                 if (data.users[vote.id]?.notifications?.thanks !== false) {

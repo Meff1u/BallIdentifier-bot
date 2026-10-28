@@ -9,7 +9,7 @@ const { closeDatabase, initializeDatabase } = require("./utils/database");
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
 const TOKEN = process.env.TOKEN;
-const PRIVATE_GUILD_ID = "379676234566729742";
+const { PRIVATE_GUILD_ID } = require("./utils/constants");
 const PRIVATE_COMMANDS = ["refresh", "msg", "bdcompare"];
 
 const client = new Client({

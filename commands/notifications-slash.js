@@ -10,9 +10,8 @@ const {
 
 // Import shared utilities
 const { COLORS } = require("../utils/constants");
-const { readJsonFile, writeJsonFile, getAssetsPath } = require("../utils/helpers");
+const { updateData } = require("../utils/helpers");
 
-const DATA_PATH = getAssetsPath("data.json");
 
 const getStatusEmoji = (value) => (value ? "✅" : "❌");
 
@@ -33,14 +32,15 @@ module.exports = {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
         const { user } = interaction;
-        let data = readJsonFile(DATA_PATH, { users: {} });
 
-        // Initialize user data if needed
-        if (!data.users[user.id]) {
-            data.users[user.id] = { notifications: {} };
-        } else if (!data.users[user.id].notifications) {
-            data.users[user.id].notifications = {};
-        }
+        // Save one preference atomically and return the user's current preferences
+        const setPreference = (key, value) =>
+            updateData((data) => {
+                data.users[user.id] ??= {};
+                data.users[user.id].notifications ??= {};
+                data.users[user.id].notifications[key] = value;
+                return { ...data.users[user.id].notifications };
+            });
 
         // Initial prompt
         const embed = new EmbedBuilder()
@@ -67,10 +67,8 @@ module.exports = {
 
             // Handle thanks preference
             if (customId === "thanks_yes" || customId === "thanks_no") {
-                data.users[user.id].notifications.thanks = customId === "thanks_yes";
-                writeJsonFile(DATA_PATH, data);
-
-                const thanksStatus = getStatusEmoji(data.users[user.id].notifications.thanks);
+                const notifications = setPreference("thanks", customId === "thanks_yes");
+                const thanksStatus = getStatusEmoji(notifications.thanks);
                 
                 const embedUpdate = new EmbedBuilder()
                     .setColor(COLORS.INFO)
@@ -86,11 +84,9 @@ module.exports = {
             }
             // Handle reminder preference
             else if (customId === "reminder_yes" || customId === "reminder_no") {
-                data.users[user.id].notifications.reminder = customId === "reminder_yes";
-                writeJsonFile(DATA_PATH, data);
-
-                const thanksStatus = getStatusEmoji(data.users[user.id].notifications.thanks);
-                const reminderStatus = getStatusEmoji(data.users[user.id].notifications.reminder);
+                const notifications = setPreference("reminder", customId === "reminder_yes");
+                const thanksStatus = getStatusEmoji(notifications.thanks !== false);
+                const reminderStatus = getStatusEmoji(notifications.reminder);
 
                 const finalEmbed = new EmbedBuilder()
                     .setColor(COLORS.INFO)

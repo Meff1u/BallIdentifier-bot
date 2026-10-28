@@ -11,9 +11,8 @@ const { version, dependencies } = require("../package.json");
 
 // Import shared utilities
 const { COLORS, SUPPORTED_BOT_IDS, BOT_NAMES } = require("../utils/constants");
-const { readJsonFile, formatDuration, isUpvoter, getAssetsPath } = require("../utils/helpers");
+const { getData, formatDuration, isUpvoter } = require("../utils/helpers");
 
-const DATA_PATH = getAssetsPath("data.json");
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -22,7 +21,7 @@ module.exports = {
         .setContexts(InteractionContextType.BotDM, InteractionContextType.Guild, InteractionContextType.PrivateChannel),
 
     async execute(interaction) {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const { client, user } = interaction;
 
         // Fetch data in parallel
@@ -32,7 +31,7 @@ module.exports = {
         const guildCount = client.guilds.cache.size;
 
         // Read user data
-        const data = readJsonFile(DATA_PATH, { users: {} });
+        const data = getData();
         const users = data.users || {};
         const guildData = data.guilds || {};
         const usersIdentified = Object.values(users).reduce(
@@ -107,7 +106,6 @@ module.exports = {
         await interaction.editReply({
             embeds: [embed],
             components: [row],
-            flags: MessageFlags.Ephemeral,
         });
     },
 };

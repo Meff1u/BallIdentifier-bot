@@ -1,15 +1,12 @@
 const express = require("express");
 const cors = require("cors");
 const crypto = require("crypto");
-const fs = require("fs");
-const path = require("path");
 
 // Import helpers
-const { readJsonFile, getAssetsPath } = require("./utils/helpers");
+const { getData, updateData } = require("./utils/helpers");
 const { SUPPORTED_BOT_IDS } = require("./utils/constants");
 
 const PORT = process.env.PORT || 3001;
-const DATA_PATH = getAssetsPath("data.json");
 
 const app = express();
 
@@ -40,61 +37,51 @@ const initializeServer = (c) => {
     client = c;
 };
 
-// Rate limiter store
-const requestLimiter = new Map();
+// Rate limit middleware (each limiter has its own store, so public and API limits don't share a budget)
+const rateLimiterStores = [];
 
-// Rate limit middleware
 const createRateLimiter = (maxRequests, windowMs) => {
+    const store = new Map();
+    rateLimiterStores.push({ store, windowMs });
+
     return (req, res, next) => {
-        const ip = req.ip || req.connection.remoteAddress;
+        const ip = req.ip || req.socket.remoteAddress;
         const now = Date.now();
-        const windowStart = now - windowMs;
+        const recentTimestamps = (store.get(ip) || []).filter((timestamp) => timestamp > now - windowMs);
 
-        // Initialize or get limiter data for this IP
-        if (!requestLimiter.has(ip)) {
-            requestLimiter.set(ip, []);
-        }
-
-        const timestamps = requestLimiter.get(ip);
-        
-        // Remove old timestamps outside the window
-        const recentTimestamps = timestamps.filter(timestamp => timestamp > windowStart);
-        
         if (recentTimestamps.length >= maxRequests) {
-            return res.status(429).json({ 
-                error: "Too many requests. Please try again later."
+            store.set(ip, recentTimestamps);
+            return res.status(429).json({
+                error: "Too many requests. Please try again later.",
             });
         }
 
-        // Add current request timestamp
         recentTimestamps.push(now);
-        requestLimiter.set(ip, recentTimestamps);
+        store.set(ip, recentTimestamps);
 
         // Set rate limit headers
         res.setHeader("X-RateLimit-Limit", maxRequests);
         res.setHeader("X-RateLimit-Remaining", Math.max(0, maxRequests - recentTimestamps.length));
-        res.setHeader("X-RateLimit-Reset", new Date(Math.min(...recentTimestamps) + windowMs).toISOString());
+        res.setHeader("X-RateLimit-Reset", new Date(recentTimestamps[0] + windowMs).toISOString());
 
         next();
     };
 };
 
-// Rate limiters
-const generalLimiter = createRateLimiter(10, 60 * 1000); // 10 requests per minute
-const apiLimiter = createRateLimiter(5, 60 * 1000); // 5 requests per minute for API endpoints
+// Rate limiters - requests come through Netlify functions, which share a few IPs across all users
+const generalLimiter = createRateLimiter(60, 60 * 1000); // public endpoints
+const apiLimiter = createRateLimiter(30, 60 * 1000); // signed dashboard endpoints
 
 // Cleanup old entries every 30 minutes
 setInterval(() => {
     const now = Date.now();
-    for (const [ip, timestamps] of requestLimiter.entries()) {
-        const recentTimestamps = timestamps.filter(timestamp => timestamp > now - 30 * 60 * 1000);
-        if (recentTimestamps.length === 0) {
-            requestLimiter.delete(ip);
-        } else {
-            requestLimiter.set(ip, recentTimestamps);
+    for (const { store, windowMs } of rateLimiterStores) {
+        for (const [ip, timestamps] of store.entries()) {
+            const recent = timestamps.filter((timestamp) => timestamp > now - windowMs);
+            recent.length ? store.set(ip, recent) : store.delete(ip);
         }
     }
-}, 30 * 60 * 1000);
+}, 30 * 60 * 1000).unref();
 
 // Max allowed difference between request timestamp and server time
 const SIGNATURE_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutes
@@ -214,41 +201,38 @@ app.get("/api/health", generalLimiter, (req, res) => {
     });
 });
 
-// Bot stats endpoint
-app.get("/api/stats", generalLimiter, (req, res) => {
-    if (!client) {
-        client?.logAPI?.(`GET /api/stats | Status: Error`);
+// Bot stats endpoint (cached - application.fetch() is a Discord API call)
+const STATS_CACHE_MS = 60 * 1000;
+let statsCache = { at: 0, value: null };
+
+app.get("/api/stats", generalLimiter, async (req, res) => {
+    if (!client?.isReady()) {
         return res.status(503).json({ error: "Discord bot not connected" });
     }
 
-    // Fetch app data and read user data in parallel
-    Promise.all([
-        client.application.fetch(),
-        Promise.resolve(readJsonFile(DATA_PATH, { users: {}, guilds: {} })),
-    ]).then(([appData, data]) => {
-        const users = data.users || {};
-        const guilds = data.guilds || {};
-        const usersIdentified = Object.values(users).reduce(
-            (acc, u) => acc + (u.identifyAmount || 0), 0
-        );
-        const guildsIdentified = Object.values(guilds).reduce(
-            (acc, g) => acc + (g.identifyAmount || 0), 0
-        );
-        const identifiedBalls = usersIdentified + guildsIdentified;
-        const userCount = Math.max(appData.approximateUserInstallCount, Object.keys(users).length);
+    if (statsCache.value && Date.now() - statsCache.at < STATS_CACHE_MS) {
+        return res.status(200).json(statsCache.value);
+    }
 
-        client?.logAPI?.(`GET /api/stats | Guilds: ${client.guilds.cache.size} | Users: ${userCount}`);
+    try {
+        const appData = await client.application.fetch();
+        const { users, guilds } = getData();
+        const sumIdentified = (entries) => Object.values(entries).reduce((acc, entry) => acc + (entry.identifyAmount || 0), 0);
 
-        res.status(200).json({
+        const value = {
             guilds: client.guilds.cache.size,
-            users: userCount,
-            identifiedBalls: identifiedBalls,
-        });
-    }).catch((err) => {
+            users: Math.max(appData.approximateUserInstallCount || 0, Object.keys(users).length),
+            identifiedBalls: sumIdentified(users) + sumIdentified(guilds),
+        };
+        statsCache = { at: Date.now(), value };
+
+        client.logAPI?.(`GET /api/stats | Guilds: ${value.guilds} | Users: ${value.users}`);
+        res.status(200).json(value);
+    } catch (err) {
         console.error("[API] Stats endpoint error:", err);
-        client?.logAPI?.(`GET /api/stats | Status: Error - ${err.message}`);
+        client.logAPI?.(`GET /api/stats | Status: Error - ${err.message}`);
         res.status(500).json({ error: "Failed to fetch stats" });
-    });
+    }
 });
 
 // Get list of guilds where bot is present
@@ -330,8 +314,7 @@ app.get("/api/guilds/:guildId/config", apiLimiter, verifySignature, async (req, 
         }
 
         // 3. Get current configuration from data.json
-        const data = readJsonFile(DATA_PATH, { guilds: {} });
-        const guildConfig = data.guilds && data.guilds[guildId] ? data.guilds[guildId] : null;
+        const guildConfig = getData().guilds[guildId] || null;
 
         client.logAPI(`GET /api/guilds/${guildId}/config | Guild: ${guild.name} | Bots: ${supportedBots.length} | Roles: ${availableRoles.length}`);
 
@@ -366,23 +349,11 @@ app.post("/api/guilds/:guildId/config", apiLimiter, verifySignature, validateGui
     }
 
     try {
-        // Read current data
-        const data = readJsonFile(DATA_PATH, { guilds: {} });
-        
-        // Ensure guilds object exists
-        if (!data.guilds) {
-            data.guilds = {};
-        }
-
         // Handle delete operation
         if (isDelete) {
-            // Delete notifier configuration for this guild
-            if (data.guilds[guildId]) {
-                delete data.guilds[guildId].notifier;
-            }
-
-            // Write updated data back to file
-            fs.writeFileSync(DATA_PATH, JSON.stringify(data, null, 2), "utf8");
+            updateData((data) => {
+                if (data.guilds[guildId]) delete data.guilds[guildId].notifier;
+            });
 
             client.logAPI(`POST /api/guilds/${guildId}/config | Configuration deleted for guild: ${guild.name} (${guildId}) by ${setupBy}`);
 
@@ -422,22 +393,12 @@ app.post("/api/guilds/:guildId/config", apiLimiter, verifySignature, validateGui
             return res.status(400).json({ error: "Invalid role selected" });
         }
 
-        // Ensure guild entry exists
-        if (!data.guilds[guildId]) {
-            data.guilds[guildId] = {};
-        }
-
-        // Update notifier configuration
-        data.guilds[guildId].notifier = {
-            selectedBots: selectedBots,
-            selectedRole: selectedRole,
-            customMessage: customMessage,
-            setupBy: setupBy,
-            setupAt: setupAt,
-        };
-
-        // Write updated data back to file
-        fs.writeFileSync(DATA_PATH, JSON.stringify(data, null, 2), "utf8");
+        // Update notifier configuration (atomic read-modify-write)
+        const notifier = { selectedBots, selectedRole, customMessage, setupBy, setupAt };
+        updateData((data) => {
+            data.guilds[guildId] ??= {};
+            data.guilds[guildId].notifier = notifier;
+        });
 
         client.logAPI(`POST /api/guilds/${guildId}/config | Configuration updated for guild: ${guild.name} (${guildId}) by ${setupBy} | Bots: ${selectedBots.length}`);
 
@@ -445,7 +406,7 @@ app.post("/api/guilds/:guildId/config", apiLimiter, verifySignature, validateGui
             success: true,
             message: "Configuration updated successfully",
             guildId: guildId,
-            configuration: data.guilds[guildId].notifier,
+            configuration: notifier,
         });
     } catch (error) {
         console.error("[API] Update config endpoint error:", error);
