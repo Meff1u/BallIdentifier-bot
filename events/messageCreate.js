@@ -14,6 +14,38 @@ const { readJsonFile, writeJsonFile, getAssetsPath, processImageHash, findBestMa
 // Local constants
 const DATA_PATH = getAssetsPath("data.json");
 const ADMIN_ID = "334411435633541121";
+const PRIVATE_GUILD_ID = "379676234566729742";
+
+// Environment variables whose values must never appear in .eval output
+const SECRET_ENV_KEYS = [
+    "TOKEN",
+    "API_KEY",
+    "BOT_API_SECRET",
+    "DBL_TOKEN",
+    "MONGODB_URI",
+    "BALLSDEX_API_ENCRYPTION_KEY",
+    "ERROR_WEBHOOK_URL",
+    "LOG_WEBHOOK_URL",
+    "UPVOTE_WEBHOOK_URL",
+    "CATCH_WEBHOOK_URL",
+];
+
+/**
+ * Replace every secret value from the environment with [REDACTED:NAME].
+ */
+function redactSecrets(text, clientToken) {
+    let output = String(text);
+    const secrets = SECRET_ENV_KEYS.map((key) => [key, process.env[key]]);
+    // Bot token can also be read at runtime via client.token
+    secrets.push(["CLIENT_TOKEN", clientToken]);
+
+    for (const [key, value] of secrets) {
+        if (value && value.length >= 8) {
+            output = output.split(value).join(`[REDACTED:${key}]`);
+        }
+    }
+    return output;
+}
 
 /**
  * Extract catch message metadata for both legacy and components-v2 message formats.
@@ -102,9 +134,7 @@ async function handleEval(m, client) {
         let output = result === undefined ? "undefined" : typeof result === "object" ? JSON.stringify(result, null, 2) : String(result);
 
         // Redact sensitive info
-        if (process.env.BOT_TOKEN) {
-            output = output.replace(new RegExp(process.env.BOT_TOKEN, "g"), "[REDACTED]");
-        }
+        output = redactSecrets(output, client.token);
 
         // Split output into chunks that fit in Discord's 2000 character limit
         const maxChunkLength = 1900; // Account for code block markers
@@ -122,9 +152,7 @@ async function handleEval(m, client) {
         }
     } catch (error) {
         let errorMessage = error.message || String(error);
-        if (process.env.BOT_TOKEN) {
-            errorMessage = errorMessage.replace(new RegExp(process.env.BOT_TOKEN, "g"), "[REDACTED]");
-        }
+        errorMessage = redactSecrets(errorMessage, client.token);
 
         // Handle long error messages the same way
         const maxChunkLength = 1900;
@@ -175,6 +203,8 @@ async function notify(m, client, settings, info) {
                 .replace("{role}", `<@&${selectedRole}>`)
                 .replace("{rarity}", rarity)
                 .replace("{artist}", artist),
+            // Only the configured role may be pinged
+            allowedMentions: { parse: [], roles: [selectedRole], repliedUser: false },
         });
 
         // Log the identification result

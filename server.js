@@ -139,20 +139,36 @@ const validateGuildConfigInput = (req, res, next) => {
         return next();
     }
 
-    // Validate customMessage length (200 limit)
-    if (customMessage && typeof customMessage === "string") {
+    // Validate customMessage (same rules as the dashboard, enforced server-side)
+    if (customMessage !== undefined && typeof customMessage !== "string") {
+        return res.status(400).json({ error: "customMessage must be a string" });
+    }
+
+    if (customMessage) {
         if (customMessage.length > 200) {
             return res.status(400).json({
                 error: "customMessage exceeds maximum length of 200 characters",
             });
         }
+
+        if (!customMessage.includes("{role}")) {
+            return res.status(400).json({ error: "customMessage must contain the {role} placeholder" });
+        }
+
+        if (/(https?:\/\/|www\.|\[.*?\]\(.*?\))/i.test(customMessage)) {
+            return res.status(400).json({ error: "Links are not allowed in customMessage" });
+        }
+
+        if (/@(everyone|here)/i.test(customMessage) || /<@[!&]?\d+>/.test(customMessage)) {
+            return res.status(400).json({ error: "Mentions are not allowed in customMessage (use {role})" });
+        }
     }
 
     // Validate selectedRole is a valid Discord snowflake ID (18-20 digits)
     if (selectedRole && typeof selectedRole === "string") {
-        if (!/^\d{18,20}$/.test(selectedRole)) {
+        if (!/^\d{17,20}$/.test(selectedRole)) {
             return res.status(400).json({
-                error: "selectedRole must be a valid Discord role ID (18-20 digits)",
+                error: "selectedRole must be a valid Discord role ID (17-20 digits)",
             });
         }
     }
@@ -177,6 +193,14 @@ const validateGuildConfigInput = (req, res, next) => {
 
     next();
 };
+
+// Reject malformed guild IDs before any route handler runs
+app.param("guildId", (req, res, next, guildId) => {
+    if (!/^\d{17,20}$/.test(guildId)) {
+        return res.status(400).json({ error: "Invalid guild ID" });
+    }
+    next();
+});
 
 // API Routes
 
@@ -388,6 +412,14 @@ app.post("/api/guilds/:guildId/config", apiLimiter, verifySignature, validateGui
             return res.status(400).json({ 
                 error: `Unsupported bot IDs: ${unsupportedBots.join(", ")}` 
             });
+        }
+
+        // Validate role: must exist, not @everyone, not a managed (bot/integration) role,
+        // and be below the bot's highest role (same list the dashboard shows)
+        const role = guild.roles.cache.get(selectedRole);
+        const botHighestPosition = guild.members.me?.roles.highest.position ?? 0;
+        if (!role || role.id === guild.id || role.managed || role.position >= botHighestPosition) {
+            return res.status(400).json({ error: "Invalid role selected" });
         }
 
         // Ensure guild entry exists
