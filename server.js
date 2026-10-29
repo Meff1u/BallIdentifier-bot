@@ -23,6 +23,7 @@ const {
 } = require("./utils/ballsdex");
 const notifications = require("./utils/notifications");
 const collectorStore = require("./utils/collector-store");
+const specials = require("./utils/specials");
 
 const PORT = process.env.PORT || 3001;
 
@@ -684,11 +685,35 @@ app.post("/api/users/:userId/admin/sync/cancel", apiLimiter, verifySignature, re
 app.post("/api/users/:userId/admin/refresh-data", apiLimiter, verifySignature, requireOwner, async (req, res) => {
     try {
         await client.fetchHashes();
+        specials.refreshOfficial(true).catch(() => {});
         client?.logGeneral?.("Dex data refreshed from the website (owner)");
         res.status(200).json({ success: true, lastDataRefresh: client.lastDataRefresh || null });
     } catch (error) {
         client?.logError?.("Manual dex data refresh failed", error);
         res.status(502).json({ error: "Couldn't refresh the dex data. Check the Errors log." });
+    }
+});
+
+// Ballsdex specials (public list; the owner can edit aliases, prices and event details)
+app.get("/api/specials", generalLimiter, verifySignature, async (req, res) => {
+    try {
+        res.status(200).json(await specials.getSpecials());
+    } catch (error) {
+        client?.logError?.("Specials list failed", error);
+        res.status(500).json({ error: "Couldn't load the specials." });
+    }
+});
+
+app.post("/api/users/:userId/specials/:specialId", apiLimiter, verifySignature, requireOwner, async (req, res) => {
+    try {
+        const id = Number(req.params.specialId);
+        const fields = await specials.updateSpecial(req.params.userId, id, req.body || {});
+        client?.logGeneral?.(`Special #${id} edited from the website: ${Object.keys(fields).join(", ") || "nothing"}`);
+        res.status(200).json({ success: true, fields });
+    } catch (error) {
+        if (error.status) return res.status(error.status).json({ error: error.message });
+        client?.logError?.("Special edit failed", error);
+        res.status(500).json({ error: "Couldn't save the special." });
     }
 });
 
