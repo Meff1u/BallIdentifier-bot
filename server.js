@@ -8,10 +8,10 @@ const { SUPPORTED_BOT_IDS, ADMIN_ID } = require("./utils/constants");
 const { getDatabase } = require("./utils/database");
 const { getRecentLogs } = require("./utils/logger");
 const {
-    decryptFromSite,
-    linkApiKey,
+    connectOAuth,
+    isLinked,
+    needsReconnect,
     unlinkAccount,
-    getSavedApiKey,
     getStoredCollection,
     getSyncState,
     getRateLimits,
@@ -474,7 +474,9 @@ app.param("userId", (req, res, next, userId) => {
 app.get("/api/users/:userId/ballsdex", apiLimiter, verifySignature, async (req, res) => {
     const { userId } = req.params;
     const linkedAt = getData().users[userId]?.ballsdex?.linkedAt || null;
-    const linked = Boolean(getSavedApiKey(userId));
+    // Linked = an account is connected; reconnect = it needs a new "Sign in with Ballsdex" (old v1 key, revoked sign-in)
+    const linked = isLinked(userId);
+    const reconnect = needsReconnect(userId);
 
     let collection = null;
     let databaseAvailable = true;
@@ -496,42 +498,27 @@ app.get("/api/users/:userId/ballsdex", apiLimiter, verifySignature, async (req, 
         }
     }
 
-    res.status(200).json({ linked, linkedAt, sync: getSyncState(userId), collection, databaseAvailable });
+    res.status(200).json({ linked, reconnect, linkedAt, sync: getSyncState(userId), collection, databaseAvailable });
 });
 
-// Link a Ballsdex API key (encrypted end-to-end by the website)
-app.post("/api/users/:userId/ballsdex/link", apiLimiter, verifySignature, async (req, res) => {
+// Finish "Sign in with Ballsdex": the website's callback hands over the code and its PKCE verifier;
+// the bot (which holds the client secret) exchanges them and checks the account is this Discord user
+app.post("/api/users/:userId/ballsdex/oauth", apiLimiter, verifySignature, async (req, res) => {
     const { userId } = req.params;
-
-    let apiKey;
-    try {
-        apiKey = decryptFromSite(req.body?.encryptedKey).trim();
-    } catch {
+    const { code, codeVerifier, redirectUri } = req.body || {};
+    if (typeof code !== "string" || !code || code.length > 500 || typeof codeVerifier !== "string" || !/^[\w.~-]{43,128}$/.test(codeVerifier) || typeof redirectUri !== "string" || !/^https?:\/\//.test(redirectUri) || redirectUri.length > 300) {
         return res.status(400).json({ error: "Invalid request" });
     }
-    if (apiKey.length < 10 || apiKey.length > 200) {
-        return res.status(400).json({ error: "That doesn't look like a Ballsdex API key." });
-    }
-
     try {
-        await linkApiKey(userId, apiKey);
-        client?.log?.("BALLSDEX", `<@${userId}> linked a Ballsdex account (website)`);
-        res.status(200).json({ success: true, linked: true });
+        const result = await connectOAuth(userId, { code, codeVerifier, redirectUri });
+        client?.log?.("BALLSDEX", `<@${userId}> ${result.reconnected ? "reconnected" : "linked"} their Ballsdex account (Sign in with Ballsdex)`);
+        res.status(200).json({ success: true, linked: true, reconnected: result.reconnected });
     } catch (error) {
-        if (error.code === "COOLDOWN") {
-            return res.status(429).json({ error: error.message, retryAfterSec: error.retryAfterSec });
-        }
-        if (error.code === "WRONG_ACCOUNT") {
-            return res.status(403).json({ error: error.message, code: "WRONG_ACCOUNT" });
-        }
-        if (error.status === 401 || error.status === 403) {
-            return res.status(400).json({ error: "Ballsdex rejected this API key. Check that it is correct and has all scopes.", code: "INVALID_KEY" });
-        }
-        if (error.code === "RATE_LIMITED") {
-            return res.status(429).json({ error: error.message, code: "RATE_LIMITED", retryAfterSec: error.retryAfterSec });
-        }
-        if (!error.ballsdexApi) console.error("[API] Ballsdex link failed:", error);
-        res.status(503).json({ error: error.ballsdexApi ? error.message : "Could not reach the Ballsdex API. Try again later.", code: error.code || "UNAVAILABLE" });
+        if (error.code === "COOLDOWN") return res.status(429).json({ error: error.message, code: "COOLDOWN", retryAfterSec: error.retryAfterSec });
+        if (error.code === "RATE_LIMITED") return res.status(429).json({ error: error.message, code: "RATE_LIMITED", retryAfterSec: error.retryAfterSec });
+        if (error.status && error.status < 500) return res.status(error.status).json({ error: error.message, code: error.code || "OAUTH_FAILED" });
+        if (!error.ballsdexApi && error.code !== "NOT_CONFIGURED") console.error("[API] Ballsdex sign-in failed:", error);
+        res.status(503).json({ error: error.ballsdexApi || error.code === "NOT_CONFIGURED" ? error.message : "Could not reach Ballsdex. Try again later.", code: error.code || "UNAVAILABLE" });
     }
 });
 
@@ -553,6 +540,7 @@ app.post("/api/users/:userId/ballsdex/sync", apiLimiter, verifySignature, (req, 
         const minutes = Math.ceil(((result.retryAfterSec || 0) % 3600) / 60);
         const errors = {
             NOT_LINKED: [400, "Link your Ballsdex account first."],
+            RECONNECT: [400, "Sign in with Ballsdex again first: Ballsdex replaced API keys with a new sign-in."],
             IN_PROGRESS: [409, "Your collection is already being synchronized."],
             BUSY: [409, "Another collection sync is running right now. You'll get a notification when you can start yours."],
             COOLDOWN: [429, `You can sync again in ${hours ? `${hours} h ` : ""}${minutes} min.`],
@@ -589,7 +577,7 @@ app.post("/api/users/:userId/ballsdex/cancel", apiLimiter, verifySignature, (req
 // Raws: rare (t1-t23) non-special balls x tier value, from the last sync
 app.get("/api/users/:userId/ballsdex/raws", apiLimiter, verifySignature, async (req, res) => {
     const { userId } = req.params;
-    if (!getSavedApiKey(userId)) return res.status(200).json({ available: false, reason: "NOT_LINKED" });
+    if (!isLinked(userId)) return res.status(200).json({ available: false, reason: "NOT_LINKED" });
     try {
         const stored = await getStoredCollection(userId);
         if (!stored) return res.status(200).json({ available: false, reason: "NO_DATA" });
@@ -612,7 +600,7 @@ app.get("/api/users/:userId/ballsdex/ratelimit", apiLimiter, verifySignature, as
         res.status(200).json({ available: true, ...limits });
     } catch (error) {
         if (!error.ballsdexApi) console.error("[API] Rate limits failed:", error.message);
-        const message = error.status === 401 || error.status === 403 ? "Ballsdex rejected your API key. Link it again." : error.ballsdexApi ? error.message : "Couldn't reach the Ballsdex API.";
+        const message = error.ballsdexApi || error.code === "RECONNECT" ? error.message : "Couldn't reach the Ballsdex API.";
         res.status(503).json({ error: message, code: error.code || "UNAVAILABLE" });
     }
 });

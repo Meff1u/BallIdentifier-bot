@@ -1,6 +1,6 @@
 const { getDatabase } = require("./database");
 const { BOT_DATA_KEYS, ADMIN_ID } = require("./constants");
-const { getSavedApiKey, getStoredCollection, verifyFileBall } = require("./ballsdex");
+const { isLinked, getStoredCollection, verifyFileBall } = require("./ballsdex");
 const { getData } = require("./helpers");
 
 const PROFILE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -263,7 +263,7 @@ async function addSelf(userId, dexKey, ballId) {
  */
 async function checkBallsdexOwnership(userId, found) {
     const required = Number(String(found.ball.cc ?? "").replace(/\D/g, "")); // "2,800" -> 2800
-    const stored = getSavedApiKey(userId) ? await getStoredCollection(userId).catch(() => null) : null;
+    const stored = isLinked(userId) ? await getStoredCollection(userId).catch(() => null) : null;
     if (!stored) {
         throw fail(403, "Link and sync your Ballsdex account first (Ballsdex tab), so your collection can be checked.", "SYNC_REQUIRED");
     }
@@ -287,10 +287,10 @@ async function checkBallsdexOwnership(userId, found) {
             confirmed = await verifyFileBall(userId, found.ball.id);
         } catch (error) {
             // Ballsdex couldn't answer (rate limit, outage): that's not "these balls aren't yours"
-            if (error.ballsdexApi && error.code !== "INVALID_KEY") {
+            if (error.code === "RECONNECT" || error.code === "NOT_LINKED") throw fail(403, error.message, "RECONNECT");
+            if (error.ballsdexApi) {
                 throw fail(error.status === 429 ? 429 : 503, `Your Fast Sync balls couldn't be checked in Ballsdex right now. ${error.message}`, "BALLSDEX_UNAVAILABLE");
             }
-            if (error.code === "INVALID_KEY") throw fail(403, error.message, "INVALID_KEY");
             confirmed = false;
         }
         if (!confirmed) {

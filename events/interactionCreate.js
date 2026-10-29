@@ -17,7 +17,7 @@ const {
 // Import shared utilities
 const { COLORS, INACTIVITY_TIMEOUT } = require("../utils/constants");
 const { readJsonFile, writeJsonFile, getAssetsPath } = require("../utils/helpers");
-const { linkApiKey, unlinkAccount, cancelSync } = require("../utils/ballsdex");
+const { unlinkAccount, cancelSync } = require("../utils/ballsdex");
 const {
     PAGE_SIZE,
     buildCollectorsView,
@@ -127,30 +127,6 @@ module.exports = {
 
         // Modals
         else if (interaction.isModalSubmit()) {
-            if (interaction.customId === "ballsdex-link") {
-                const apiKey = interaction.fields.getTextInputValue("api-key").trim();
-
-                await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-                try {
-                    await linkApiKey(interaction.user.id, apiKey);
-                    return interaction.editReply({
-                        content: "Your Ballsdex account has been linked securely.",
-                    });
-                } catch (error) {
-                    if (!error.ballsdexApi && !error.code) console.error("[BALLSDEX] Failed to link account:", error);
-                    const message =
-                        error.code === "INVALID_KEY" || error.code === "FORBIDDEN"
-                            ? "Ballsdex rejected this API key. Check that it is correct and has all scopes."
-                            : error.ballsdexApi || error.code
-                              ? error.message
-                              : "Something went wrong. Try again in a moment.";
-                    return interaction.editReply({
-                        content: `Could not link your Ballsdex account: ${message}`,
-                    });
-                }
-            }
-
             if (interaction.customId.startsWith("collectors-search:")) {
                 const [, sessionId] = interaction.customId.split(":");
                 const session = getCollectorsSession(sessionId);
@@ -229,21 +205,12 @@ module.exports = {
 
         // Buttons
         else if (interaction.isButton()) {
+            // Button from old /ballsdex link messages: API keys are gone, linking happens on the website now
             if (interaction.customId === "ballsdex-link:start") {
-                const modal = new ModalBuilder()
-                    .setCustomId("ballsdex-link")
-                    .setTitle("Link Ballsdex account");
-                const apiKeyInput = new TextInputBuilder()
-                    .setCustomId("api-key")
-                    .setLabel("Ballsdex API key")
-                    .setStyle(TextInputStyle.Short)
-                    .setRequired(true)
-                    .setMinLength(10)
-                    .setMaxLength(200)
-                    .setPlaceholder("bdx_live_...");
-
-                modal.addComponents(new ActionRowBuilder().addComponents(apiKeyInput));
-                return interaction.showModal(modal);
+                return interaction.reply({
+                    content: "Ballsdex replaced API keys with **Sign in with Ballsdex**. Connect your account here: https://ballidentifier.xyz/ballsdex",
+                    flags: MessageFlags.Ephemeral,
+                });
             }
 
             if (interaction.customId === "ballsdex-sync:cancel") {
@@ -269,7 +236,7 @@ module.exports = {
                 const wasRemoved = await unlinkAccount(interaction.user.id);
                 return interaction.update({
                     content: wasRemoved
-                        ? "Your Ballsdex account has been unlinked. The encrypted API key and saved collection data were removed."
+                        ? "Your Ballsdex account has been unlinked. BallIdentifier's access to it and your saved collection data were removed."
                         : "No linked Ballsdex account was found.",
                     components: [],
                 });

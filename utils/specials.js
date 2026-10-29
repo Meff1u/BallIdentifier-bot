@@ -3,7 +3,7 @@
  *
  * Three layers, merged per special id:
  * 1. official data from the Ballsdex API (/specials: name, emoji, tradeable, dates; /market/specials: sales),
- *    fetched with the owner's linked API key and cached for a few hours (market details per special: 1 hour);
+ *    fetched with the owner's Ballsdex sign-in (needs the catalog:read and market:read scopes) and cached for a few hours (market details per special: 1 hour);
  * 2. the starting notes in specials-seed.js (alias, prices, spawn rate, duration, notes);
  * 3. owner edits from the website, stored in MongoDB (specialInfo), which win over the seed.
  */
@@ -35,27 +35,26 @@ function ballsdex() {
 }
 
 function ownerKey() {
-    const { getSavedApiKey, decryptApiKey } = ballsdex();
-    const encrypted = getSavedApiKey(ADMIN_ID);
-    if (!encrypted) throw new Error("Link the owner's Ballsdex account to load the official specials list.");
-    return decryptApiKey(encrypted);
+    const { getSavedApiKey, credentialFor } = ballsdex();
+    if (!getSavedApiKey(ADMIN_ID)) throw new Error("Sign in with Ballsdex as the owner (Ballsdex tab) to load the official specials list.");
+    return credentialFor(ADMIN_ID);
 }
 
 async function fetchOfficial() {
     const { ballsdexRequest, INTERACTIVE } = ballsdex();
-    const apiKey = ownerKey();
+    const owner = ownerKey();
 
     const specials = [];
     let cursor;
     do {
-        const page = await ballsdexRequest(apiKey, "/specials", { limit: 100, cursor }, INTERACTIVE);
+        const page = await ballsdexRequest(owner, "/specials", { limit: 100, cursor }, INTERACTIVE);
         specials.push(...(page.items || []));
         cursor = page.next_cursor || undefined;
     } while (cursor);
 
     // Market data is optional
-    const recent = await ballsdexRequest(apiKey, "/market/specials", { window: 30 }, INTERACTIVE).catch(() => null);
-    const all = await ballsdexRequest(apiKey, "/market/specials", { window: ALL_TIME_WINDOW }, INTERACTIVE).catch(() => null);
+    const recent = await ballsdexRequest(owner, "/market/specials", { window: 30 }, INTERACTIVE).catch(() => null);
+    const all = await ballsdexRequest(owner, "/market/specials", { window: ALL_TIME_WINDOW }, INTERACTIVE).catch(() => null);
     return {
         specials,
         market: recent?.items || [],

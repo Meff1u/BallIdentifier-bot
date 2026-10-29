@@ -8,7 +8,7 @@
 const { getData, updateData } = require("./helpers");
 const { BOT_NAMES, BOT_DATA_KEYS } = require("./constants");
 const collectorStore = require("./collector-store");
-const { getSavedApiKey, getStoredCollection } = require("./ballsdex");
+const { isLinked, getStoredCollection } = require("./ballsdex");
 
 const DEX_TO_KEY = Object.fromEntries(Object.entries(BOT_DATA_KEYS).map(([botId, key]) => [BOT_NAMES[botId], key]));
 const KEY_TO_DEX = Object.fromEntries(Object.entries(DEX_TO_KEY).map(([dex, key]) => [key, dex]));
@@ -108,7 +108,7 @@ function collectionsOf(userId) {
 
 /** Ballsdex numbers that are safe to show publicly (no instance IDs, no account details). */
 async function ballsdexOf(userId) {
-    if (!getSavedApiKey(userId)) return null;
+    if (!isLinked(userId)) return null;
     let stored;
     try {
         stored = await getStoredCollection(userId);
@@ -182,7 +182,7 @@ function getSettings(userId) {
             showCollections: settings.showCollections,
         },
         blocked: Boolean(settings.blocked),
-        ballsdexLinked: Boolean(getSavedApiKey(userId)),
+        ballsdexLinked: isLinked(userId),
         limits: LIMITS,
         accents: ACCENTS,
     };

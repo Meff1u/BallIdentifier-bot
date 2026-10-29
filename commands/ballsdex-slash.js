@@ -14,7 +14,8 @@ const {
 } = require("discord.js");
 
 const {
-    getSavedApiKey,
+    isLinked,
+    needsReconnect,
     getStoredCollection,
     startSync,
     computeRaws,
@@ -85,8 +86,8 @@ module.exports = {
         .setName("ballsdex")
         .setDescription("Manage your Ballsdex API connection and collection.")
         .setContexts(InteractionContextType.BotDM, InteractionContextType.Guild, InteractionContextType.PrivateChannel)
-        .addSubcommand((subcommand) => subcommand.setName("link").setDescription("Link your Ballsdex API key."))
-        .addSubcommand((subcommand) => subcommand.setName("unlink").setDescription("Remove your linked Ballsdex API key."))
+        .addSubcommand((subcommand) => subcommand.setName("link").setDescription("Connect your Ballsdex account (Sign in with Ballsdex)."))
+        .addSubcommand((subcommand) => subcommand.setName("unlink").setDescription("Disconnect your Ballsdex account."))
         .addSubcommand((subcommand) => subcommand.setName("collection").setDescription("View your saved Ballsdex collection summary."))
         .addSubcommand((subcommand) => subcommand.setName("sync").setDescription("Synchronize your Ballsdex collection to BallIdentifier."))
         .addSubcommand((subcommand) => subcommand.setName("raws").setDescription("Value of your rare (T1-T23) non-special balls.")),
@@ -105,40 +106,25 @@ module.exports = {
         setSubcommandCooldown(interaction.user.id, subcommand);
 
         if (subcommand === "link") {
+            // Sign in with Ballsdex happens on the website (it needs a browser for the Ballsdex consent screen)
+            const reconnect = needsReconnect(interaction.user.id);
             const linkButton = new ButtonBuilder()
-                .setCustomId("ballsdex-link:start")
-                .setLabel("Link my Ballsdex Account")
-                .setStyle(ButtonStyle.Primary);
+                .setURL("https://ballidentifier.xyz/ballsdex?connect=1")
+                .setLabel(reconnect ? "Sign in again" : "Sign in with Ballsdex")
+                .setStyle(ButtonStyle.Link);
             const container = new ContainerBuilder()
                 .setAccentColor(0xa020f0)
-                .addTextDisplayComponents(
-                    new TextDisplayBuilder().setContent("# Link your Ballsdex Account"),
-                )
-                .addSeparatorComponents(
-                    new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true),
-                )
+                .addTextDisplayComponents(new TextDisplayBuilder().setContent(reconnect ? "# Reconnect your Ballsdex account" : "# Link your Ballsdex account"))
+                .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
                 .addTextDisplayComponents(
                     new TextDisplayBuilder().setContent(
-                        "An API key lets BallIdentifier securely access data that Ballsdex only provides to the account owner. " +
-                        "It is required for private features such as **/ballsdex collection**.",
+                        (reconnect ? "Ballsdex replaced API keys with **Sign in with Ballsdex**, so your old key no longer works. Your synced stats are still here.\n\n" : "") +
+                            "Open the website, log in with Discord and press **Sign in with Ballsdex**. Ballsdex asks you to allow BallIdentifier to read your collection, and that's it: no key to copy.",
                     ),
                 )
                 .addTextDisplayComponents(
                     new TextDisplayBuilder().setContent(
-                        "**Create an API key**\n" +
-                        "1. Open [Ballsdex API Keys](https://ballsdex.com/api/keys).\n" +
-                        "2. Log in with Discord.\n" +
-                        "3. Create a key with **all five scopes** selected.\n" +
-                        "4. Generate it and save it somewhere safe, then paste it in the form below.",
-                    ),
-                )
-                .addSeparatorComponents(
-                    new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true),
-                )
-                .addTextDisplayComponents(
-                    new TextDisplayBuilder().setContent(
-                        "-# Your key is encrypted before BallIdentifier stores it and is only used for Ballsdex API requests on your behalf. " +
-                        "You can unlink your account and remove the stored key at any time with **/ballsdex unlink**.",
+                        "-# BallIdentifier only gets read access, and the sign-in is stored encrypted. Remove it any time with **/ballsdex unlink** or on your Ballsdex Keys page.",
                     ),
                 )
                 .addActionRowComponents(new ActionRowBuilder().addComponents(linkButton));
@@ -150,7 +136,7 @@ module.exports = {
         }
 
         if (subcommand === "unlink") {
-            if (!getSavedApiKey(interaction.user.id)) {
+            if (!isLinked(interaction.user.id)) {
                 return interaction.reply({
                     content: "No Ballsdex account is currently linked.",
                     flags: MessageFlags.Ephemeral,
@@ -167,7 +153,7 @@ module.exports = {
                 .setStyle(ButtonStyle.Secondary);
 
             return interaction.reply({
-                content: "Remove your linked Ballsdex API key? This cannot be undone.",
+                content: "Disconnect your Ballsdex account? BallIdentifier's access and your saved collection data are removed. This cannot be undone.",
                 components: [new ActionRowBuilder().addComponents(confirmButton, cancelButton)],
                 flags: MessageFlags.Ephemeral,
             });
@@ -182,6 +168,7 @@ module.exports = {
                 const wait = `${Math.floor(minutes / 60) ? `${Math.floor(minutes / 60)} h ` : ""}${minutes % 60} min`;
                 const messages = {
                     NOT_LINKED: "Link your Ballsdex account first with `/ballsdex link`.",
+                    RECONNECT: "Ballsdex replaced API keys with Sign in with Ballsdex. Reconnect your account with `/ballsdex link` first.",
                     IN_PROGRESS: "Your Ballsdex collection is already being synchronized.",
                     BUSY: "Someone else's collection is being synchronized right now (only one sync can run at a time). I'll notify you as soon as you can start yours.",
                     COOLDOWN: `You can sync again in ${wait}. Syncs are limited to one every 24 hours.`,
@@ -370,4 +357,4 @@ module.exports = {
             });
         }
     },
-};
+};

@@ -7,20 +7,25 @@ const { ADMIN_ID } = require("./constants");
 
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
-const API_BASE_URL = process.env.BALLSDEX_API_URL || "https://ballsdex.com/api/v1";
+// API v2: every call is made for a player who signed in to BallIdentifier's Ballsdex app (OAuth 2 + PKCE).
+// v1 and its personal bdx_live_ keys were switched off on November 1, 2026.
+const API_BASE_URL = process.env.BALLSDEX_API_URL || "https://ballsdex.com/api/v2";
+const OAUTH_URL = process.env.BALLSDEX_OAUTH_URL || "https://ballsdex.com/api/oauth";
+const ACCESS_REFRESH_MARGIN_MS = 2 * 60 * 1000; // refresh an access token this long before it expires
 const ENCRYPTION_ALGORITHM = "aes-256-gcm";
 const PAGE_SIZE = 25;
-// Every sync runs from the bot's one IP (20 000 Ballsdex requests a day in total, 25 balls per request).
-// A sync stops when the shared daily quota gets down to this reserve, so the rest of the bot keeps working.
-const IP_DAY_RESERVE = 2000;
+// Every request from the bot's one IP counts toward a shared per-IP limit (2000 a day and 30 a minute when
+// v2 launched; read from the headers, never hardcoded). A sync stops when the shared daily quota gets down to
+// this share of it, so the rest of the bot keeps working.
+const IP_DAY_RESERVE_SHARE = 0.2;
 // A sync stopped by the quota keeps its progress and continues by itself once the quota resets
 const PAUSED_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // Sync pacing (see syncPageDelay): pages go as fast as the per-minute limits allow, but part of the bot's
 // shared per-IP minute limit always stays free for everything else, more of it while others are using it.
 const MIN_PAGE_DELAY = 100;
 const FALLBACK_PAGE_DELAY = 1000; // before the first rate-limit headers are known
-const IP_MINUTE_FREE_IDLE = 12; // ~10% of 120: kept free when nothing else is calling the API
-const IP_MINUTE_FREE_BUSY = 60; // ~50%: kept free while other requests are coming in
+const IP_MINUTE_FREE_IDLE_SHARE = 0.1; // of the IP's per-minute limit, kept free when nothing else is calling the API
+const IP_MINUTE_FREE_BUSY_SHARE = 0.5; // kept free while other requests are coming in
 const IP_MINUTE_BUSY_OTHERS = 4; // that many other requests in the current minute = busy
 const SYNC_COOLDOWN_MS = 24 * 60 * 60 * 1000; // after a successful sync
 const SYNC_RETRY_COOLDOWN_MS = 5 * 60 * 1000; // after a failed or cancelled sync
@@ -102,8 +107,8 @@ const formatWait = (seconds) => {
 };
 
 /** Which limit a 429 came from, from the headers recorded with it: "key", "ip" or null when unknown. */
-function exhaustedScope(apiKey) {
-    const key = viewRateLimits(keyRateLimits.get(hashKey(apiKey)))?.limits.some((limit) => limit.remaining <= 0);
+function exhaustedScope(cred) {
+    const key = viewRateLimits(keyRateLimits.get(hashKey(cred)))?.limits.some((limit) => limit.remaining <= 0);
     if (key) return "key";
     return viewRateLimits(ipRateLimits)?.limits.some((limit) => limit.remaining <= 0) ? "ip" : null;
 }
@@ -113,21 +118,24 @@ function exhaustedScope(apiKey) {
  * error.status: the HTTP status (503 when Ballsdex couldn't be reached at all), error.code: what went wrong,
  * error.reason: the message without "try again in…", error.retryAfterSec: when it makes sense to retry.
  */
-function apiError(status, { detail = null, retryAfterSec = null, apiKey = null } = {}) {
+function apiError(status, { detail = null, retryAfterSec = null, cred = null, type = null } = {}) {
     let code;
     let reason;
     if (status === 429) {
         code = "RATE_LIMITED";
-        const scope = apiKey ? exhaustedScope(apiKey) : null;
+        const scope = cred ? exhaustedScope(cred) : null;
         reason =
             scope === "ip"
                 ? "BallIdentifier has used up its Ballsdex API requests for now (they're shared by everyone)."
                 : scope === "key"
-                  ? "Your Ballsdex API key has run out of requests for now."
+                  ? "Your Ballsdex account has run out of API requests for now."
                   : "The Ballsdex API is rate limiting requests right now.";
     } else if (status === 401) {
-        code = "INVALID_KEY";
-        reason = "Ballsdex rejected the API key. It may have been reset or deleted: link a new one in the Ballsdex tab.";
+        code = "RECONNECT";
+        reason = "Your Ballsdex sign-in isn't valid anymore (it expired or access was removed). Sign in with Ballsdex again in the Ballsdex tab.";
+    } else if (status === 403 && type === "app_not_approved") {
+        code = "APP_NOT_APPROVED";
+        reason = "BallIdentifier's Ballsdex app is still waiting for approval by the Ballsdex team. Try again later.";
     } else if (status === 403) {
         code = "FORBIDDEN";
         reason = `Ballsdex refused this request${detail ? ` (${detail})` : ""}. Your API key may be missing a permission.`;
@@ -142,20 +150,23 @@ function apiError(status, { detail = null, retryAfterSec = null, apiKey = null }
         reason = detail ? `The Ballsdex API said: ${detail}` : `The Ballsdex API returned an error (HTTP ${status}).`;
     }
     const retry = code === "RATE_LIMITED" ? (retryAfterSec ? ` Try again in ${formatWait(retryAfterSec)}.` : " Try again later.") : code === "UNAVAILABLE" ? " Try again in a few minutes." : "";
-    return Object.assign(new Error(reason + retry), { status, code, reason, detail, retryAfterSec: retryAfterSec ? Math.ceil(retryAfterSec) : null, ballsdexApi: true });
+    return Object.assign(new Error(reason + retry), { status, code, reason, detail, type, retryAfterSec: retryAfterSec ? Math.ceil(retryAfterSec) : null, ballsdexApi: true });
 }
 
-async function readError(response, apiKey = null) {
+async function readError(response, cred = null) {
     let detail = null;
+    let type = null;
     try {
         const body = await response.json();
         detail = typeof (body.detail || body.title) === "string" ? String(body.detail || body.title).slice(0, 200) : null;
+        // problem+json "type" is a stable id, sometimes given as a URL ending in it
+        type = typeof body.type === "string" ? body.type.split("/").pop() : null;
     } catch (error) {}
     let retryAfterSec = null;
     if (response.status === 429) {
-        retryAfterSec = Number(response.headers.get("retry-after")) || (apiKey && exhaustedScope(apiKey) ? Math.max(1, (exhaustedResetTime(apiKey) - 60 * 1000 - Date.now()) / 1000) : null);
+        retryAfterSec = Number(response.headers.get("retry-after")) || (cred && exhaustedScope(cred) ? Math.max(1, (exhaustedResetTime(cred) - 60 * 1000 - Date.now()) / 1000) : null);
     }
-    return apiError(response.status, { detail, retryAfterSec, apiKey });
+    return apiError(response.status, { detail, retryAfterSec, cred, type });
 }
 
 const RATE_PROBE_MAX_AGE_MS = 30 * 1000;
@@ -166,10 +177,10 @@ const RATE_LIMIT_LABELS = {
     ip_minute: "Per minute",
     ip_day: "Per day",
 };
-const keyRateLimits = new Map(); // sha256(apiKey) -> { at, limits }
+const keyRateLimits = new Map(); // user id -> { at, limits } (each player has their own limits with our app)
 let ipRateLimits = null; // { at, limits }
 
-const hashKey = (apiKey) => crypto.createHash("sha256").update(apiKey).digest("hex");
+const hashKey = (cred) => `user:${cred.userId}`;
 
 function parseRateLimitList(value) {
     const out = new Map();
@@ -186,7 +197,7 @@ function parseRateLimitList(value) {
     return out;
 }
 
-function recordRateLimits(apiKey, headers) {
+function recordRateLimits(cred, headers) {
     const policies = parseRateLimitList(headers.get("ratelimit-policy"));
     if (!policies.size) return;
     const states = parseRateLimitList(headers.get("ratelimit"));
@@ -205,7 +216,7 @@ function recordRateLimits(apiKey, headers) {
     const at = Date.now();
     const keyLimits = limits.filter((limit) => !limit.name.startsWith("ip_"));
     const ipLimits = limits.filter((limit) => limit.name.startsWith("ip_"));
-    if (keyLimits.length) keyRateLimits.set(hashKey(apiKey), { at, limits: keyLimits });
+    if (keyLimits.length) keyRateLimits.set(hashKey(cred), { at, limits: keyLimits });
     if (ipLimits.length) ipRateLimits = { at, limits: ipLimits };
 }
 
@@ -226,17 +237,18 @@ function remainingToday(snapshot, name) {
  * Stops a sync before the next page when today's quota runs out: the bot's shared IP keeps
  * IP_DAY_RESERVE requests for everyone else, and the user's own key must have a request left.
  */
-function assertQuota(apiKey) {
-    const ipLeft = remainingToday(ipRateLimits, "ip_day");
-    if (ipLeft !== null && ipLeft <= IP_DAY_RESERVE) {
+function assertQuota(cred) {
+    const ipDay = viewRateLimits(ipRateLimits)?.limits.find((entry) => entry.name === "ip_day");
+    const ipLeft = ipDay ? ipDay.remaining : null;
+    if (ipLeft !== null && ipLeft <= Math.ceil(ipDay.limit * IP_DAY_RESERVE_SHARE)) {
         const error = syncError("BallIdentifier has used most of today's Ballsdex API requests.", "QUOTA");
         error.resumeAt = resetTime(ipRateLimits, "ip_day");
         throw error;
     }
-    const keySnapshot = keyRateLimits.get(hashKey(apiKey));
+    const keySnapshot = keyRateLimits.get(hashKey(cred));
     const keyLeft = remainingToday(keySnapshot, "day");
     if (keyLeft !== null && keyLeft <= 0) {
-        const error = syncError("Your Ballsdex API key has no requests left today.", "QUOTA");
+        const error = syncError("Your Ballsdex account has no API requests left today.", "QUOTA");
         error.resumeAt = resetTime(keySnapshot, "day");
         throw error;
     }
@@ -249,8 +261,8 @@ function resetTime(snapshot, name) {
 }
 
 /** After a 429: the latest reset among the limits that ran out. */
-function exhaustedResetTime(apiKey) {
-    const limits = [viewRateLimits(ipRateLimits), viewRateLimits(keyRateLimits.get(hashKey(apiKey)))].flatMap((view) => view?.limits || []);
+function exhaustedResetTime(cred) {
+    const limits = [viewRateLimits(ipRateLimits), viewRateLimits(keyRateLimits.get(hashKey(cred)))].flatMap((view) => view?.limits || []);
     const waits = limits.filter((limit) => limit.remaining <= 0 && limit.resetInSec).map((limit) => limit.resetInSec);
     return Date.now() + ((waits.length ? Math.max(...waits) : 3600) + 60) * 1000;
 }
@@ -277,14 +289,13 @@ function viewRateLimits(snapshot) {
 
 /** Rate-limit usage of the user's key and of the bot's shared IP. Probes /me when the snapshot is stale. */
 async function getRateLimits(userId) {
-    const encryptedKey = getSavedApiKey(userId);
-    if (!encryptedKey) return null;
-    const apiKey = decryptApiKey(encryptedKey);
-    const hash = hashKey(apiKey);
+    if (!getGrant(userId)) return null;
+    const cred = credentialFor(userId);
+    const hash = hashKey(cred);
     const snapshot = keyRateLimits.get(hash);
     if (!snapshot || Date.now() - snapshot.at > RATE_PROBE_MAX_AGE_MS) {
         try {
-            await ballsdexFetch(apiKey, "/me", {}, { ...INTERACTIVE, retry: false });
+            await ballsdexFetch(cred, "/me", {}, { ...INTERACTIVE, retry: false });
         } catch (error) {
             if (error.status !== 429) throw error; // a 429 still carries the headers
         }
@@ -295,31 +306,39 @@ async function getRateLimits(userId) {
 // One API call that follows the documented rate-limit headers (https://ballsdex.com/api/docs/):
 // waits out a short 429 using Retry-After, and returns how long to pause before the next call.
 // Background work (syncs) waits up to 2 min per 429; INTERACTIVE calls give up after a few seconds.
-async function ballsdexFetch(apiKey, path, query = {}, { retry = true, maxWaitMs = MAX_RATE_LIMIT_WAIT_MS, retries = MAX_429_RETRIES, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
+async function ballsdexFetch(cred, path, query = {}, { retry = true, maxWaitMs = MAX_RATE_LIMIT_WAIT_MS, retries = MAX_429_RETRIES, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
     const url = new URL(`${API_BASE_URL}${path}`);
     Object.entries(query).forEach(([key, value]) => {
         if (value !== undefined && value !== null) url.searchParams.set(key, value);
     });
 
+    let refreshed = false;
     for (let attempt = 0; ; attempt++) {
+        const token = cred.token || (await accessToken(cred.userId, { force: refreshed }));
         let response;
         try {
-            response = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(timeoutMs) });
+            response = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(timeoutMs) });
         } catch (error) {
             // Network error or timeout: Ballsdex couldn't be reached at all
             throw apiError(503, { detail: error.name === "TimeoutError" || error.name === "AbortError" ? "timeout" : error.message });
         }
-        recordRateLimits(apiKey, response.headers);
+        recordRateLimits(cred, response.headers);
 
+        // The access token was revoked or expired early: get a new one once, then give up
+        if (response.status === 401 && !cred.token && !refreshed) {
+            refreshed = true;
+            attempt--;
+            continue;
+        }
         if (response.status === 429) {
             const waitMs = (Number(response.headers.get("retry-after")) || 2) * 1000;
             if (retry && attempt < retries && waitMs <= maxWaitMs) {
                 await sleep(waitMs + 250);
                 continue;
             }
-            throw await readError(response, apiKey);
+            throw await readError(response, cred);
         }
-        if (!response.ok) throw await readError(response, apiKey);
+        if (!response.ok) throw await readError(response, cred);
 
         const remaining = response.headers.get("x-ratelimit-remaining");
         const resetAfter = Number(response.headers.get("x-ratelimit-reset-after")) || 0;
@@ -348,16 +367,16 @@ function noteSyncRequest() {
  * IP_MINUTE_FREE_IDLE free, or IP_MINUTE_FREE_BUSY when other requests are using it this minute
  * (website, commands, other users), so the sync slows down by itself and speeds up again after.
  */
-function syncPageDelay(apiKey, waitMs = 0) {
+function syncPageDelay(cred, waitMs = 0) {
     const ip = viewRateLimits(ipRateLimits)?.limits.find((limit) => limit.name === "ip_minute");
-    const key = viewRateLimits(keyRateLimits.get(hashKey(apiKey)))?.limits.find((limit) => limit.name === "minute");
+    const key = viewRateLimits(keyRateLimits.get(hashKey(cred)))?.limits.find((limit) => limit.name === "minute");
     if (!ip && !key) return Math.max(waitMs, FALLBACK_PAGE_DELAY);
 
     const budgets = [];
     if (key) budgets.push({ left: key.remaining - 1, windowMs: (key.resetInSec ?? 60) * 1000 });
     if (ip) {
         const others = Math.max(0, ip.used - syncRequestTimes.length);
-        const keepFree = others >= IP_MINUTE_BUSY_OTHERS ? IP_MINUTE_FREE_BUSY : IP_MINUTE_FREE_IDLE;
+        const keepFree = Math.ceil(ip.limit * (others >= IP_MINUTE_BUSY_OTHERS ? IP_MINUTE_FREE_BUSY_SHARE : IP_MINUTE_FREE_IDLE_SHARE));
         budgets.push({ left: ip.remaining - keepFree, windowMs: (ip.resetInSec ?? 60) * 1000 });
     }
     let delay = MIN_PAGE_DELAY;
@@ -365,8 +384,8 @@ function syncPageDelay(apiKey, waitMs = 0) {
     return Math.min(Math.max(delay, waitMs), MAX_RATE_LIMIT_WAIT_MS);
 }
 
-async function ballsdexRequest(apiKey, path, query = {}, options = {}) {
-    return (await ballsdexFetch(apiKey, path, query, options)).data;
+async function ballsdexRequest(cred, path, query = {}, options = {}) {
+    return (await ballsdexFetch(cred, path, query, options)).data;
 }
 
 function getItems(response) {
@@ -382,18 +401,18 @@ class SyncCancelled extends Error {
     }
 }
 
-async function getAllMyBalls(apiKey, onPage, shouldStop = () => false) {
+async function getAllMyBalls(cred, onPage, shouldStop = () => false) {
     const balls = [];
     let cursor;
 
     do {
         if (shouldStop()) throw new SyncCancelled();
-        const { data, waitMs } = await ballsdexFetch(apiKey, "/me/balls", { limit: PAGE_SIZE, cursor });
+        const { data, waitMs } = await ballsdexFetch(cred, "/me/balls", { limit: PAGE_SIZE, cursor });
         noteSyncRequest();
         balls.push(...getItems(data));
         cursor = data.next_cursor;
         onPage?.(balls.length);
-        if (cursor) await sleep(syncPageDelay(apiKey, waitMs));
+        if (cursor) await sleep(syncPageDelay(cred, waitMs));
     } while (cursor);
 
     return balls;
@@ -402,9 +421,9 @@ async function getAllMyBalls(apiKey, onPage, shouldStop = () => false) {
 // Ball total as Ballsdex itself counts it. Null when the profile is private.
 // special_count is NOT the number of special balls (it's far lower, e.g. 44 vs 2,825 owned),
 // so specials are always counted from the synced balls.
-async function getPlayerTotals(apiKey, discordUserId) {
+async function getPlayerTotals(cred, discordUserId) {
     try {
-        const player = await ballsdexRequest(apiKey, `/players/${discordUserId}`);
+        const player = await ballsdexRequest(cred, `/players/${discordUserId}`);
         if (!Number.isFinite(player?.ball_count)) return null;
         return { ballCount: player.ball_count };
     } catch (error) {
@@ -706,7 +725,7 @@ function compactBall(ball) {
     };
 }
 
-async function fetchBallsResumable(userId, apiKey, onPage, shouldStop) {
+async function fetchBallsResumable(userId, cred, onPage, shouldStop) {
     const { jobs, pages } = await syncStorage();
     const job = (await jobs.findOne({ _id: userId })) || {};
     let cursor = job.cursor || undefined;
@@ -721,10 +740,10 @@ async function fetchBallsResumable(userId, apiKey, onPage, shouldStop) {
             await saving;
             throw new SyncCancelled();
         }
-        assertQuota(apiKey);
+        assertQuota(cred);
         let response;
         try {
-            response = await ballsdexFetch(apiKey, "/me/balls", { limit: PAGE_SIZE, cursor });
+            response = await ballsdexFetch(cred, "/me/balls", { limit: PAGE_SIZE, cursor });
             noteSyncRequest();
         } catch (error) {
             await saving.catch(() => {});
@@ -753,7 +772,7 @@ async function fetchBallsResumable(userId, apiKey, onPage, shouldStop) {
         })();
         saving.catch(() => {}); // awaited below
         onPage?.(fetched);
-        if (cursor) await sleep(syncPageDelay(apiKey, response.waitMs));
+        if (cursor) await sleep(syncPageDelay(cred, response.waitMs));
     }
     await saving;
 
@@ -761,14 +780,14 @@ async function fetchBallsResumable(userId, apiKey, onPage, shouldStop) {
     return saved.flatMap((entry) => entry.items || []);
 }
 
-async function syncCollection(discordUserId, apiKey, onProgress, shouldStop) {
-    const profile = await ballsdexRequest(apiKey, "/me");
-    const totals = await getPlayerTotals(apiKey, discordUserId);
+async function syncCollection(discordUserId, cred, onProgress, shouldStop) {
+    const profile = await ballsdexRequest(cred, "/me");
+    const totals = await getPlayerTotals(cred, discordUserId);
     const expected = totals?.ballCount ?? null;
 
 
     onProgress?.({ phase: "balls", fetched: 0, total: expected });
-    const balls = await fetchBallsResumable(discordUserId, apiKey, (fetched) => onProgress?.({ phase: "balls", fetched, total: expected }), shouldStop);
+    const balls = await fetchBallsResumable(discordUserId, cred, (fetched) => onProgress?.({ phase: "balls", fetched, total: expected }), shouldStop);
     if (shouldStop()) throw new SyncCancelled(); // e.g. unlinked while the last page was loading
     onProgress?.({ phase: "saving", fetched: balls.length, total: expected });
     return saveCollection(discordUserId, profile, balls, totals);
@@ -835,76 +854,209 @@ async function deleteStoredCollection(discordUserId) {
     ]);
 }
 
-function getSavedApiKey(userId) {
-    return getData().users[userId]?.ballsdex?.apiKey || null;
+/* ----- Sign in with Ballsdex (OAuth 2): tokens per user, stored encrypted in data.json ----- */
+
+// users[id].ballsdex = { linkedAt, oauth: { access, refresh (encrypted), expiresAt, scope } }
+// needsReconnect: the sign-in stopped working (or it was an old v1 key): stats stay, the API needs a new sign-in.
+const ballsdexRecord = (userId) => getData().users[String(userId)]?.ballsdex || null;
+
+/** The sign-in BallIdentifier can call the API with, or null. */
+function getGrant(userId) {
+    const oauth = ballsdexRecord(userId)?.oauth;
+    return oauth?.refresh ? oauth : null;
 }
 
-function saveApiKey(userId, apiKey) {
-    const encryptedKey = encryptApiKey(apiKey);
+/** Kept for the rest of the bot: truthy when the API can be called for this user. */
+function getSavedApiKey(userId) {
+    return getGrant(userId);
+}
+
+/** A Ballsdex account is connected (maybe needing a new sign-in): its synced stats can be shown. */
+function isLinked(userId) {
+    const record = ballsdexRecord(userId);
+    return Boolean(record?.oauth?.refresh || record?.apiKey || record?.needsReconnect);
+}
+
+const needsReconnect = (userId) => isLinked(userId) && !getGrant(userId);
+
+function reconnectError(userId) {
+    return needsReconnect(userId)
+        ? Object.assign(new Error("Ballsdex now uses Sign in with Ballsdex instead of API keys. Sign in again in the Ballsdex tab to keep syncing."), { status: 401, code: "RECONNECT" })
+        : Object.assign(new Error("Connect your Ballsdex account first (Ballsdex tab)."), { status: 400, code: "NOT_LINKED" });
+}
+
+/** What API calls for a user are made with (the access token is looked up, and refreshed, per call). */
+function credentialFor(userId) {
+    if (!getGrant(userId)) throw reconnectError(userId);
+    return { userId: String(userId) };
+}
+
+function oauthClient() {
+    const id = process.env.BALLSDEX_CLIENT_ID;
+    if (!id) throw Object.assign(new Error("Sign in with Ballsdex isn't set up on the bot yet."), { status: 503, code: "NOT_CONFIGURED" });
+    return { id, secret: process.env.BALLSDEX_CLIENT_SECRET || null };
+}
+
+/** POST to the token or revoke endpoint. Errors there follow OAuth 2 ({ error, error_description }). */
+async function oauthPost(path, params) {
+    const { id, secret } = oauthClient();
+    const body = new URLSearchParams(params);
+    const headers = { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" };
+    if (secret) headers.Authorization = `Basic ${Buffer.from(`${encodeURIComponent(id)}:${encodeURIComponent(secret)}`).toString("base64")}`;
+    else body.set("client_id", id);
+
+    let response;
+    try {
+        response = await fetch(`${OAUTH_URL}${path}`, { method: "POST", headers, body: body.toString(), signal: AbortSignal.timeout(10000) });
+    } catch (error) {
+        throw apiError(503, { detail: error.message });
+    }
+    const data = await response.json().catch(() => ({}));
+    if (response.ok) return data;
+    if (response.status === 429) throw apiError(429, { retryAfterSec: Number(response.headers.get("retry-after")) || null });
+    if (response.status >= 500) throw apiError(response.status);
+    const error = new Error(typeof data.error_description === "string" ? data.error_description.slice(0, 200) : "Ballsdex refused the sign-in.");
+    error.status = response.status;
+    error.code = "OAUTH";
+    error.oauthError = typeof data.error === "string" ? data.error : null;
+    throw error;
+}
+
+function saveGrant(userId, tokens, { fresh = false } = {}) {
+    if (!tokens?.access_token || !tokens?.refresh_token) throw apiError(502, { detail: "no tokens in the answer" });
+    const oauth = {
+        access: encryptApiKey(tokens.access_token),
+        refresh: encryptApiKey(tokens.refresh_token),
+        expiresAt: Date.now() + (Number(tokens.expires_in) || 3600) * 1000,
+        scope: typeof tokens.scope === "string" ? tokens.scope : null,
+    };
     updateData((data) => {
-        data.users[userId] ??= {};
-        data.users[userId].ballsdex = {
-            apiKey: encryptedKey,
-            linkedAt: new Date().toISOString(),
-        };
+        const user = (data.users[userId] ??= {});
+        const current = user.ballsdex || {};
+        // A new sign-in replaces an old v1 key and clears "needs reconnect"
+        user.ballsdex = { linkedAt: fresh || !current.linkedAt ? new Date().toISOString() : current.linkedAt, oauth };
     });
 }
 
-function removeApiKey(userId) {
-    if (!getSavedApiKey(userId)) return false;
+/** The sign-in stopped working (revoked, expired): keep the account and its stats, ask for a new sign-in. */
+function dropGrant(userId) {
+    updateData((data) => {
+        const record = data.users[userId]?.ballsdex;
+        if (!record) return;
+        delete record.oauth;
+        delete record.apiKey;
+        record.needsReconnect = true;
+    });
+    getNotifier()
+        .notify(userId, "ballsdex_account", {
+            title: "Sign in with Ballsdex again",
+            body: "BallIdentifier can't reach your Ballsdex account anymore (the sign-in expired or access was removed). Your stats are still here; sign in again to sync.",
+            link: "#/ballsdex",
+        })
+        .catch(() => {});
+}
 
-    return updateData((data) => {
+// Each refresh token works once (a reused one signs the player out): one refresh per user at a time,
+// and the new pair is saved as soon as it arrives
+const refreshes = new Map();
+
+async function accessToken(userId, { force = false } = {}) {
+    const grant = getGrant(userId);
+    if (!grant) throw reconnectError(userId);
+    if (!force && grant.expiresAt - Date.now() > ACCESS_REFRESH_MARGIN_MS) return decryptApiKey(grant.access);
+    if (!refreshes.has(userId)) {
+        const job = (async () => {
+            try {
+                const tokens = await oauthPost("/token", { grant_type: "refresh_token", refresh_token: decryptApiKey(grant.refresh) });
+                saveGrant(userId, tokens);
+                return tokens.access_token;
+            } catch (error) {
+                if (error.code === "OAUTH" && error.oauthError === "invalid_grant") {
+                    dropGrant(userId);
+                    throw Object.assign(new Error("Your Ballsdex sign-in expired or access was removed. Sign in with Ballsdex again in the Ballsdex tab."), { status: 401, code: "RECONNECT" });
+                }
+                if (error.code === "OAUTH") {
+                    console.error(`[BALLSDEX] Token refresh refused (${error.oauthError}): ${error.message}`);
+                    throw Object.assign(new Error("Ballsdex refused BallIdentifier's sign-in right now. Try again later."), { status: 503, code: "UNAVAILABLE" });
+                }
+                throw error;
+            }
+        })().finally(() => refreshes.delete(userId));
+        refreshes.set(userId, job);
+    }
+    return refreshes.get(userId);
+}
+
+async function revokeGrant(grant) {
+    try {
+        if (grant?.refresh) await oauthPost("/revoke", { token: decryptApiKey(grant.refresh), token_type_hint: "refresh_token" });
+    } catch (error) {
+        console.error("[BALLSDEX] Couldn't revoke a sign-in:", error.message);
+    }
+}
+
+function removeApiKey(userId) {
+    if (!isLinked(userId)) return false;
+    const grant = getGrant(userId);
+    const removed = updateData((data) => {
         if (!data.users[userId]?.ballsdex) return false;
         delete data.users[userId].ballsdex;
         return true;
     });
-}
-
-function decryptFromSite(payload, purpose = "ballsdex-api-key") {
-    const secret = process.env.BOT_API_SECRET;
-    if (!secret) throw new Error("BOT_API_SECRET is not configured.");
-    if (!payload?.iv || !payload?.tag || !payload?.value) throw new Error("Invalid encrypted payload.");
-
-    const key = Buffer.from(crypto.hkdfSync("sha256", secret, "ballidentifier", purpose, 32));
-    const decipher = crypto.createDecipheriv(ENCRYPTION_ALGORITHM, key, Buffer.from(payload.iv, "base64"));
-    decipher.setAuthTag(Buffer.from(payload.tag, "base64"));
-    return Buffer.concat([decipher.update(Buffer.from(payload.value, "base64")), decipher.final()]).toString("utf8");
+    if (removed && grant) revokeGrant(grant);
+    return removed;
 }
 
 const linkCooldowns = new Map();
-async function linkApiKey(userId, apiKey) {
+
+/**
+ * Finish "Sign in with Ballsdex": exchange the code from the website's callback for tokens,
+ * check that the Ballsdex account is the logged-in Discord user, and save the sign-in.
+ */
+async function connectOAuth(userId, { code, codeVerifier, redirectUri }) {
+    userId = String(userId);
     const cooldownUntil = linkCooldowns.get(userId) || 0;
     if (cooldownUntil > Date.now()) {
-        const error = new Error("Please wait a moment before trying again.");
-        error.code = "COOLDOWN";
-        error.retryAfterSec = Math.ceil((cooldownUntil - Date.now()) / 1000);
-        throw error;
+        throw Object.assign(new Error("Please wait a moment before trying again."), { code: "COOLDOWN", retryAfterSec: Math.ceil((cooldownUntil - Date.now()) / 1000) });
     }
     linkCooldowns.set(userId, Date.now() + LINK_COOLDOWN_MS);
 
-    let profile;
+    let tokens;
     try {
-        profile = await ballsdexRequest(apiKey, "/me", {}, INTERACTIVE);
+        tokens = await oauthPost("/token", { grant_type: "authorization_code", code, redirect_uri: redirectUri, code_verifier: codeVerifier });
     } catch (error) {
-        // Not the user's fault (rate limit, Ballsdex down): let them try again right away
-        if (error.code === "RATE_LIMITED" || error.code === "UNAVAILABLE") linkCooldowns.delete(userId);
-        throw error;
-    }
-    const linkedAccountId = String(profile.discord_id || profile.id || "");
-    if (linkedAccountId !== String(userId)) {
-        const error = new Error("That API key belongs to a different Discord account.");
-        error.code = "WRONG_ACCOUNT";
+        linkCooldowns.delete(userId);
+        if (error.code === "OAUTH") {
+            throw Object.assign(new Error(error.oauthError === "invalid_grant" ? "This sign-in expired or was already used. Try again." : `Ballsdex refused the sign-in: ${error.message}`), { status: 400, code: "OAUTH_FAILED" });
+        }
         throw error;
     }
 
-    saveApiKey(userId, apiKey);
+    const refreshOnly = { refresh: encryptApiKey(tokens.refresh_token || "") };
+    let profile;
+    try {
+        profile = await ballsdexRequest({ userId, token: tokens.access_token }, "/me", {}, INTERACTIVE);
+    } catch (error) {
+        linkCooldowns.delete(userId);
+        await revokeGrant(refreshOnly);
+        throw error;
+    }
+    if (String(profile.discord_id || "") !== userId) {
+        linkCooldowns.delete(userId); // a mix-up, not abuse: let them sign in with the right account right away
+        await revokeGrant(refreshOnly);
+        throw Object.assign(new Error("You signed in to Ballsdex with a different Discord account than the one logged in here. Use the same account."), { status: 403, code: "WRONG_ACCOUNT" });
+    }
+
+    const wasLinked = isLinked(userId);
+    saveGrant(userId, tokens, { fresh: !wasLinked });
     getNotifier()
         .notify(userId, "ballsdex_account", {
-            title: "Ballsdex account linked",
-            body: "A Ballsdex API key was linked to your BallIdentifier account. Not you? Unlink it in the Ballsdex tab.",
+            title: wasLinked ? "Ballsdex account reconnected" : "Ballsdex account linked",
+            body: "Your Ballsdex account was connected to BallIdentifier with Sign in with Ballsdex. Not you? Unlink it in the Ballsdex tab.",
             link: "#/ballsdex",
         })
         .catch(() => {});
+    return { reconnected: wasLinked, scope: tokens.scope || null };
 }
 
 // Remove the stored key and synced data. Returns false when nothing was linked.
@@ -1023,12 +1175,11 @@ function finishSync(userId, state, outcome) {
 
 /**
  * Start a background collection sync.
- * @returns {{started: true} | {started: false, reason: "NOT_LINKED"|"IN_PROGRESS"|"BUSY"|"COOLDOWN", retryAfterSec?: number}}
+ * @returns {{started: true} | {started: false, reason: "NOT_LINKED"|"RECONNECT"|"IN_PROGRESS"|"BUSY"|"COOLDOWN", retryAfterSec?: number}}
  */
 function startSync(userId) {
     userId = String(userId);
-    const encryptedKey = getSavedApiKey(userId);
-    if (!encryptedKey) return { started: false, reason: "NOT_LINKED" };
+    if (!getGrant(userId)) return { started: false, reason: needsReconnect(userId) ? "RECONNECT" : "NOT_LINKED" };
 
     if (syncStates.get(userId)?.inProgress) return { started: false, reason: "IN_PROGRESS" };
 
@@ -1040,12 +1191,12 @@ function startSync(userId) {
         return { started: false, reason: "BUSY" };
     }
 
-    runSync(userId, encryptedKey);
+    runSync(userId);
     return { started: true };
 }
 
 /** Runs a sync in the background; with `resume`, continues a checkpointed job after a restart. */
-function runSync(userId, encryptedKey, { resume = null } = {}) {
+function runSync(userId, { resume = null } = {}) {
     const state = {
         inProgress: true,
         startedAt: resume?.startedAt ? new Date(resume.startedAt).getTime() : Date.now(),
@@ -1067,7 +1218,7 @@ function runSync(userId, encryptedKey, { resume = null } = {}) {
 
     void (async () => {
         let outcome = "failed";
-        let apiKey = null;
+        let cred = null;
         try {
             const { jobs } = await syncStorage();
             // Starting again after a pause continues the saved progress instead of starting over
@@ -1075,10 +1226,10 @@ function runSync(userId, encryptedKey, { resume = null } = {}) {
             if (!resume && !paused) await createSyncJob(userId);
             else await jobs.updateOne({ _id: userId }, { $unset: { pausedUntil: "" } });
             if (paused || resume) state.resumed = true;
-            apiKey = decryptApiKey(encryptedKey);
+            cred = credentialFor(userId);
             const result = await syncCollection(
                 userId,
-                apiKey,
+                cred,
                 (progress) => {
                     state.progress = progress;
                 },
@@ -1103,7 +1254,7 @@ function runSync(userId, encryptedKey, { resume = null } = {}) {
                 outcome = "paused";
                 state.resumeAt =
                     error.resumeAt ||
-                    Math.max(apiKey ? exhaustedResetTime(apiKey) : 0, error.retryAfterSec ? Date.now() + (error.retryAfterSec + 60) * 1000 : 0) ||
+                    Math.max(cred ? exhaustedResetTime(cred) : 0, error.retryAfterSec ? Date.now() + (error.retryAfterSec + 60) * 1000 : 0) ||
                     Date.now() + 3600 * 1000;
                 const hours = Math.max(1, Math.round((state.resumeAt - Date.now()) / 3600000));
                 const fetched = (state.progress?.fetched || 0).toLocaleString("en-US");
@@ -1146,12 +1297,11 @@ const resumeQueue = []; // interrupted jobs waiting for the sync slot (normally 
 function resumeNext() {
     while (!activeSync && resumeQueue.length) {
         const job = resumeQueue.shift();
-        const encryptedKey = getSavedApiKey(job._id);
-        if (!encryptedKey) {
+        if (!getGrant(job._id)) {
             deleteSyncJob(job._id).catch(() => {});
             continue;
         }
-        runSync(job._id, encryptedKey, { resume: job });
+        runSync(job._id, { resume: job });
     }
 }
 
@@ -1203,7 +1353,7 @@ function getSyncOverview() {
         paused: Object.entries(users)
             .filter(([, user]) => user.ballsdexSync?.pausedUntil)
             .map(([userId, user]) => ({ userId, resumeAt: user.ballsdexSync.pausedUntil, fetched: user.ballsdexSync.pausedFetched ?? null })),
-        linkedAccounts: Object.values(users).filter((user) => user.ballsdex?.apiKey).length,
+        linkedAccounts: Object.values(users).filter((user) => user.ballsdex?.oauth?.refresh).length,
         syncedLast24h: Object.values(users).filter((user) => user.ballsdexSync?.lastOutcome === "success" && Date.now() - new Date(user.ballsdexSync.lastFinishedAt).getTime() < 86400000).length,
     };
 }
@@ -1301,7 +1451,7 @@ async function fileInstances() {
 }
 
 /** Ball and special ids by name (the export only has names), from the Ballsdex API, cached for a day. */
-async function getCatalog(apiKey) {
+async function getCatalog(cred) {
     if (catalogCache.balls && Date.now() - catalogCache.at < 24 * 60 * 60 * 1000) return catalogCache;
     const balls = new Map();
     const specials = new Map();
@@ -1311,7 +1461,7 @@ async function getCatalog(apiKey) {
     ]) {
         let cursor;
         do {
-            const page = await ballsdexRequest(apiKey, path, { limit: 100, cursor });
+            const page = await ballsdexRequest(cred, path, { limit: 100, cursor });
             for (const item of getItems(page)) if (nameOf(item)) map.set(nameOf(item).toLowerCase(), item.id);
             cursor = page.next_cursor || undefined;
         } while (cursor);
@@ -1445,8 +1595,11 @@ function parseExport(text) {
 /** Download, check and save an export from its Discord link (in the background, shown as a sync). */
 function startFastSync(userId, { url } = {}) {
     userId = String(userId);
-    const encryptedKey = getSavedApiKey(userId);
-    if (!encryptedKey) throw fastError("Link your Ballsdex account first: Fast Sync checks the file against it.", 400, "NOT_LINKED");
+    if (!getGrant(userId)) {
+        throw needsReconnect(userId)
+            ? fastError("Sign in with Ballsdex again first: Fast Sync checks the file against your account.", 400, "RECONNECT")
+            : fastError("Link your Ballsdex account first: Fast Sync checks the file against it.", 400, "NOT_LINKED");
+    }
     if (syncStates.get(userId)?.inProgress) throw fastError("Your collection is already being synchronized.", 409, "IN_PROGRESS");
     const left = fastCooldownLeftMs(userId);
     if (left > 0) throw Object.assign(fastError(`You can use Fast Sync again in ${Math.ceil(left / 60000)} min.`, 429, "COOLDOWN"), { retryAfterSec: Math.ceil(left / 1000) });
@@ -1474,10 +1627,10 @@ function startFastSync(userId, { url } = {}) {
             state.progress = { phase: "verifying", fetched: rows.length, total: rows.length };
 
             // Does the file belong to this account and match it now?
-            const apiKey = decryptApiKey(encryptedKey);
-            const profile = await ballsdexRequest(apiKey, "/me");
+            const cred = credentialFor(userId);
+            const profile = await ballsdexRequest(cred, "/me");
             if (profile?.discord_id && String(profile.discord_id) !== userId) throw fastError("Your linked Ballsdex key belongs to another account.", 403);
-            const totals = await getPlayerTotals(apiKey, userId);
+            const totals = await getPlayerTotals(cred, userId);
             if (totals) {
                 const drift = Math.abs(totals.ballCount - rows.length);
                 if (drift > Math.max(25, rows.length * 0.01)) {
@@ -1488,7 +1641,7 @@ function startFastSync(userId, { url } = {}) {
             let matches = 0;
             for (const row of samples) {
                 try {
-                    const ball = await ballsdexRequest(apiKey, `/me/balls/${row[0]}`);
+                    const ball = await ballsdexRequest(cred, `/me/balls/${row[0]}`);
                     if (ball?.ball?.country === row[1] && (ball.special?.name || "") === row[2]) matches += 1;
                 } catch (error) {
                     if (error.status !== 404 && error.status !== 403) throw error;
@@ -1497,7 +1650,7 @@ function startFastSync(userId, { url } = {}) {
             if (matches < samples.length - 1) throw fastError("This export doesn't match the balls in your Ballsdex account. Export a fresh one with /player settings.");
 
             state.progress = { phase: "saving", fetched: rows.length, total: rows.length };
-            const { balls: ballIds, specials: specialIds } = await getCatalog(apiKey);
+            const { balls: ballIds, specials: specialIds } = await getCatalog(cred);
             const balls = rows.map(([id, country, special, caughtAt, traded]) => ({
                 id,
                 ball: { id: ballIds.get(country.toLowerCase()), country },
@@ -1562,21 +1715,19 @@ function startFastSync(userId, { url } = {}) {
  */
 async function verifyFileBall(userId, ballId) {
     userId = String(userId);
-    const encryptedKey = getSavedApiKey(userId);
-    if (!encryptedKey) return false;
+    const cred = credentialFor(userId); // throws when the sign-in is missing
     const doc = await (await fileInstances()).findOne({ userId, ballId: Number(ballId) });
     const ids = doc?.ids || [];
     if (!ids.length) return false;
     const picks = new Set();
     while (picks.size < Math.min(FILE_CHECK_SAMPLES, ids.length)) picks.add(ids[crypto.randomInt(ids.length)]);
 
-    const apiKey = decryptApiKey(encryptedKey);
     let matches = 0;
     const list = [...picks];
     for (let index = 0; index < list.length; index += 5) {
         const results = await Promise.all(
             list.slice(index, index + 5).map((id) =>
-                ballsdexRequest(apiKey, `/me/balls/${id}`, {}, INTERACTIVE).then(
+                ballsdexRequest(cred, `/me/balls/${id}`, {}, INTERACTIVE).then(
                     (ball) => Number(ball?.ball?.id) === Number(ballId),
                     (error) => {
                         if (error.status === 404 || error.status === 403) return false;
@@ -1598,8 +1749,10 @@ module.exports = {
     computeRaws,
     sendDueSyncReminders,
     resumeInterruptedSyncs,
-    decryptFromSite,
-    linkApiKey,
+    connectOAuth,
+    credentialFor,
+    isLinked,
+    needsReconnect,
     unlinkAccount,
     getSyncState,
     getSyncOverview,
@@ -1615,6 +1768,5 @@ module.exports = {
     getSavedApiKey,
     getStoredCollection,
     removeApiKey,
-    saveApiKey,
     syncCollection,
 };
