@@ -3,8 +3,8 @@
  *
  * Every type can be turned on/off (shown in the website's notification history) and,
  * independently, sent as a Discord DM. Settings live in data.json users[id].notificationSettings;
- * the older /notifications keys (users[id].notifications.thanks / .reminder) stay in sync for the
- * two vote types. The website history (users[id].inbox) is kept only for users who have opened the
+ * the keys of the removed /notifications command (users[id].notifications.thanks / .reminder) stay
+ * in sync for the two vote types. The website history (users[id].inbox) is kept only for users who have opened the
  * website at least once (users[id].web), capped at INBOX_LIMIT entries.
  */
 
@@ -62,7 +62,7 @@ function getSettings(userId, data = getData()) {
     const settings = {};
     for (const [type, { defaults }] of Object.entries(TYPES)) {
         const value = { ...defaults, ...(stored[type] || {}) };
-        // The old /notifications DM switches keep working until the user changes the new setting
+        // DM switches saved by the removed /notifications command keep working until the user changes the setting
         if (!stored[type]) {
             if (type === "vote_thanks") value.dm = legacy.thanks !== false;
             if (type === "vote_reminder") value.dm = legacy.reminder === true;

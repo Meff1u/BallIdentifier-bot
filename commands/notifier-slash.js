@@ -19,8 +19,8 @@ module.exports = {
             .setColor(COLORS.INFO)
             .setTitle("🔔 Notifier Setup Moved")
             .setDescription(
-                "The notifier configuration has been moved to our **[Dashboard](https://ballidentifier.xyz/dashboard)**!\n\n" +
-                "Please visit the dashboard to set up, view, or manage your notifier configuration."
+                "The notifier is set up on the website, in the **[Bot tab](https://ballidentifier.xyz/#/bot/notifier)**.\n\n" +
+                "Log in with Discord there to set up, view or change the notifier of a server you manage."
             );
 
         await interaction.reply({

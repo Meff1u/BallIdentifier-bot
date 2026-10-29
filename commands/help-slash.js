@@ -75,7 +75,7 @@ module.exports = {
                 },
                 {
                     name: "Links",
-                    value: "[GitHub Repository](https://github.com/Meff1u/BallIdentifier-bot)\n[Website](https://ballidentifier.xyz)",
+                    value: "[GitHub Repository](https://github.com/Meff1u/BallIdentifier-bot)\n[Website](https://ballidentifier.xyz)\n[All features & commands](https://ballidentifier.xyz/#/bot)\nNotification settings: website, bell icon",
                     inline: false,
                 },
                 {

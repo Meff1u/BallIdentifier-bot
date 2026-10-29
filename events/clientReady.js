@@ -192,7 +192,7 @@ module.exports = {
                 await notifications.notify(vote.id, "vote_thanks", {
                     title: "Thanks for voting!",
                     body: "Your upvote removes the identify cooldown while it's active.",
-                    dmText: "Thanks for voting!\n-# You can turn this message off with </notifications:1388927499248996473> or on https://ballidentifier.xyz",
+                    dmText: "Thanks for voting!\n-# You can turn this message off on https://ballidentifier.xyz (bell icon)",
                 });
 
                 // Send webhook notification
