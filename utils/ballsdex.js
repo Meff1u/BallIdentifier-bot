@@ -2,6 +2,7 @@ const crypto = require("crypto");
 
 const { getData, updateData } = require("./helpers");
 const { getDatabase } = require("./database");
+const { ADMIN_ID } = require("./constants");
 
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
@@ -652,6 +653,7 @@ function getSyncRecord(userId) {
 }
 
 function cooldownLeftMs(userId) {
+    if (userId === ADMIN_ID) return 0; // the owner has no sync cooldown
     const until = getSyncRecord(userId).nextSyncAt ? new Date(getSyncRecord(userId).nextSyncAt).getTime() : 0;
     return Math.max(0, until - Date.now());
 }
@@ -678,7 +680,7 @@ function getSyncState(userId) {
 }
 
 function finishSync(userId, state, outcome) {
-    const cooldown = outcome === "success" ? SYNC_COOLDOWN_MS : SYNC_RETRY_COOLDOWN_MS;
+    const cooldown = userId === ADMIN_ID ? 0 : outcome === "success" ? SYNC_COOLDOWN_MS : SYNC_RETRY_COOLDOWN_MS;
     const nextSyncAt = new Date(Date.now() + cooldown).toISOString();
     updateData((data) => {
         data.users[userId] ??= {};
@@ -687,7 +689,7 @@ function finishSync(userId, state, outcome) {
             lastOutcome: outcome,
             nextSyncAt,
             // remind only after a real sync; a quick retry window needs no notification
-            notifyAvailableAt: outcome === "success" ? nextSyncAt : null,
+            notifyAvailableAt: outcome === "success" && userId !== ADMIN_ID ? nextSyncAt : null,
         };
     });
     state.inProgress = false;
