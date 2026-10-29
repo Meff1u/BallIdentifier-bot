@@ -527,11 +527,11 @@ app.post("/api/users/:userId/ballsdex/link", apiLimiter, verifySignature, async 
         if (error.status === 401 || error.status === 403) {
             return res.status(400).json({ error: "Ballsdex rejected this API key. Check that it is correct and has all scopes.", code: "INVALID_KEY" });
         }
-        if (error.status === 429) {
-            return res.status(429).json({ error: "The Ballsdex API is rate limiting requests. Try again later." });
+        if (error.code === "RATE_LIMITED") {
+            return res.status(429).json({ error: error.message, code: "RATE_LIMITED", retryAfterSec: error.retryAfterSec });
         }
-        console.error("[API] Ballsdex link failed:", error);
-        res.status(502).json({ error: "Could not reach the Ballsdex API. Try again later." });
+        if (!error.ballsdexApi) console.error("[API] Ballsdex link failed:", error);
+        res.status(503).json({ error: error.ballsdexApi ? error.message : "Could not reach the Ballsdex API. Try again later.", code: error.code || "UNAVAILABLE" });
     }
 });
 
@@ -611,9 +611,9 @@ app.get("/api/users/:userId/ballsdex/ratelimit", apiLimiter, verifySignature, as
         if (!limits) return res.status(200).json({ available: false, reason: "NOT_LINKED" });
         res.status(200).json({ available: true, ...limits });
     } catch (error) {
-        console.error("[API] Rate limits failed:", error.message);
-        const message = error.status === 401 || error.status === 403 ? "Ballsdex rejected your API key. Link it again." : "Couldn't reach the Ballsdex API.";
-        res.status(502).json({ error: message });
+        if (!error.ballsdexApi) console.error("[API] Rate limits failed:", error.message);
+        const message = error.status === 401 || error.status === 403 ? "Ballsdex rejected your API key. Link it again." : error.ballsdexApi ? error.message : "Couldn't reach the Ballsdex API.";
+        res.status(503).json({ error: message, code: error.code || "UNAVAILABLE" });
     }
 });
 
@@ -761,8 +761,8 @@ app.get("/api/specials", generalLimiter, verifySignature, async (req, res) => {
     try {
         res.status(200).json(await specials.getSpecials());
     } catch (error) {
-        client?.logError?.("Specials list failed", error);
-        res.status(500).json({ error: "Couldn't load the specials." });
+        if (!error.ballsdexApi) client?.logError?.("Specials list failed", error);
+        res.status(503).json({ error: error.ballsdexApi ? `Couldn't load the specials. ${error.message}` : "Couldn't load the specials." });
     }
 });
 
@@ -770,9 +770,10 @@ app.get("/api/specials/:specialId/market", generalLimiter, verifySignature, asyn
     try {
         res.status(200).json(await specials.getSpecialMarket(Number(req.params.specialId)));
     } catch (error) {
-        if (error.status === 404) return res.status(404).json({ error: "Unknown special" });
-        client?.logError?.("Special market data failed", error);
-        res.status(502).json({ error: "Couldn't load the market data from Ballsdex. Try again later." });
+        if (error.status === 404 && !error.ballsdexApi) return res.status(404).json({ error: "Unknown special" });
+        if (error.code === "RATE_LIMITED") return res.status(429).json({ error: `Couldn't load the market data. ${error.message}`, code: "RATE_LIMITED", retryAfterSec: error.retryAfterSec });
+        if (!error.ballsdexApi) client?.logError?.("Special market data failed", error);
+        res.status(503).json({ error: error.ballsdexApi ? `Couldn't load the market data. ${error.message}` : "Couldn't load the market data from Ballsdex. Try again later." });
     }
 });
 

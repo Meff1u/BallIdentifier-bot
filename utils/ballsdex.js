@@ -87,16 +87,75 @@ function decryptApiKey(encryptedKey) {
 
 const MAX_RATE_LIMIT_WAIT_MS = 120 * 1000;
 const MAX_429_RETRIES = 5;
+const REQUEST_TIMEOUT_MS = 30 * 1000;
+// Requests someone is waiting for (website, commands): no long waits on a 429, a short timeout.
+// The website's functions give up after about 10 s, so these must answer well before that.
+const INTERACTIVE = { maxWaitMs: 3000, retries: 1, timeoutMs: 7000 };
 
-async function readError(response) {
-    let detail = `HTTP ${response.status}`;
+const formatWait = (seconds) => {
+    const s = Math.max(1, Math.ceil(seconds));
+    if (s < 60) return `${s} s`;
+    if (s < 3600) return `${Math.ceil(s / 60)} min`;
+    const h = Math.floor(s / 3600);
+    const m = Math.round((s % 3600) / 60);
+    return m ? `${h} h ${m} min` : `${h} h`;
+};
+
+/** Which limit a 429 came from, from the headers recorded with it: "key", "ip" or null when unknown. */
+function exhaustedScope(apiKey) {
+    const key = viewRateLimits(keyRateLimits.get(hashKey(apiKey)))?.limits.some((limit) => limit.remaining <= 0);
+    if (key) return "key";
+    return viewRateLimits(ipRateLimits)?.limits.some((limit) => limit.remaining <= 0) ? "ip" : null;
+}
+
+/**
+ * Every failed Ballsdex API call ends up here, so users always get a readable message.
+ * error.status: the HTTP status (503 when Ballsdex couldn't be reached at all), error.code: what went wrong,
+ * error.reason: the message without "try again in…", error.retryAfterSec: when it makes sense to retry.
+ */
+function apiError(status, { detail = null, retryAfterSec = null, apiKey = null } = {}) {
+    let code;
+    let reason;
+    if (status === 429) {
+        code = "RATE_LIMITED";
+        const scope = apiKey ? exhaustedScope(apiKey) : null;
+        reason =
+            scope === "ip"
+                ? "BallIdentifier has used up its Ballsdex API requests for now (they're shared by everyone)."
+                : scope === "key"
+                  ? "Your Ballsdex API key has run out of requests for now."
+                  : "The Ballsdex API is rate limiting requests right now.";
+    } else if (status === 401) {
+        code = "INVALID_KEY";
+        reason = "Ballsdex rejected the API key. It may have been reset or deleted: link a new one in the Ballsdex tab.";
+    } else if (status === 403) {
+        code = "FORBIDDEN";
+        reason = `Ballsdex refused this request${detail ? ` (${detail})` : ""}. Your API key may be missing a permission.`;
+    } else if (status === 404) {
+        code = "NOT_FOUND";
+        reason = detail || "Not found on Ballsdex.";
+    } else if (status >= 500) {
+        code = "UNAVAILABLE";
+        reason = "The Ballsdex API isn't responding right now.";
+    } else {
+        code = "API_ERROR";
+        reason = detail ? `The Ballsdex API said: ${detail}` : `The Ballsdex API returned an error (HTTP ${status}).`;
+    }
+    const retry = code === "RATE_LIMITED" ? (retryAfterSec ? ` Try again in ${formatWait(retryAfterSec)}.` : " Try again later.") : code === "UNAVAILABLE" ? " Try again in a few minutes." : "";
+    return Object.assign(new Error(reason + retry), { status, code, reason, detail, retryAfterSec: retryAfterSec ? Math.ceil(retryAfterSec) : null, ballsdexApi: true });
+}
+
+async function readError(response, apiKey = null) {
+    let detail = null;
     try {
         const body = await response.json();
-        detail = body.detail || body.title || detail;
+        detail = typeof (body.detail || body.title) === "string" ? String(body.detail || body.title).slice(0, 200) : null;
     } catch (error) {}
-    const error = new Error(detail);
-    error.status = response.status;
-    return error;
+    let retryAfterSec = null;
+    if (response.status === 429) {
+        retryAfterSec = Number(response.headers.get("retry-after")) || (apiKey && exhaustedScope(apiKey) ? Math.max(1, (exhaustedResetTime(apiKey) - 60 * 1000 - Date.now()) / 1000) : null);
+    }
+    return apiError(response.status, { detail, retryAfterSec, apiKey });
 }
 
 const RATE_PROBE_MAX_AGE_MS = 30 * 1000;
@@ -225,7 +284,7 @@ async function getRateLimits(userId) {
     const snapshot = keyRateLimits.get(hash);
     if (!snapshot || Date.now() - snapshot.at > RATE_PROBE_MAX_AGE_MS) {
         try {
-            await ballsdexFetch(apiKey, "/me", {}, { retry: false });
+            await ballsdexFetch(apiKey, "/me", {}, { ...INTERACTIVE, retry: false });
         } catch (error) {
             if (error.status !== 429) throw error; // a 429 still carries the headers
         }
@@ -234,29 +293,44 @@ async function getRateLimits(userId) {
 }
 
 // One API call that follows the documented rate-limit headers (https://ballsdex.com/api/docs/):
-// waits out a 429 using Retry-After, and returns how long to pause before the next call.
-async function ballsdexFetch(apiKey, path, query = {}, { retry = true } = {}) {
+// waits out a short 429 using Retry-After, and returns how long to pause before the next call.
+// Background work (syncs) waits up to 2 min per 429; INTERACTIVE calls give up after a few seconds.
+async function ballsdexFetch(apiKey, path, query = {}, { retry = true, maxWaitMs = MAX_RATE_LIMIT_WAIT_MS, retries = MAX_429_RETRIES, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
     const url = new URL(`${API_BASE_URL}${path}`);
     Object.entries(query).forEach(([key, value]) => {
         if (value !== undefined && value !== null) url.searchParams.set(key, value);
     });
 
     for (let attempt = 0; ; attempt++) {
-        const response = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+        let response;
+        try {
+            response = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(timeoutMs) });
+        } catch (error) {
+            // Network error or timeout: Ballsdex couldn't be reached at all
+            throw apiError(503, { detail: error.name === "TimeoutError" || error.name === "AbortError" ? "timeout" : error.message });
+        }
         recordRateLimits(apiKey, response.headers);
 
-        if (response.status === 429 && retry && attempt < MAX_429_RETRIES) {
+        if (response.status === 429) {
             const waitMs = (Number(response.headers.get("retry-after")) || 2) * 1000;
-            if (waitMs > MAX_RATE_LIMIT_WAIT_MS) throw await readError(response);
-            await sleep(waitMs + 250);
-            continue;
+            if (retry && attempt < retries && waitMs <= maxWaitMs) {
+                await sleep(waitMs + 250);
+                continue;
+            }
+            throw await readError(response, apiKey);
         }
-        if (!response.ok) throw await readError(response);
+        if (!response.ok) throw await readError(response, apiKey);
 
         const remaining = response.headers.get("x-ratelimit-remaining");
         const resetAfter = Number(response.headers.get("x-ratelimit-reset-after")) || 0;
         const waitMs = remaining === "0" ? Math.min(resetAfter * 1000 + 250, MAX_RATE_LIMIT_WAIT_MS) : 0;
-        return { data: await response.json(), waitMs };
+        let data;
+        try {
+            data = await response.json();
+        } catch {
+            throw apiError(502, { detail: "invalid response" });
+        }
+        return { data, waitMs };
     }
 }
 
@@ -291,8 +365,8 @@ function syncPageDelay(apiKey, waitMs = 0) {
     return Math.min(Math.max(delay, waitMs), MAX_RATE_LIMIT_WAIT_MS);
 }
 
-async function ballsdexRequest(apiKey, path, query = {}) {
-    return (await ballsdexFetch(apiKey, path, query)).data;
+async function ballsdexRequest(apiKey, path, query = {}, options = {}) {
+    return (await ballsdexFetch(apiKey, path, query, options)).data;
 }
 
 function getItems(response) {
@@ -808,7 +882,14 @@ async function linkApiKey(userId, apiKey) {
     }
     linkCooldowns.set(userId, Date.now() + LINK_COOLDOWN_MS);
 
-    const profile = await ballsdexRequest(apiKey, "/me");
+    let profile;
+    try {
+        profile = await ballsdexRequest(apiKey, "/me", {}, INTERACTIVE);
+    } catch (error) {
+        // Not the user's fault (rate limit, Ballsdex down): let them try again right away
+        if (error.code === "RATE_LIMITED" || error.code === "UNAVAILABLE") linkCooldowns.delete(userId);
+        throw error;
+    }
     const linkedAccountId = String(profile.discord_id || profile.id || "");
     if (linkedAccountId !== String(userId)) {
         const error = new Error("That API key belongs to a different Discord account.");
@@ -1020,20 +1101,23 @@ function runSync(userId, encryptedKey, { resume = null } = {}) {
             } else if (error.code === "QUOTA" || error.status === 429) {
                 // Out of today's requests: keep the progress and continue when the quota resets
                 outcome = "paused";
-                state.resumeAt = error.resumeAt || (apiKey ? exhaustedResetTime(apiKey) : Date.now() + 3600 * 1000);
+                state.resumeAt =
+                    error.resumeAt ||
+                    Math.max(apiKey ? exhaustedResetTime(apiKey) : 0, error.retryAfterSec ? Date.now() + (error.retryAfterSec + 60) * 1000 : 0) ||
+                    Date.now() + 3600 * 1000;
                 const hours = Math.max(1, Math.round((state.resumeAt - Date.now()) / 3600000));
                 const fetched = (state.progress?.fetched || 0).toLocaleString("en-US");
                 getNotifier()
                     .notify(userId, "sync_finished", {
                         title: "Ballsdex sync paused",
-                        body: `${error.message} ${fetched} balls are saved; the sync continues by itself in about ${hours} h.`,
+                        body: `${error.reason || error.message} ${fetched} balls are saved; the sync continues by itself in about ${hours} h.`,
                         link: "#/ballsdex",
-                        dmText: `Your Ballsdex sync paused after ${fetched} balls: ${error.message} It continues by itself in about ${hours} h, nothing is lost.`,
+                        dmText: `Your Ballsdex sync paused after ${fetched} balls: ${error.reason || error.message} It continues by itself in about ${hours} h, nothing is lost.`,
                     })
                     .catch(() => {});
             } else {
-                console.error("[BALLSDEX] Failed to sync collection:", error);
-                state.error = error.status === 429 ? "The Ballsdex API rate limit was reached. Try again later." : error.message;
+                if (!error.ballsdexApi) console.error("[BALLSDEX] Failed to sync collection:", error);
+                state.error = error.message;
                 getNotifier()
                     .notify(userId, "sync_finished", {
                         title: "Ballsdex sync failed",
@@ -1384,6 +1468,7 @@ function startFastSync(userId, { url } = {}) {
 
     void (async () => {
         let outcome = "failed";
+        let retryWaitMs = FAST_SYNC_RETRY_MS;
         try {
             const rows = parseExport(unzipExport(await downloadExport(link.url), userId));
             state.progress = { phase: "verifying", fetched: rows.length, total: rows.length };
@@ -1450,9 +1535,11 @@ function startFastSync(userId, { url } = {}) {
                 .catch(() => {});
         } catch (error) {
             if (!error.status) console.error("[BALLSDEX] Fast Sync failed:", error);
-            state.error = error.status === 429 ? "The Ballsdex API is rate limiting requests. Try again later." : error.message;
+            state.error = error.message;
+            // Out of API requests: the next try only makes sense once they're back
+            if (error.code === "RATE_LIMITED" && error.retryAfterSec) retryWaitMs = Math.min(24 * 3600 * 1000, Math.max(FAST_SYNC_RETRY_MS, error.retryAfterSec * 1000));
         } finally {
-            const wait = userId === ADMIN_ID ? 0 : outcome === "success" ? FAST_SYNC_COOLDOWN_MS : FAST_SYNC_RETRY_MS;
+            const wait = userId === ADMIN_ID ? 0 : outcome === "success" ? FAST_SYNC_COOLDOWN_MS : retryWaitMs;
             updateData((data) => {
                 data.users[userId] ??= {};
                 data.users[userId].ballsdexSync ??= {};
@@ -1489,7 +1576,7 @@ async function verifyFileBall(userId, ballId) {
     for (let index = 0; index < list.length; index += 5) {
         const results = await Promise.all(
             list.slice(index, index + 5).map((id) =>
-                ballsdexRequest(apiKey, `/me/balls/${id}`).then(
+                ballsdexRequest(apiKey, `/me/balls/${id}`, {}, INTERACTIVE).then(
                     (ball) => Number(ball?.ball?.id) === Number(ballId),
                     (error) => {
                         if (error.status === 404 || error.status === 403) return false;
@@ -1520,6 +1607,7 @@ module.exports = {
     getRateLimits,
     startSync,
     ballsdexRequest,
+    INTERACTIVE,
     buildCollectionSummary,
     decryptApiKey,
     deleteStoredCollection,

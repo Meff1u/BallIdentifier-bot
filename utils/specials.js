@@ -42,20 +42,20 @@ function ownerKey() {
 }
 
 async function fetchOfficial() {
-    const { ballsdexRequest } = ballsdex();
+    const { ballsdexRequest, INTERACTIVE } = ballsdex();
     const apiKey = ownerKey();
 
     const specials = [];
     let cursor;
     do {
-        const page = await ballsdexRequest(apiKey, "/specials", { limit: 100, cursor });
+        const page = await ballsdexRequest(apiKey, "/specials", { limit: 100, cursor }, INTERACTIVE);
         specials.push(...(page.items || []));
         cursor = page.next_cursor || undefined;
     } while (cursor);
 
     // Market data is optional
-    const recent = await ballsdexRequest(apiKey, "/market/specials", { window: 30 }).catch(() => null);
-    const all = await ballsdexRequest(apiKey, "/market/specials", { window: ALL_TIME_WINDOW }).catch(() => null);
+    const recent = await ballsdexRequest(apiKey, "/market/specials", { window: 30 }, INTERACTIVE).catch(() => null);
+    const all = await ballsdexRequest(apiKey, "/market/specials", { window: ALL_TIME_WINDOW }, INTERACTIVE).catch(() => null);
     return {
         specials,
         market: recent?.items || [],
@@ -70,8 +70,9 @@ async function refreshOfficial(force = false) {
     refreshing ??= fetchOfficial()
         .then((result) => (official = { at: Date.now(), ...result, error: null }))
         .catch((error) => {
-            // keep what we had; try again in 15 minutes
-            official = { ...official, at: Date.now() - OFFICIAL_TTL_MS + 15 * 60 * 1000, error: error.message };
+            // keep what we had; try again in 15 minutes, or once the rate limit is over (at least a minute)
+            const retryMs = error.retryAfterSec ? Math.min(15 * 60, Math.max(60, error.retryAfterSec)) * 1000 : 15 * 60 * 1000;
+            official = { ...official, at: Date.now() - OFFICIAL_TTL_MS + retryMs, error: error.message };
             return official;
         })
         .finally(() => (refreshing = null));
@@ -88,7 +89,9 @@ async function loadEdits() {
 
 /** Every known special, newest first. */
 async function getSpecials() {
-    await refreshOfficial();
+    // Old data is fine while a refresh runs in the background (the page shouldn't wait on Ballsdex)
+    if (official.specials.length) refreshOfficial();
+    else await refreshOfficial();
     let edited = new Map();
     try {
         edited = await loadEdits();
@@ -142,10 +145,10 @@ async function getSpecials() {
 
 /** Sale history of one special (all the history Ballsdex keeps), with a few numbers worked out. */
 async function fetchMarket(id) {
-    const { ballsdexRequest } = ballsdex();
+    const { ballsdexRequest, INTERACTIVE } = ballsdex();
     let history;
     try {
-        history = await ballsdexRequest(ownerKey(), `/market/specials/${id}/history`, { window: ALL_TIME_WINDOW });
+        history = await ballsdexRequest(ownerKey(), `/market/specials/${id}/history`, { window: ALL_TIME_WINDOW }, INTERACTIVE);
     } catch (error) {
         if (error.status === 404) return { id, windowDays: null, totalSales: 0, series: [], balls: [], recentSales: [] };
         throw error;

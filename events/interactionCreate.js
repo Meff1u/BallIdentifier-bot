@@ -138,9 +138,15 @@ module.exports = {
                         content: "Your Ballsdex account has been linked securely.",
                     });
                 } catch (error) {
-                    console.error("[BALLSDEX] Failed to link account:", error);
+                    if (!error.ballsdexApi && !error.code) console.error("[BALLSDEX] Failed to link account:", error);
+                    const message =
+                        error.code === "INVALID_KEY" || error.code === "FORBIDDEN"
+                            ? "Ballsdex rejected this API key. Check that it is correct and has all scopes."
+                            : error.ballsdexApi || error.code
+                              ? error.message
+                              : "Something went wrong. Try again in a moment.";
                     return interaction.editReply({
-                        content: `Could not link your Ballsdex account: ${error.message}`,
+                        content: `Could not link your Ballsdex account: ${message}`,
                     });
                 }
             }

@@ -282,7 +282,17 @@ async function checkBallsdexOwnership(userId, found) {
     }
     // Imported with Fast Sync: a file can be edited, so check some of these balls in the Ballsdex account itself
     if (stored.summary?.source === "file") {
-        const confirmed = await verifyFileBall(userId, found.ball.id).catch(() => false);
+        let confirmed;
+        try {
+            confirmed = await verifyFileBall(userId, found.ball.id);
+        } catch (error) {
+            // Ballsdex couldn't answer (rate limit, outage): that's not "these balls aren't yours"
+            if (error.ballsdexApi && error.code !== "INVALID_KEY") {
+                throw fail(error.status === 429 ? 429 : 503, `Your Fast Sync balls couldn't be checked in Ballsdex right now. ${error.message}`, "BALLSDEX_UNAVAILABLE");
+            }
+            if (error.code === "INVALID_KEY") throw fail(403, error.message, "INVALID_KEY");
+            confirmed = false;
+        }
         if (!confirmed) {
             throw fail(
                 403,
