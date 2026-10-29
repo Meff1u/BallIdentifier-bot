@@ -460,16 +460,26 @@ async function replaceSpecialCollection(collection, userId, balls) {
 }
 
 /** Non-special instance counts per ball, for the raws list. */
+// Specials that stand for a pile of non-special copies of the same ball ("compressed" non-specials)
+const COMPRESSED_SPECIALS = { bronze: 1000, silver: 3000, gold: 5000 };
+
+/** How many non-special copies one instance is worth: 1 for a plain ball, 0 for a normal special. */
+function nonSpecialWorth(ball) {
+    if (!getSpecialId(ball) && !ball.special) return 1;
+    return COMPRESSED_SPECIALS[String(ball.special?.name || "").trim().toLowerCase()] || 0;
+}
+
 function countNonSpecial(balls) {
     const counts = new Map();
     for (const ball of balls) {
-        if (getSpecialId(ball) || ball.special) continue;
+        const worth = nonSpecialWorth(ball);
+        if (!worth) continue;
         const id = ball.ball?.id ?? ball.ball_id;
         const name = ball.ball?.country;
         if (id === undefined && !name) continue;
         const key = String(id ?? name);
         const entry = counts.get(key) || { ballId: id ?? null, name: name || null, count: 0 };
-        entry.count += 1;
+        entry.count += worth;
         counts.set(key, entry);
     }
     return [...counts.values()];
@@ -480,7 +490,8 @@ function countOwned(balls) {
     const counts = {};
     for (const ball of balls) {
         const id = ball.ball?.id ?? ball.ball_id;
-        if (id !== undefined && id !== null) counts[id] = (counts[id] || 0) + 1;
+        // Bronze/Silver/Gold count as the non-specials they stand for
+        if (id !== undefined && id !== null) counts[id] = (counts[id] || 0) + Math.max(1, nonSpecialWorth(ball));
     }
     return counts;
 }
