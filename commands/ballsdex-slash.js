@@ -183,7 +183,7 @@ module.exports = {
                     NOT_LINKED: "Link your Ballsdex account first with `/ballsdex link`.",
                     IN_PROGRESS: "Your Ballsdex collection is already being synchronized.",
                     BUSY: "Someone else's collection is being synchronized right now (only one sync can run at a time). I'll notify you as soon as you can start yours.",
-                    COOLDOWN: `You can sync again in ${wait}. Syncs are limited to one every 12 hours.`,
+                    COOLDOWN: `You can sync again in ${wait}. Syncs are limited to one every 24 hours.`,
                 };
                 return interaction.reply({ content: messages[result.reason], flags: MessageFlags.Ephemeral });
             }

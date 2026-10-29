@@ -517,7 +517,7 @@ app.post("/api/users/:userId/ballsdex/unlink", apiLimiter, verifySignature, asyn
     res.status(200).json({ success: true, linked: false, wasLinked });
 });
 
-// Start a background sync (one sync at a time for everyone; 12 h cooldown shared with /ballsdex sync)
+// Start a background sync (one sync at a time for everyone; 24 h cooldown shared with /ballsdex sync)
 app.post("/api/users/:userId/ballsdex/sync", apiLimiter, verifySignature, (req, res) => {
     const { userId } = req.params;
     const result = startSync(userId);

@@ -30,7 +30,7 @@ const TYPES = {
     },
     sync_available: {
         label: "Ballsdex sync available",
-        description: "Your 12-hour sync cooldown ended, or a busy sync slot freed up.",
+        description: "Your 24-hour sync cooldown ended, or a busy sync slot freed up.",
         defaults: { enabled: true, dm: false },
     },
     ballsdex_account: {

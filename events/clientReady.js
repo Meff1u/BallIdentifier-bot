@@ -180,7 +180,7 @@ module.exports = {
         };
         refreshLoop();
 
-        // "You can sync again" reminders (12 h after a Ballsdex sync)
+        // "You can sync again" reminders (24 h after a Ballsdex sync)
         setInterval(() => sendDueSyncReminders().catch((error) => console.error("[BALLSDEX] Reminder loop:", error.message)), REMINDER_INTERVAL);
 
         // Set up DBL polling and vote handler

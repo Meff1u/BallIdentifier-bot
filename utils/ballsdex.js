@@ -9,7 +9,7 @@ const API_BASE_URL = process.env.BALLSDEX_API_URL || "https://ballsdex.com/api/v
 const ENCRYPTION_ALGORITHM = "aes-256-gcm";
 const PAGE_SIZE = 25;
 const PAGE_REQUEST_DELAY = 1000; // ~60 pages/min: the per-key limit, and kind to the shared per-IP limit
-const SYNC_COOLDOWN_MS = 12 * 60 * 60 * 1000; // after a successful sync
+const SYNC_COOLDOWN_MS = 24 * 60 * 60 * 1000; // after a successful sync
 const SYNC_RETRY_COOLDOWN_MS = 5 * 60 * 1000; // after a failed or cancelled sync
 const TOP_ENTRIES = 5;
 
@@ -635,7 +635,7 @@ async function unlinkAccount(userId) {
 // Sync control, shared by /ballsdex and the website.
 // Only ONE sync runs at a time (all syncs share the bot's IP rate limit at Ballsdex). Someone who tries
 // while another sync runs is told so and gets a "sync available" notification when the slot frees up.
-// Per-user cooldown: 12 h after a successful sync, 5 min after a failed or cancelled one; persisted in
+// Per-user cooldown: 24 h after a successful sync, 5 min after a failed or cancelled one; persisted in
 // data.json users[id].ballsdexSync so restarts and unlink/relink don't reset it.
 // ---------------------------------------------------------------------------
 
@@ -815,7 +815,7 @@ async function sendDueSyncReminders() {
         await getNotifier()
             .notify(userId, "sync_available", {
                 title: "Your Ballsdex sync is available again",
-                body: "12 hours have passed since your last sync.",
+                body: "24 hours have passed since your last sync.",
                 link: "#/ballsdex",
                 dmText: "You can sync your Ballsdex collection again with `/ballsdex sync` or on https://ballidentifier.xyz/#/ballsdex",
             })
