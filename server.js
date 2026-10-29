@@ -21,8 +21,6 @@ const {
     getSyncOverview,
     cancelActiveSync,
     startFastSync,
-    addFastSyncChunk,
-    finishFastSync,
 } = require("./utils/ballsdex");
 const notifications = require("./utils/notifications");
 const collectorStore = require("./utils/collector-store");
@@ -53,8 +51,8 @@ const jsonBody = (limit) =>
         },
     });
 const smallJson = jsonBody("1kb");
-// Routes with their own, bigger body limit: dex art uploads and Fast Sync file chunks
-const BIG_BODY_PATH = /^\/api\/users\/\d{17,20}\/(dex\/save|ballsdex\/fast-sync\/chunk)$/;
+// Routes with their own, bigger body limit: dex art uploads
+const BIG_BODY_PATH = /^\/api\/users\/\d{17,20}\/dex\/save$/;
 app.use((req, res, next) => (BIG_BODY_PATH.test(req.path) ? next() : smallJson(req, res, next)));
 
 let client;
@@ -562,39 +560,16 @@ app.post("/api/users/:userId/ballsdex/sync", apiLimiter, verifySignature, (req, 
     res.status(202).json({ success: true, sync: getSyncState(userId) });
 });
 
-// Fast Sync: import the CSV export of Ballsdex's /player settings (start -> chunks -> finish)
-const fastChunkLimiter = createRateLimiter(240, 60 * 1000, (req) => `fast:${req.params.userId}`);
-const fastSyncError = (res, error) => {
-    if (error.status) return res.status(error.status).json({ error: error.message, code: error.code, retryAfterSec: error.retryAfterSec ?? null });
-    console.error("[API] Fast Sync failed:", error);
-    return res.status(500).json({ error: "Couldn't import the file. Try again." });
-};
-
-app.post("/api/users/:userId/ballsdex/fast-sync/start", apiLimiter, verifySignature, async (req, res) => {
+// Fast Sync: import the /player settings export from its Discord link (downloaded and checked by the bot)
+app.post("/api/users/:userId/ballsdex/fast-sync", apiLimiter, verifySignature, (req, res) => {
     try {
-        const { fileName, total } = req.body || {};
-        res.status(200).json(await startFastSync(req.params.userId, { fileName, total }));
-    } catch (error) {
-        fastSyncError(res, error);
-    }
-});
-
-app.post("/api/users/:userId/ballsdex/fast-sync/chunk", fastChunkLimiter, jsonBody("8mb"), verifySignature, async (req, res) => {
-    try {
-        const { uploadId, index, rows } = req.body || {};
-        res.status(200).json(await addFastSyncChunk(req.params.userId, { uploadId, index, rows }));
-    } catch (error) {
-        fastSyncError(res, error);
-    }
-});
-
-app.post("/api/users/:userId/ballsdex/fast-sync/finish", apiLimiter, verifySignature, (req, res) => {
-    try {
-        const sync = finishFastSync(req.params.userId, { uploadId: req.body?.uploadId });
-        client?.log?.("BALLSDEX", `<@${req.params.userId}> started a Fast Sync from a file (website)`);
+        const sync = startFastSync(req.params.userId, { url: req.body?.url });
+        client?.log?.("BALLSDEX", `<@${req.params.userId}> started a Fast Sync from an export link (website)`);
         res.status(202).json({ success: true, sync });
     } catch (error) {
-        fastSyncError(res, error);
+        if (error.status) return res.status(error.status).json({ error: error.message, code: error.code, retryAfterSec: error.retryAfterSec ?? null });
+        console.error("[API] Fast Sync failed:", error);
+        res.status(500).json({ error: "Couldn't start the Fast Sync. Try again." });
     }
 });
 
