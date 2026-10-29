@@ -106,8 +106,40 @@ function markWebUser(userId) {
 
 function getInbox(userId) {
     const data = getData();
-    const items = data.users[userId]?.inbox || [];
-    return { items, unread: items.filter((item) => !item.read).length, settings: getSettings(userId, data) };
+    const user = data.users[userId] || {};
+    const items = user.inbox || [];
+    // dmBlockedAt: the last DM failed because Discord doesn't let the bot reach this user (see sendDm)
+    return { items, unread: items.filter((item) => !item.read).length, settings: getSettings(userId, data), dmReachable: !user.dmBlockedAt };
+}
+
+// Discord refuses a bot's DM when the user shares no server with it and hasn't added the app to their
+// account (50278), or has DMs closed (50007). Those are expected, so they're remembered, not logged as errors.
+const DM_BLOCKED_CODES = new Set([50007, 50278]);
+
+/** Sends a DM; remembers whether the user can be reached so the website can explain how to fix it. */
+async function sendDm(userId, text) {
+    try {
+        const user = await client.users.fetch(userId);
+        await user.send(text);
+        if (getData().users[userId]?.dmBlockedAt) {
+            updateData((data) => {
+                if (data.users[userId]) delete data.users[userId].dmBlockedAt;
+            });
+        }
+        return true;
+    } catch (error) {
+        if (DM_BLOCKED_CODES.has(error.code)) {
+            if (!getData().users[userId]?.dmBlockedAt) {
+                updateData((data) => {
+                    data.users[userId] ??= {};
+                    data.users[userId].dmBlockedAt = new Date().toISOString();
+                });
+            }
+        } else {
+            console.error(`[NOTIFY] DM to ${userId} failed:`, error.message);
+        }
+        return false;
+    }
 }
 
 function markRead(userId, ids) {
@@ -140,13 +172,7 @@ async function notify(userId, type, { title, body = "", link = null, dmText } = 
 
     let dm = false;
     if (settings.dm && client) {
-        try {
-            const user = await client.users.fetch(userId);
-            await user.send(dmText || `**${title}**${body ? `\n${body}` : ""}`);
-            dm = true;
-        } catch (error) {
-            console.error(`[NOTIFY] DM ${type} to ${userId} failed:`, error.message);
-        }
+        dm = await sendDm(userId, dmText || `**${title}**${body ? `\n${body}` : ""}`);
     }
     return { stored, dm };
 }
@@ -190,12 +216,7 @@ async function notifyChangelog(entries) {
     for (const [userId, lines] of dms) {
         let text = lines.join("\n");
         if (text.length > 1800) text = `${text.slice(0, 1800)}\n…`;
-        try {
-            const user = await client?.users.fetch(userId);
-            await user?.send(`${text}\n-# Full changelog and settings: https://ballidentifier.xyz`);
-        } catch (error) {
-            console.error(`[NOTIFY] update DM to ${userId} failed:`, error.message);
-        }
+        if (client) await sendDm(userId, `${text}\n-# Full changelog and settings: https://ballidentifier.xyz`);
         await new Promise((resolve) => setTimeout(resolve, 1000));
     }
 }
