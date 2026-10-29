@@ -7,7 +7,8 @@ const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fet
 
 const API_BASE_URL = process.env.BALLSDEX_API_URL || "https://ballsdex.com/api/v1";
 const ENCRYPTION_ALGORITHM = "aes-256-gcm";
-const PAGE_REQUEST_DELAY = 1100;
+const PAGE_SIZE = 25;
+const PAGE_REQUEST_DELAY = 1000; // ~60 pages/min: the per-key limit, and kind to the shared per-IP limit
 const SYNC_COOLDOWN_MS = 5 * 60 * 1000;
 const LINK_COOLDOWN_MS = 20 * 1000;
 const SPECIAL_WRITE_BATCH_SIZE = 500;
@@ -55,29 +56,48 @@ function decryptApiKey(encryptedKey) {
     ]).toString("utf8");
 }
 
-async function ballsdexRequest(apiKey, path, query = {}) {
-    const url = new URL(`${API_BASE_URL}${path}`);
+const MAX_RATE_LIMIT_WAIT_MS = 120 * 1000;
+const MAX_429_RETRIES = 5;
 
+async function readError(response) {
+    let detail = `HTTP ${response.status}`;
+    try {
+        const body = await response.json();
+        detail = body.detail || body.title || detail;
+    } catch (error) {}
+    const error = new Error(detail);
+    error.status = response.status;
+    return error;
+}
+
+// One API call that follows the documented rate-limit headers (https://ballsdex.com/api/docs/):
+// waits out a 429 using Retry-After, and returns how long to pause before the next call.
+async function ballsdexFetch(apiKey, path, query = {}) {
+    const url = new URL(`${API_BASE_URL}${path}`);
     Object.entries(query).forEach(([key, value]) => {
         if (value !== undefined && value !== null) url.searchParams.set(key, value);
     });
 
-    const response = await fetch(url, {
-        headers: { Authorization: `Bearer ${apiKey}` },
-    });
+    for (let attempt = 0; ; attempt++) {
+        const response = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
 
-    if (!response.ok) {
-        let detail = `HTTP ${response.status}`;
-        try {
-            const body = await response.json();
-            detail = body.detail || detail;
-        } catch (error) {}
-        const error = new Error(detail);
-        error.status = response.status;
-        throw error;
+        if (response.status === 429 && attempt < MAX_429_RETRIES) {
+            const waitMs = (Number(response.headers.get("retry-after")) || 2) * 1000;
+            if (waitMs > MAX_RATE_LIMIT_WAIT_MS) throw await readError(response);
+            await sleep(waitMs + 250);
+            continue;
+        }
+        if (!response.ok) throw await readError(response);
+
+        const remaining = response.headers.get("x-ratelimit-remaining");
+        const resetAfter = Number(response.headers.get("x-ratelimit-reset-after")) || 0;
+        const waitMs = remaining === "0" ? Math.min(resetAfter * 1000 + 250, MAX_RATE_LIMIT_WAIT_MS) : 0;
+        return { data: await response.json(), waitMs };
     }
+}
 
-    return response.json();
+async function ballsdexRequest(apiKey, path, query = {}) {
+    return (await ballsdexFetch(apiKey, path, query)).data;
 }
 
 function getItems(response) {
@@ -85,18 +105,32 @@ function getItems(response) {
     return response.items || response.results || response.data || [];
 }
 
-async function getAllMyBalls(apiKey) {
+// /me/balls returns at most 25 per page; walk next_cursor to the end
+async function getAllMyBalls(apiKey, onPage) {
     const balls = [];
     let cursor;
 
     do {
-        if (cursor) await sleep(PAGE_REQUEST_DELAY);
-        const response = await ballsdexRequest(apiKey, "/me/balls", { limit: 100, cursor });
-        balls.push(...getItems(response));
-        cursor = response.next_cursor;
+        const { data, waitMs } = await ballsdexFetch(apiKey, "/me/balls", { limit: PAGE_SIZE, cursor });
+        balls.push(...getItems(data));
+        cursor = data.next_cursor;
+        onPage?.(balls.length);
+        if (cursor) await sleep(Math.max(waitMs, PAGE_REQUEST_DELAY));
     } while (cursor);
 
     return balls;
+}
+
+// Ball/special totals as Ballsdex itself counts them. Null when the profile is private.
+async function getPlayerTotals(apiKey, discordUserId) {
+    try {
+        const player = await ballsdexRequest(apiKey, `/players/${discordUserId}`);
+        if (!Number.isFinite(player?.ball_count)) return null;
+        return { ballCount: player.ball_count, specialCount: Number.isFinite(player.special_count) ? player.special_count : null };
+    } catch (error) {
+        if (error.status === 404 || error.status === 403) return null;
+        throw error;
+    }
 }
 
 function getBallId(ball) {
@@ -107,7 +141,7 @@ function getSpecialId(ball) {
     return ball.special?.id || ball.special_id || null;
 }
 
-function buildCollectionSummary(profile, balls) {
+function buildCollectionSummary(profile, balls, totals = null) {
     const ballCounts = new Map();
     const countryCounts = new Map();
     const specialCounts = new Map();
@@ -205,10 +239,11 @@ function buildCollectionSummary(profile, balls) {
 
     return {
         displayName: profile.display_name || profile.username || profile.name || profile.user?.username || profile.player?.username || null,
-        totalBalls: balls.length,
+        totalBalls: totals?.ballCount ?? balls.length,
+        listedBalls: balls.length,
         uniqueBalls: ballCounts.size,
         duplicateCount,
-        specialCount,
+        specialCount: totals?.specialCount ?? specialCount,
         selfCaughtCount,
         favoriteCount,
         frameCount,
@@ -256,25 +291,20 @@ async function replaceSpecialCollection(collection, userId, balls) {
     return specialRecords.length;
 }
 
-async function syncCollection(discordUserId, apiKey) {
+async function syncCollection(discordUserId, apiKey, onProgress) {
     const database = await getDatabase();
     const ballsCollection = database.collection("ballsdexBalls");
     const collectionsCollection = database.collection("ballsdexCollections");
     const specialsCollection = database.collection("ballsdexSpecials");
     const profile = await ballsdexRequest(apiKey, "/me");
-    const balls = [];
-    let cursor;
+    const totals = await getPlayerTotals(apiKey, discordUserId);
+    const expected = totals?.ballCount ?? null;
 
-    do {
-        if (cursor) await sleep(PAGE_REQUEST_DELAY);
-        const response = await ballsdexRequest(apiKey, "/me/balls", { limit: 100, cursor });
-        const pageBalls = getItems(response);
+    onProgress?.({ phase: "balls", fetched: 0, total: expected });
+    const balls = await getAllMyBalls(apiKey, (fetched) => onProgress?.({ phase: "balls", fetched, total: expected }));
+    onProgress?.({ phase: "saving", fetched: balls.length, total: expected });
 
-        balls.push(...pageBalls);
-        cursor = response.next_cursor;
-    } while (cursor);
-
-    const summary = buildCollectionSummary(profile, balls);
+    const summary = buildCollectionSummary(profile, balls, totals);
     const syncedAt = new Date();
     const specialCount = await replaceSpecialCollection(specialsCollection, discordUserId, balls);
 
@@ -284,7 +314,7 @@ async function syncCollection(discordUserId, apiKey) {
             $set: {
                 discordUserId,
                 summary,
-                ballCount: balls.length,
+                ballCount: summary.totalBalls,
                 lastSyncedAt: syncedAt,
             },
             $unset: { profile: "", schemaVersion: "" },
@@ -293,7 +323,7 @@ async function syncCollection(discordUserId, apiKey) {
     );
     await ballsCollection.deleteMany({ discordUserId });
 
-    return { ballCount: balls.length, specialCount, syncedAt };
+    return { ballCount: summary.totalBalls, listedBalls: balls.length, specialCount, syncedAt };
 }
 
 async function getStoredCollection(discordUserId) {
@@ -387,13 +417,14 @@ const syncStates = new Map();
 function getSyncState(userId) {
     const state = syncStates.get(String(userId));
     if (!state) return { inProgress: false };
-    const nextAllowedAt = (state.startedAt || 0) + SYNC_COOLDOWN_MS;
+    const nextAllowedAt = (state.finishedAt || state.startedAt || 0) + SYNC_COOLDOWN_MS;
     return {
         inProgress: state.inProgress,
         startedAt: state.startedAt ? new Date(state.startedAt).toISOString() : null,
         finishedAt: state.finishedAt ? new Date(state.finishedAt).toISOString() : null,
         error: state.error || null,
         ballCount: state.ballCount ?? null,
+        progress: state.inProgress ? state.progress : null,
         retryAfterSec: state.inProgress ? null : Math.max(0, Math.ceil((nextAllowedAt - Date.now()) / 1000)),
     };
 }
@@ -405,20 +436,23 @@ function startSync(userId, { onDone } = {}) {
 
     const current = syncStates.get(userId);
     if (current?.inProgress) return { started: false, reason: "IN_PROGRESS" };
-    if (current?.startedAt && Date.now() - current.startedAt < SYNC_COOLDOWN_MS) {
+    const lastRun = current?.finishedAt || current?.startedAt;
+    if (lastRun && Date.now() - lastRun < SYNC_COOLDOWN_MS) {
         return {
             started: false,
             reason: "COOLDOWN",
-            retryAfterSec: Math.ceil((current.startedAt + SYNC_COOLDOWN_MS - Date.now()) / 1000),
+            retryAfterSec: Math.ceil((lastRun + SYNC_COOLDOWN_MS - Date.now()) / 1000),
         };
     }
 
-    const state = { inProgress: true, startedAt: Date.now(), finishedAt: null, error: null, ballCount: null };
+    const state = { inProgress: true, startedAt: Date.now(), finishedAt: null, error: null, ballCount: null, progress: { phase: "starting", fetched: 0, total: null } };
     syncStates.set(userId, state);
 
     void (async () => {
         try {
-            const result = await syncCollection(userId, decryptApiKey(encryptedKey));
+            const result = await syncCollection(userId, decryptApiKey(encryptedKey), (progress) => {
+                state.progress = progress;
+            });
             state.ballCount = result.ballCount;
             onDone?.(result, null);
         } catch (error) {
@@ -451,4 +485,4 @@ module.exports = {
     removeApiKey,
     saveApiKey,
     syncCollection,
-};
+};
