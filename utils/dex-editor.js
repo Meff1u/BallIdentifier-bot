@@ -253,7 +253,8 @@ function applyLocally(dex, data, hashes) {
  * @param {string} options.name
  * @param {object} options.details       { rarity, artist, id, wave?, common_value?, demand?, cc? }
  * @param {Buffer} [options.image]       new spawn art (required when adding)
- * @param {boolean} [options.shift]      adding only: every entry with rarity >= the new one moves 1 down
+ * @param {string} [options.shift]       adding only: "higher" = every entry rarer than the new one moves 1 down,
+ *                                       "same" = the same rarity or rarer moves 1 down, anything else = no change
  * @param {boolean} [options.merge]      editing only: empty details keep their current values
  * @param {string} [options.previousAlt] Ballsdex, new art: optional alt text for the old art in Previous arts
  * @param {string} [options.actor]       who did it, for the commit message
@@ -289,17 +290,22 @@ function saveEntry({ dex, originalName = null, name, details, image = null, shif
         const changes = [];
         let next;
         let shifted = 0;
+        const shiftMode = shift === true ? "same" : shift === "same" || shift === "higher" ? shift : null;
+        const moves = (rarity) => (shiftMode === "same" ? rarity >= entry.rarity : shiftMode === "higher" ? rarity > entry.rarity : false);
         if (isNew) {
             next = {};
             for (const [other, e] of Object.entries(data)) {
-                if (shift && Number(e.rarity) >= entry.rarity) {
+                if (moves(Number(e.rarity))) {
                     next[other] = { ...e, rarity: roundRarity(Number(e.rarity) + 1) };
                     shifted += 1;
                 } else next[other] = e;
             }
             next[newName] = entry;
             changes.push(`New spawn art: ${newName} (T${entry.rarity})`);
-            if (shifted) changes.push(`${shifted} ball${shifted === 1 ? "" : "s"} from T${entry.rarity} on moved one rarity down`);
+            if (shifted) {
+                const which = shiftMode === "same" ? `from T${entry.rarity} on` : `rarer than T${entry.rarity}`;
+                changes.push(`${shifted} ball${shifted === 1 ? "" : "s"} ${which} moved one rarity down`);
+            }
         } else {
             next = Object.fromEntries(Object.entries(data).map(([other, e]) => (other === oldName ? [newName, entry] : [other, e])));
             if (newName !== oldName) changes.push(`${oldName} is now called ${newName}`);
@@ -364,7 +370,7 @@ function saveEntry({ dex, originalName = null, name, details, image = null, shif
         const commit = await commitFiles(base, files, `${dex}: ${isNew ? "add" : "update"} ${newName} (${actor})`);
         applyLocally(dex, next, nextHashes);
         client?.logGeneral?.(`Dex editor (${actor}): ${dex} · ${changes.join(" · ")}`);
-        return { dex, name: newName, entry: next[newName], shifted, shiftedFrom: shifted ? entry.rarity : null, changes, commitUrl: commit.html_url || null };
+        return { dex, name: newName, entry: next[newName], shifted, shiftedFrom: shifted ? entry.rarity : null, shiftMode: shifted ? shiftMode : null, changes, commitUrl: commit.html_url || null };
     });
 }
 

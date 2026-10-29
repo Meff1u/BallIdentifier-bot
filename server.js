@@ -705,7 +705,7 @@ app.post("/api/users/:userId/dex/save", apiLimiter, jsonBody("8mb"), verifySigna
             name,
             details: details && typeof details === "object" ? details : {},
             image: image ? Buffer.from(image, "base64") : null,
-            shift: shift === true,
+            shift: shift === "same" || shift === "higher" ? shift : null,
             previousAlt: typeof previousAlt === "string" ? previousAlt : "",
             actor: "website",
         });

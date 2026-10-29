@@ -148,18 +148,23 @@ async function handleDexEdit(interaction, client) {
             // Adding: ask about the rarities after it
             dexEditor.cleanDetails(details); // validate before asking
             const rarity = Number(String(details.rarity).replace(",", ".").replace(/^t/i, ""));
-            const later = Object.values(client.rarities?.[dexKey] || {}).filter((e) => Number(e.rarity) >= rarity).length;
-            if (!later) {
-                return interaction.editReply({ content: await save({ ...options, shift: false }, mode, interaction, interaction.message) }).then(() => true);
+            const rarities = Object.values(client.rarities?.[dexKey] || {}).map((e) => Number(e.rarity));
+            const same = rarities.filter((r) => r === rarity).length;
+            const higher = rarities.filter((r) => r > rarity).length;
+            if (!same && !higher) {
+                return interaction.editReply({ content: await save({ ...options, shift: null }, mode, interaction, interaction.message) }).then(() => true);
             }
             const token = crypto.randomBytes(6).toString("hex");
             pending.set(token, { at: Date.now(), options, messageId: interaction.message?.id, channelId: interaction.channelId });
             await interaction.editReply({
-                content: `**${name}** goes in as T${rarity}. ${later} ball${later === 1 ? "" : "s"} already at T${rarity} or rarer. Move them all one rarity down (T${rarity} → T${rarity + 1} and so on)?`,
+                content:
+                    `**${name}** goes in as T${rarity}. Already there: ${same} ball${same === 1 ? "" : "s"} at T${rarity}, ${higher} rarer.\n` +
+                    `Move rarities one down (+1)?\n- **Only rarer:** the ${higher} rarer than T${rarity}\n- **T${rarity} and rarer:** all ${same + higher}, so ${name} goes before the current T${rarity} balls`,
                 components: [
                     new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId(`dexedit:shift:${token}:yes`).setLabel("Yes, move them down").setStyle(ButtonStyle.Primary),
-                        new ButtonBuilder().setCustomId(`dexedit:shift:${token}:no`).setLabel("No, keep their rarities").setStyle(ButtonStyle.Secondary),
+                        new ButtonBuilder().setCustomId(`dexedit:shift:${token}:higher`).setLabel(`Only rarer (> T${rarity})`).setStyle(ButtonStyle.Primary).setDisabled(!higher),
+                        new ButtonBuilder().setCustomId(`dexedit:shift:${token}:same`).setLabel(`T${rarity} and rarer (≥ T${rarity})`).setStyle(ButtonStyle.Primary),
+                        new ButtonBuilder().setCustomId(`dexedit:shift:${token}:no`).setLabel("Keep rarities").setStyle(ButtonStyle.Secondary),
                         new ButtonBuilder().setCustomId(`dexedit:shift:${token}:cancel`).setLabel("Cancel").setStyle(ButtonStyle.Danger),
                     ),
                 ],
@@ -184,7 +189,7 @@ async function handleDexEdit(interaction, client) {
         try {
             const channel = await client.channels.fetch(job.channelId).catch(() => null);
             const reportMessage = job.messageId ? await channel?.messages?.fetch(job.messageId).catch(() => null) : null;
-            await interaction.editReply({ content: await save({ ...job.options, shift: answer === "yes" }, "add", interaction, reportMessage) });
+            await interaction.editReply({ content: await save({ ...job.options, shift: answer === "same" || answer === "higher" ? answer : null }, "add", interaction, reportMessage) });
         } catch (error) {
             if (!error.status) client.logError?.("Dex editor (report) failed", error);
             await interaction.editReply({ content: errorText(error) });
