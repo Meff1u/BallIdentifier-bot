@@ -200,6 +200,12 @@ function getDexCollectors(dexKey) {
     return { entries, pendingProfiles: queue.length };
 }
 
+// Log label for a user: "@name (id)" when the profile is known
+function who(userId) {
+    const profile = profiles.get(userId);
+    return profile?.username ? `@${profile.username} (${userId})` : userId;
+}
+
 function fail(status, message, code) {
     const error = new Error(message);
     error.status = status;
@@ -213,7 +219,14 @@ async function addSelf(userId, dexKey, ballId) {
         throw fail(409, `You're already a collector of ${found.name}.`, "ALREADY");
     }
 
-    if (dexKey === "BD") await checkBallsdexOwnership(userId, found);
+    if (dexKey === "BD") {
+        try {
+            await checkBallsdexOwnership(userId, found);
+        } catch (error) {
+            client?.log?.("COLLECTORS", `⛔ ${who(userId)} couldn't add themselves to ${found.name} (${dexKey}): ${error.message}`);
+            throw error;
+        }
+    }
 
     const now = Date.now();
     const recent = (addLog.get(userId) || []).filter((time) => now - time < 24 * 60 * 60 * 1000);
@@ -228,7 +241,7 @@ async function addSelf(userId, dexKey, ballId) {
     addLog.set(userId, recent);
     applyBall(dexKey, found.ball);
     enqueueProfile(userId);
-    client?.log?.("COLLECTORS", `<@${userId}> added themselves to **${found.name}** (${dexKey})`);
+    client?.log?.("COLLECTORS", `➕ ${who(userId)} added themselves to ${found.name} (${dexKey})`);
     return { ballId: found.ball.id, ballName: found.name };
 }
 
@@ -289,7 +302,7 @@ async function addVerified(actorId, targetId, dexKey, ballId) {
     }
     await saveEntry(dexKey, found, targetId, { addedAt: new Date().toISOString(), status: "verified" }, { addedBy: actorId });
     enqueueProfile(targetId);
-    client?.log?.("COLLECTORS", `<@${actorId}> added <@${targetId}> to **${found.name}** (${dexKey}) as verified`);
+    client?.log?.("COLLECTORS", `✅ ${who(actorId)} added ${who(targetId)} to ${found.name} (${dexKey}) as verified`);
     return { ballId: found.ball.id, ballName: found.name };
 }
 
@@ -315,7 +328,7 @@ async function removeSelf(actorId, targetId, dexKey, ballId) {
         if (selfEntries.get(key)?.size === 0) selfEntries.delete(key);
         applyBall(dexKey, found.ball);
     }
-    client?.log?.("COLLECTORS", `<@${actorId}> removed <@${targetId}> from **${found.name}** (${dexKey})`);
+    client?.log?.("COLLECTORS", `➖ ${who(actorId)} removed ${actorId === targetId ? "themselves" : who(targetId)} from ${found.name} (${dexKey})`);
     return { ballId: found.ball.id, ballName: found.name };
 }
 
