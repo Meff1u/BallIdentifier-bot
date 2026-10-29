@@ -5,6 +5,15 @@ const crypto = require("crypto");
 // Import helpers
 const { getData, updateData } = require("./utils/helpers");
 const { SUPPORTED_BOT_IDS } = require("./utils/constants");
+const {
+    decryptFromSite,
+    linkApiKey,
+    unlinkAccount,
+    getSavedApiKey,
+    getStoredCollection,
+    getSyncState,
+    startSync,
+} = require("./utils/ballsdex");
 
 const PORT = process.env.PORT || 3001;
 
@@ -416,6 +425,108 @@ app.post("/api/guilds/:guildId/config", apiLimiter, verifySignature, validateGui
             details: error.message 
         });
     }
+});
+
+// ---------------------------------------------------------------------------
+// Ballsdex account (website). The user id comes from the website's encrypted
+// Discord session and the request is HMAC-signed, so it can be trusted here.
+// ---------------------------------------------------------------------------
+
+app.param("userId", (req, res, next, userId) => {
+    if (!/^\d{17,20}$/.test(userId)) {
+        return res.status(400).json({ error: "Invalid user ID" });
+    }
+    next();
+});
+
+// Link status, sync status and saved collection summary
+app.get("/api/users/:userId/ballsdex", apiLimiter, verifySignature, async (req, res) => {
+    const { userId } = req.params;
+    const linkedAt = getData().users[userId]?.ballsdex?.linkedAt || null;
+    const linked = Boolean(getSavedApiKey(userId));
+
+    let collection = null;
+    let databaseAvailable = true;
+    if (linked) {
+        try {
+            const stored = await getStoredCollection(userId);
+            if (stored) {
+                collection = {
+                    summary: stored.summary,
+                    ballCount: stored.ballCount,
+                    lastSyncedAt: stored.lastSyncedAt,
+                };
+            }
+        } catch (error) {
+            databaseAvailable = false;
+            console.error("[API] Ballsdex collection read failed:", error.message);
+        }
+    }
+
+    res.status(200).json({ linked, linkedAt, sync: getSyncState(userId), collection, databaseAvailable });
+});
+
+// Link a Ballsdex API key (encrypted end-to-end by the website)
+app.post("/api/users/:userId/ballsdex/link", apiLimiter, verifySignature, async (req, res) => {
+    const { userId } = req.params;
+
+    let apiKey;
+    try {
+        apiKey = decryptFromSite(req.body?.encryptedKey).trim();
+    } catch {
+        return res.status(400).json({ error: "Invalid request" });
+    }
+    if (apiKey.length < 10 || apiKey.length > 200) {
+        return res.status(400).json({ error: "That doesn't look like a Ballsdex API key." });
+    }
+
+    try {
+        await linkApiKey(userId, apiKey);
+        client?.logAPI?.(`POST /api/users/${userId}/ballsdex/link | Linked`);
+        res.status(200).json({ success: true, linked: true });
+    } catch (error) {
+        if (error.code === "COOLDOWN") {
+            return res.status(429).json({ error: error.message, retryAfterSec: error.retryAfterSec });
+        }
+        if (error.code === "WRONG_ACCOUNT") {
+            return res.status(403).json({ error: error.message, code: "WRONG_ACCOUNT" });
+        }
+        if (error.status === 401 || error.status === 403) {
+            return res.status(400).json({ error: "Ballsdex rejected this API key. Check that it is correct and has all scopes.", code: "INVALID_KEY" });
+        }
+        if (error.status === 429) {
+            return res.status(429).json({ error: "The Ballsdex API is rate limiting requests. Try again later." });
+        }
+        console.error("[API] Ballsdex link failed:", error);
+        res.status(502).json({ error: "Could not reach the Ballsdex API. Try again later." });
+    }
+});
+
+// Unlink: remove the encrypted key and synced data
+app.post("/api/users/:userId/ballsdex/unlink", apiLimiter, verifySignature, async (req, res) => {
+    const { userId } = req.params;
+    const wasLinked = await unlinkAccount(userId);
+    client?.logAPI?.(`POST /api/users/${userId}/ballsdex/unlink | ${wasLinked ? "Unlinked" : "Not linked"}`);
+    res.status(200).json({ success: true, linked: false, wasLinked });
+});
+
+// Start a background sync (shared 5 min cooldown with /ballsdex sync)
+app.post("/api/users/:userId/ballsdex/sync", apiLimiter, verifySignature, (req, res) => {
+    const { userId } = req.params;
+    const result = startSync(userId);
+
+    if (!result.started) {
+        const errors = {
+            NOT_LINKED: [400, "Link your Ballsdex account first."],
+            IN_PROGRESS: [409, "Your collection is already being synchronized."],
+            COOLDOWN: [429, "You can sync again in a few minutes."],
+        };
+        const [status, message] = errors[result.reason];
+        return res.status(status).json({ error: message, code: result.reason, retryAfterSec: result.retryAfterSec ?? null });
+    }
+
+    client?.logAPI?.(`POST /api/users/${userId}/ballsdex/sync | Started`);
+    res.status(202).json({ success: true, sync: getSyncState(userId) });
 });
 
 // Error handling middleware

@@ -5,9 +5,11 @@ const { getDatabase } = require("./database");
 
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
-const API_BASE_URL = "https://ballsdex.com/api/v1";
+const API_BASE_URL = process.env.BALLSDEX_API_URL || "https://ballsdex.com/api/v1";
 const ENCRYPTION_ALGORITHM = "aes-256-gcm";
 const PAGE_REQUEST_DELAY = 1100;
+const SYNC_COOLDOWN_MS = 5 * 60 * 1000;
+const LINK_COOLDOWN_MS = 20 * 1000;
 const SPECIAL_WRITE_BATCH_SIZE = 500;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -333,7 +335,112 @@ function removeApiKey(userId) {
     });
 }
 
+function decryptFromSite(payload, purpose = "ballsdex-api-key") {
+    const secret = process.env.BOT_API_SECRET;
+    if (!secret) throw new Error("BOT_API_SECRET is not configured.");
+    if (!payload?.iv || !payload?.tag || !payload?.value) throw new Error("Invalid encrypted payload.");
+
+    const key = Buffer.from(crypto.hkdfSync("sha256", secret, "ballidentifier", purpose, 32));
+    const decipher = crypto.createDecipheriv(ENCRYPTION_ALGORITHM, key, Buffer.from(payload.iv, "base64"));
+    decipher.setAuthTag(Buffer.from(payload.tag, "base64"));
+    return Buffer.concat([decipher.update(Buffer.from(payload.value, "base64")), decipher.final()]).toString("utf8");
+}
+
+const linkCooldowns = new Map();
+async function linkApiKey(userId, apiKey) {
+    const cooldownUntil = linkCooldowns.get(userId) || 0;
+    if (cooldownUntil > Date.now()) {
+        const error = new Error("Please wait a moment before trying again.");
+        error.code = "COOLDOWN";
+        error.retryAfterSec = Math.ceil((cooldownUntil - Date.now()) / 1000);
+        throw error;
+    }
+    linkCooldowns.set(userId, Date.now() + LINK_COOLDOWN_MS);
+
+    const profile = await ballsdexRequest(apiKey, "/me");
+    const linkedAccountId = String(profile.discord_id || profile.id || "");
+    if (linkedAccountId !== String(userId)) {
+        const error = new Error("That API key belongs to a different Discord account.");
+        error.code = "WRONG_ACCOUNT";
+        throw error;
+    }
+
+    saveApiKey(userId, apiKey);
+}
+
+// Remove the stored key and synced data. Returns false when nothing was linked.
+async function unlinkAccount(userId) {
+    const wasLinked = removeApiKey(userId);
+    if (wasLinked) {
+        try {
+            await deleteStoredCollection(userId);
+        } catch (error) {
+            console.error("[BALLSDEX] Failed to delete stored collection:", error);
+        }
+    }
+    return wasLinked;
+}
+
+// Sync state shared by the bot command and the website (one sync per user at a time)
+const syncStates = new Map();
+
+function getSyncState(userId) {
+    const state = syncStates.get(String(userId));
+    if (!state) return { inProgress: false };
+    const nextAllowedAt = (state.startedAt || 0) + SYNC_COOLDOWN_MS;
+    return {
+        inProgress: state.inProgress,
+        startedAt: state.startedAt ? new Date(state.startedAt).toISOString() : null,
+        finishedAt: state.finishedAt ? new Date(state.finishedAt).toISOString() : null,
+        error: state.error || null,
+        ballCount: state.ballCount ?? null,
+        retryAfterSec: state.inProgress ? null : Math.max(0, Math.ceil((nextAllowedAt - Date.now()) / 1000)),
+    };
+}
+
+function startSync(userId, { onDone } = {}) {
+    userId = String(userId);
+    const encryptedKey = getSavedApiKey(userId);
+    if (!encryptedKey) return { started: false, reason: "NOT_LINKED" };
+
+    const current = syncStates.get(userId);
+    if (current?.inProgress) return { started: false, reason: "IN_PROGRESS" };
+    if (current?.startedAt && Date.now() - current.startedAt < SYNC_COOLDOWN_MS) {
+        return {
+            started: false,
+            reason: "COOLDOWN",
+            retryAfterSec: Math.ceil((current.startedAt + SYNC_COOLDOWN_MS - Date.now()) / 1000),
+        };
+    }
+
+    const state = { inProgress: true, startedAt: Date.now(), finishedAt: null, error: null, ballCount: null };
+    syncStates.set(userId, state);
+
+    void (async () => {
+        try {
+            const result = await syncCollection(userId, decryptApiKey(encryptedKey));
+            state.ballCount = result.ballCount;
+            onDone?.(result, null);
+        } catch (error) {
+            console.error("[BALLSDEX] Failed to sync collection:", error);
+            state.error = error.status === 429 ? "The Ballsdex API rate limit was reached. Try again later." : error.message;
+            onDone?.(null, error);
+        } finally {
+            state.inProgress = false;
+            state.finishedAt = Date.now();
+        }
+    })();
+
+    return { started: true };
+}
+
 module.exports = {
+    SYNC_COOLDOWN_MS,
+    decryptFromSite,
+    linkApiKey,
+    unlinkAccount,
+    getSyncState,
+    startSync,
     ballsdexRequest,
     buildCollectionSummary,
     decryptApiKey,
@@ -344,4 +451,4 @@ module.exports = {
     removeApiKey,
     saveApiKey,
     syncCollection,
-};
+};

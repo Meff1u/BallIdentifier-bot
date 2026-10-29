@@ -18,12 +18,7 @@ const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fet
 // Import shared utilities
 const { COLORS, INACTIVITY_TIMEOUT } = require("../utils/constants");
 const { readJsonFile, writeJsonFile, getAssetsPath } = require("../utils/helpers");
-const {
-    ballsdexRequest,
-    deleteStoredCollection,
-    removeApiKey,
-    saveApiKey,
-} = require("../utils/ballsdex");
+const { linkApiKey, unlinkAccount } = require("../utils/ballsdex");
 const {
     PAGE_SIZE,
     buildCollectorsView,
@@ -147,16 +142,7 @@ module.exports = {
                 await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
                 try {
-                    const profile = await ballsdexRequest(apiKey, "/me");
-                    const linkedAccountId = String(profile.discord_id || profile.id || "");
-
-                    if (linkedAccountId !== interaction.user.id) {
-                        return interaction.editReply({
-                            content: "That API key belongs to a different Discord account.",
-                        });
-                    }
-
-                    saveApiKey(interaction.user.id, apiKey);
+                    await linkApiKey(interaction.user.id, apiKey);
                     return interaction.editReply({
                         content: "Your Ballsdex account has been linked securely.",
                     });
@@ -273,14 +259,7 @@ module.exports = {
                     });
                 }
 
-                const wasRemoved = removeApiKey(interaction.user.id);
-                if (wasRemoved) {
-                    try {
-                        await deleteStoredCollection(interaction.user.id);
-                    } catch (error) {
-                        console.error("[BALLSDEX] Failed to delete stored collection:", error);
-                    }
-                }
+                const wasRemoved = await unlinkAccount(interaction.user.id);
                 return interaction.update({
                     content: wasRemoved
                         ? "Your Ballsdex account has been unlinked. The encrypted API key and saved collection data were removed."

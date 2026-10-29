@@ -14,10 +14,9 @@ const {
 } = require("discord.js");
 
 const {
-    decryptApiKey,
     getSavedApiKey,
     getStoredCollection,
-    syncCollection,
+    startSync,
 } = require("../utils/ballsdex");
 
 const SUBCOMMAND_COOLDOWNS = {
@@ -26,7 +25,6 @@ const SUBCOMMAND_COOLDOWNS = {
     collection: 5 * 60 * 1000,
 };
 const subcommandCooldowns = new Map();
-const syncsInProgress = new Set();
 
 function getCooldownRemaining(userId, subcommand) {
     const key = `${userId}:${subcommand}`;
@@ -173,48 +171,34 @@ module.exports = {
         }
 
         if (subcommand === "sync") {
-            const encryptedKey = getSavedApiKey(interaction.user.id);
-            if (!encryptedKey) {
-                return interaction.reply({
-                    content: "Link your Ballsdex account first with `/ballsdex link`.",
-                    flags: MessageFlags.Ephemeral,
-                });
+            const user = interaction.user;
+            const result = startSync(user.id, {
+                onDone: async (syncResult, error) => {
+                    try {
+                        await user.send(
+                            error
+                                ? `Your Ballsdex collection sync failed: ${error.status === 429 ? "the Ballsdex API rate limit was reached." : error.message}`
+                                : `Your Ballsdex collection sync is complete. ${syncResult.ballCount.toLocaleString("en-US")} balls were updated.`,
+                        );
+                    } catch (dmError) {
+                        console.error("[BALLSDEX] Failed to send sync DM:", dmError);
+                    }
+                },
+            });
+
+            if (!result.started) {
+                const messages = {
+                    NOT_LINKED: "Link your Ballsdex account first with `/ballsdex link`.",
+                    IN_PROGRESS: "Your Ballsdex collection is already being synchronized.",
+                    COOLDOWN: `You can sync again in ${Math.ceil((result.retryAfterSec || 0) / 60)} min.`,
+                };
+                return interaction.reply({ content: messages[result.reason], flags: MessageFlags.Ephemeral });
             }
 
-            if (syncsInProgress.has(interaction.user.id)) {
-                return interaction.reply({
-                    content: "Your Ballsdex collection is already being synchronized.",
-                    flags: MessageFlags.Ephemeral,
-                });
-            }
-
-            syncsInProgress.add(interaction.user.id);
-            await interaction.reply({
+            return interaction.reply({
                 content: "Your Ballsdex collection synchronization has started. This may take a while for large collections; I will send you a DM when it finishes.",
                 flags: MessageFlags.Ephemeral,
             });
-
-            void (async () => {
-                try {
-                    const apiKey = decryptApiKey(encryptedKey);
-                    const result = await syncCollection(interaction.user.id, apiKey);
-                    await interaction.user.send(
-                        `Your Ballsdex collection sync is complete. ${result.ballCount.toLocaleString("en-US")} balls were updated.`,
-                    );
-                } catch (error) {
-                    console.error("[BALLSDEX] Failed to sync collection:", error);
-                    try {
-                        await interaction.user.send(
-                            `Your Ballsdex collection sync failed: ${error.status === 429 ? "the Ballsdex API rate limit was reached." : error.message}`,
-                        );
-                    } catch (dmError) {
-                        console.error("[BALLSDEX] Failed to send sync failure DM:", dmError);
-                    }
-                } finally {
-                    syncsInProgress.delete(interaction.user.id);
-                }
-            })();
-            return;
         }
 
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
