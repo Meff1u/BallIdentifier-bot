@@ -1,6 +1,6 @@
 const { getDatabase } = require("./database");
 const { BOT_DATA_KEYS, ADMIN_ID } = require("./constants");
-const { getSavedApiKey, getStoredCollection } = require("./ballsdex");
+const { getSavedApiKey, getStoredCollection, verifyFileBall } = require("./ballsdex");
 
 const PROFILE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MISSING_PROFILE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -267,6 +267,17 @@ async function checkBallsdexOwnership(userId, found) {
             `You have ${owned} ${found.name} in your last sync. You need at least ${needed} (half of the ${required} the collector requires).`,
             "NOT_ENOUGH",
         );
+    }
+    // Imported with Fast Sync: a file can be edited, so check some of these balls in the Ballsdex account itself
+    if (stored.summary?.source === "file") {
+        const confirmed = await verifyFileBall(userId, found.ball.id).catch(() => false);
+        if (!confirmed) {
+            throw fail(
+                403,
+                `Your ${found.name} from the Fast Sync file couldn't be confirmed in your Ballsdex account. Use "Sync now" (it reads your collection from Ballsdex directly) and try again.`,
+                "FILE_UNVERIFIED",
+            );
+        }
     }
 }
 

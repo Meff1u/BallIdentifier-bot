@@ -687,10 +687,6 @@ async function fetchBallsResumable(userId, apiKey, onPage, shouldStop) {
 }
 
 async function syncCollection(discordUserId, apiKey, onProgress, shouldStop) {
-    const database = await getDatabase();
-    const ballsCollection = database.collection("ballsdexBalls");
-    const collectionsCollection = database.collection("ballsdexCollections");
-    const specialsCollection = database.collection("ballsdexSpecials");
     const profile = await ballsdexRequest(apiKey, "/me");
     const totals = await getPlayerTotals(apiKey, discordUserId);
     const expected = totals?.ballCount ?? null;
@@ -700,8 +696,25 @@ async function syncCollection(discordUserId, apiKey, onProgress, shouldStop) {
     const balls = await fetchBallsResumable(discordUserId, apiKey, (fetched) => onProgress?.({ phase: "balls", fetched, total: expected }), shouldStop);
     if (shouldStop()) throw new SyncCancelled(); // e.g. unlinked while the last page was loading
     onProgress?.({ phase: "saving", fetched: balls.length, total: expected });
+    return saveCollection(discordUserId, profile, balls, totals);
+}
+
+/** Saves a fetched (or imported) collection: summary, specials, raws and collector counts. */
+async function saveCollection(discordUserId, profile, balls, totals = null, { source = "api" } = {}) {
+    const database = await getDatabase();
+    const ballsCollection = database.collection("ballsdexBalls");
+    const collectionsCollection = database.collection("ballsdexCollections");
+    const specialsCollection = database.collection("ballsdexSpecials");
 
     const summary = buildCollectionSummary(profile, balls, totals);
+    await database.collection("ballsdexFileInstances").deleteMany({ userId: String(discordUserId) });
+    if (source === "file") {
+        // Ballsdex exports have no favorites, frames or spawn times: leave those stats empty instead of 0
+        for (const key of ["favoriteCount", "frameCount", "timedCatchCount", "fastestCatchMs", "slowestCatchMs", "fastestCatch", "slowestCatch", "averageCatchMs"]) {
+            delete summary[key];
+        }
+        summary.source = "file";
+    }
     const syncedAt = new Date();
     const specialCount = await replaceSpecialCollection(specialsCollection, discordUserId, balls);
 
@@ -743,6 +756,7 @@ async function deleteStoredCollection(discordUserId) {
         database.collection("ballsdexCollections").deleteOne({ discordUserId }),
         database.collection("ballsdexBalls").deleteMany({ discordUserId }),
         database.collection("ballsdexSpecials").deleteMany({ user_id: String(discordUserId) }),
+        database.collection("ballsdexFileInstances").deleteMany({ userId: String(discordUserId) }),
     ]);
 }
 
@@ -880,6 +894,8 @@ function getSyncState(userId) {
         pausedFetched: record.pausedUntil ? record.pausedFetched ?? null : null,
         busy,
         waiting: busy && slotWaiters.has(userId),
+        source: state?.source || "api",
+        fastRetryAfterSec: Math.ceil(fastCooldownLeftMs(userId) / 1000),
     };
 }
 
@@ -888,7 +904,12 @@ function finishSync(userId, state, outcome) {
     const nextSyncAt = new Date(Date.now() + cooldown).toISOString();
     updateData((data) => {
         data.users[userId] ??= {};
+        const previous = data.users[userId].ballsdexSync || {};
         data.users[userId].ballsdexSync = {
+            // Fast Sync keeps its own cooldown
+            fastNextAt: previous.fastNextAt,
+            lastFastAt: previous.lastFastAt,
+            lastFastOutcome: previous.lastFastOutcome,
             lastFinishedAt: new Date().toISOString(),
             lastOutcome: outcome,
             nextSyncAt,
@@ -1153,8 +1174,276 @@ async function sendDueSyncReminders() {
     }
 }
 
+/* ----- Fast Sync: import the CSV export of Ballsdex's /player settings -----
+ * The website parses and checks <discord id>_countryball.csv, then uploads it in chunks (kept in MongoDB
+ * ballsdexFastSyncChunks for up to 2 h). On finish the bot checks the file against the user's own Ballsdex
+ * account with a few API calls (their key: /me, the ball total, and FAST_SYNC_SAMPLES random balls looked up
+ * by id) and saves it like a normal sync. One Fast Sync per FAST_SYNC_COOLDOWN_MS (the owner has none).
+ * An edited file could still slip a few changed rows past those samples, so the instance ids of every ball
+ * are kept (ballsdexFileInstances) and a collector claim checks FILE_CHECK_SAMPLES of that ball's ids
+ * against the API before it counts (verifyFileBall).
+ */
+const FAST_SYNC_COOLDOWN_MS = 30 * 60 * 1000;
+const FAST_SYNC_RETRY_MS = 5 * 60 * 1000; // after a file that didn't pass the checks
+const FAST_SYNC_CHUNK_ROWS = 25000;
+const FAST_SYNC_MAX_ROWS = 3000000;
+const FAST_SYNC_SAMPLES = 12;
+const FILE_CHECK_SAMPLES = 10; // per ball, when a collector claim rests on Fast Sync data
+const FAST_SYNC_FILE = /^(\d{17,20})_countryball(?: ?\(\d+\))?\.csv$/i;
+const fastUploads = new Map(); // userId -> { uploadId, total, chunks, received: Set, createdAt }
+const catalogCache = { at: 0, balls: null, specials: null };
+
+function fastCooldownLeftMs(userId) {
+    if (userId === ADMIN_ID) return 0;
+    const until = getSyncRecord(userId).fastNextAt ? new Date(getSyncRecord(userId).fastNextAt).getTime() : 0;
+    return Math.max(0, until - Date.now());
+}
+
+let fastIndexReady = null;
+async function fastStorage() {
+    const database = await getDatabase();
+    const chunks = database.collection("ballsdexFastSyncChunks");
+    fastIndexReady ??= Promise.all([
+        database.collection("ballsdexFileInstances").createIndex({ userId: 1, ballId: 1 }),
+        chunks.createIndex({ userId: 1, uploadId: 1, index: 1 }, { unique: true }),
+        chunks.createIndex({ createdAt: 1 }, { expireAfterSeconds: 2 * 60 * 60 }),
+    ]).catch(() => (fastIndexReady = null));
+    await fastIndexReady;
+    return chunks;
+}
+
+function fastError(message, status = 400, code = "INVALID_FILE") {
+    return Object.assign(new Error(message), { status, code });
+}
+
+/** Ball and special ids by name (the export only has names), from the Ballsdex API, cached for a day. */
+async function getCatalog(apiKey) {
+    if (catalogCache.balls && Date.now() - catalogCache.at < 24 * 60 * 60 * 1000) return catalogCache;
+    const balls = new Map();
+    const specials = new Map();
+    for (const [path, map, nameOf] of [
+        ["/balls", balls, (item) => item.country],
+        ["/specials", specials, (item) => item.name],
+    ]) {
+        let cursor;
+        do {
+            const page = await ballsdexRequest(apiKey, path, { limit: 100, cursor });
+            for (const item of getItems(page)) if (nameOf(item)) map.set(nameOf(item).toLowerCase(), item.id);
+            cursor = page.next_cursor || undefined;
+        } while (cursor);
+    }
+    Object.assign(catalogCache, { at: Date.now(), balls, specials });
+    return catalogCache;
+}
+
+/** Step 1: open an upload. */
+async function startFastSync(userId, { fileName, total }) {
+    userId = String(userId);
+    if (!getSavedApiKey(userId)) throw fastError("Link your Ballsdex account first: Fast Sync checks the file against it.", 400, "NOT_LINKED");
+    if (syncStates.get(userId)?.inProgress) throw fastError("Your collection is already being synchronized.", 409, "IN_PROGRESS");
+    const left = fastCooldownLeftMs(userId);
+    if (left > 0) throw Object.assign(fastError(`You can use Fast Sync again in ${Math.ceil(left / 60000)} min.`, 429, "COOLDOWN"), { retryAfterSec: Math.ceil(left / 1000) });
+
+    const match = FAST_SYNC_FILE.exec(String(fileName || ""));
+    if (!match) throw fastError("Upload the file exactly as Ballsdex sent it: <your Discord ID>_countryball.csv.");
+    if (match[1] !== userId) throw fastError("This export belongs to another Discord account.", 403, "WRONG_ACCOUNT");
+    if (!Number.isInteger(total) || total < 1 || total > FAST_SYNC_MAX_ROWS) throw fastError("The file has no balls or is too big.");
+
+    const uploadId = crypto.randomBytes(8).toString("hex");
+    const chunks = await fastStorage();
+    await chunks.deleteMany({ userId });
+    fastUploads.set(userId, { uploadId, total, chunks: Math.ceil(total / FAST_SYNC_CHUNK_ROWS), received: new Set(), createdAt: Date.now() });
+    return { uploadId, chunkRows: FAST_SYNC_CHUNK_ROWS };
+}
+
+const ROW_ID = /^\d{1,20}$/;
+function checkRow(row) {
+    if (!Array.isArray(row) || row.length !== 5) return false;
+    const [id, country, special, caughtAt, traded] = row;
+    const now = Date.now() / 1000;
+    return (
+        typeof id === "string" && ROW_ID.test(id) &&
+        typeof country === "string" && country.length > 0 && country.length <= 100 &&
+        typeof special === "string" && special.length <= 100 &&
+        Number.isFinite(caughtAt) && caughtAt > 1500000000 && caughtAt < now + 86400 &&
+        (traded === 0 || traded === 1)
+    );
+}
+
+/** Step 2: one chunk of rows: [instance id, ball name, special name or "", caught at (unix s), traded 0/1]. */
+async function addFastSyncChunk(userId, { uploadId, index, rows }) {
+    userId = String(userId);
+    const upload = fastUploads.get(userId);
+    if (!upload || upload.uploadId !== uploadId) throw fastError("This upload expired. Pick the file again.", 409, "EXPIRED");
+    if (!Number.isInteger(index) || index < 0 || index >= upload.chunks) throw fastError("Invalid chunk.");
+    if (!Array.isArray(rows) || !rows.length || rows.length > FAST_SYNC_CHUNK_ROWS) throw fastError("Invalid chunk.");
+    const bad = rows.findIndex((row) => !checkRow(row));
+    if (bad >= 0) throw fastError(`Row ${index * FAST_SYNC_CHUNK_ROWS + bad + 2} of the file isn't valid.`);
+    const chunks = await fastStorage();
+    await chunks.updateOne({ userId, uploadId, index }, { $set: { rows, createdAt: new Date() } }, { upsert: true });
+    upload.received.add(index);
+    return { received: upload.received.size, chunks: upload.chunks };
+}
+
+/** Step 3: check the whole file against the account and save it (in the background, shown as a sync). */
+function finishFastSync(userId, { uploadId }) {
+    userId = String(userId);
+    const upload = fastUploads.get(userId);
+    if (!upload || upload.uploadId !== uploadId) throw fastError("This upload expired. Pick the file again.", 409, "EXPIRED");
+    if (upload.received.size !== upload.chunks) throw fastError("Part of the file didn't arrive. Try again.", 400, "INCOMPLETE");
+    if (syncStates.get(userId)?.inProgress) throw fastError("Your collection is already being synchronized.", 409, "IN_PROGRESS");
+    const encryptedKey = getSavedApiKey(userId);
+    if (!encryptedKey) throw fastError("Link your Ballsdex account first.", 400, "NOT_LINKED");
+    fastUploads.delete(userId);
+
+    const state = {
+        inProgress: true,
+        startedAt: Date.now(),
+        finishedAt: null,
+        error: null,
+        cancelled: false,
+        cancelRequested: false,
+        ballCount: null,
+        source: "file",
+        progress: { phase: "verifying", fetched: upload.total, total: upload.total },
+    };
+    syncStates.set(userId, state);
+
+    void (async () => {
+        let outcome = "failed";
+        const chunks = await fastStorage().catch(() => null);
+        try {
+            if (!chunks) throw new Error("The database isn't available right now.");
+            const rows = (await chunks.find({ userId, uploadId }).sort({ index: 1 }).toArray()).flatMap((chunk) => chunk.rows || []);
+            if (rows.length !== upload.total) throw fastError("Part of the file didn't arrive. Try again.");
+            const ids = new Set();
+            for (const row of rows) {
+                if (ids.has(row[0])) throw fastError("The file lists the same ball twice. Export a fresh one.");
+                ids.add(row[0]);
+            }
+
+            // Does the file belong to this account and match it now?
+            const apiKey = decryptApiKey(encryptedKey);
+            const profile = await ballsdexRequest(apiKey, "/me");
+            if (profile?.discord_id && String(profile.discord_id) !== userId) throw fastError("Your linked Ballsdex key belongs to another account.", 403);
+            const totals = await getPlayerTotals(apiKey, userId);
+            if (totals) {
+                const drift = Math.abs(totals.ballCount - rows.length);
+                if (drift > Math.max(25, rows.length * 0.01)) {
+                    throw fastError(`The file has ${rows.length.toLocaleString("en-US")} balls but your account has ${totals.ballCount.toLocaleString("en-US")}. Export a fresh file and upload it right away.`);
+                }
+            }
+            const samples = [...new Set(Array.from({ length: Math.min(FAST_SYNC_SAMPLES, rows.length) }, () => rows[crypto.randomInt(rows.length)]))];
+            let matches = 0;
+            for (const row of samples) {
+                try {
+                    const ball = await ballsdexRequest(apiKey, `/me/balls/${row[0]}`);
+                    if (ball?.ball?.country === row[1] && (ball.special?.name || "") === row[2]) matches += 1;
+                } catch (error) {
+                    if (error.status !== 404 && error.status !== 403) throw error;
+                }
+            }
+            if (matches < samples.length - 1) throw fastError("This file doesn't match the balls in your Ballsdex account. Export a fresh one with /player settings.");
+
+            state.progress = { phase: "saving", fetched: rows.length, total: rows.length };
+            const { balls: ballIds, specials: specialIds } = await getCatalog(apiKey);
+            const balls = rows.map(([id, country, special, caughtAt, traded]) => ({
+                id,
+                ball: { id: ballIds.get(country.toLowerCase()), country },
+                special: special ? { id: specialIds.get(special.toLowerCase()) ?? special, name: special } : null,
+                self_caught: traded === 0,
+                caught_at: new Date(caughtAt * 1000).toISOString(),
+            }));
+            const result = await saveCollection(userId, profile, balls, null, { source: "file" });
+            // instance ids per ball, so collector claims can be checked against the API later
+            const idsByBall = new Map();
+            for (const ball of balls) {
+                if (ball.ball.id === undefined) continue;
+                if (!idsByBall.has(ball.ball.id)) idsByBall.set(ball.ball.id, []);
+                idsByBall.get(ball.ball.id).push(ball.id);
+            }
+            const instances = (await getDatabase()).collection("ballsdexFileInstances");
+            const docs = [...idsByBall].map(([ballId, ids]) => ({ userId, ballId, ids }));
+            for (let index = 0; index < docs.length; index += 100) await instances.insertMany(docs.slice(index, index + 100), { ordered: false });
+            state.ballCount = result.ballCount;
+            outcome = "success";
+
+            // a paused API sync would overwrite this later: drop it
+            if (getSyncRecord(userId).pausedUntil) {
+                const queued = resumeQueue.findIndex((job) => job._id === userId);
+                if (queued >= 0) resumeQueue.splice(queued, 1);
+                await deleteSyncJob(userId).catch(() => {});
+                clearPaused(userId);
+            }
+            getNotifier()
+                .notify(userId, "sync_finished", {
+                    title: "Fast Sync finished",
+                    body: `${result.ballCount.toLocaleString("en-US")} balls imported from your Ballsdex export. Your stats and raws are up to date.`,
+                    link: "#/ballsdex",
+                })
+                .catch(() => {});
+        } catch (error) {
+            if (!error.status) console.error("[BALLSDEX] Fast Sync failed:", error);
+            state.error = error.status === 429 ? "The Ballsdex API is rate limiting requests. Try again later." : error.message;
+        } finally {
+            await chunks?.deleteMany({ userId }).catch(() => {});
+            const wait = userId === ADMIN_ID ? 0 : outcome === "success" ? FAST_SYNC_COOLDOWN_MS : FAST_SYNC_RETRY_MS;
+            updateData((data) => {
+                data.users[userId] ??= {};
+                data.users[userId].ballsdexSync ??= {};
+                const record = data.users[userId].ballsdexSync;
+                record.fastNextAt = new Date(Date.now() + wait).toISOString();
+                record.lastFastAt = new Date().toISOString();
+                record.lastFastOutcome = outcome;
+                if (outcome === "success") record.lastFinishedAt = new Date().toISOString();
+            });
+            state.inProgress = false;
+            state.finishedAt = Date.now();
+        }
+    })();
+    return getSyncState(userId);
+}
+
+/**
+ * A collection imported from a file: are the user's `ballId` balls really in their Ballsdex account?
+ * Looks up FILE_CHECK_SAMPLES random instances of that ball by id (one may be gone since the export).
+ */
+async function verifyFileBall(userId, ballId) {
+    userId = String(userId);
+    const encryptedKey = getSavedApiKey(userId);
+    if (!encryptedKey) return false;
+    const doc = await (await getDatabase()).collection("ballsdexFileInstances").findOne({ userId, ballId: Number(ballId) });
+    const ids = doc?.ids || [];
+    if (!ids.length) return false;
+    const picks = new Set();
+    while (picks.size < Math.min(FILE_CHECK_SAMPLES, ids.length)) picks.add(ids[crypto.randomInt(ids.length)]);
+
+    const apiKey = decryptApiKey(encryptedKey);
+    let matches = 0;
+    const list = [...picks];
+    for (let index = 0; index < list.length; index += 5) {
+        const results = await Promise.all(
+            list.slice(index, index + 5).map((id) =>
+                ballsdexRequest(apiKey, `/me/balls/${id}`).then(
+                    (ball) => Number(ball?.ball?.id) === Number(ballId),
+                    (error) => {
+                        if (error.status === 404 || error.status === 403) return false;
+                        throw error;
+                    },
+                ),
+            ),
+        );
+        matches += results.filter(Boolean).length;
+    }
+    return matches >= list.length - (list.length >= 5 ? 1 : 0);
+}
+
 module.exports = {
     SYNC_COOLDOWN_MS,
+    verifyFileBall,
+    startFastSync,
+    addFastSyncChunk,
+    finishFastSync,
     cancelSync,
     computeRaws,
     sendDueSyncReminders,
