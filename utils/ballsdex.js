@@ -488,6 +488,73 @@ function computeRaws(nonSpecial = [], rarityData = {}) {
     };
 }
 
+/* ----- Resumable syncs -----
+ * A running sync is checkpointed in MongoDB after every page: the job (ballsdexSyncJobs, _id = user id)
+ * holds the next cursor, and the pages fetched so far are in ballsdexSyncPages. If the bot restarts
+ * mid-sync, resumeInterruptedSyncs() picks the job up from the last cursor.
+ */
+const RESUME_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+let syncIndexReady = null;
+async function syncStorage() {
+    const database = await getDatabase();
+    const pages = database.collection("ballsdexSyncPages");
+    syncIndexReady ??= pages.createIndex({ userId: 1, page: 1 }, { unique: true }).catch(() => (syncIndexReady = null));
+    await syncIndexReady;
+    return { jobs: database.collection("ballsdexSyncJobs"), pages };
+}
+
+async function createSyncJob(userId) {
+    const { jobs, pages } = await syncStorage();
+    await pages.deleteMany({ userId });
+    await jobs.replaceOne({ _id: userId }, { _id: userId, startedAt: new Date(), cursor: null, pages: 0, fetched: 0, updatedAt: new Date() }, { upsert: true });
+}
+
+async function deleteSyncJob(userId) {
+    const { jobs, pages } = await syncStorage();
+    await Promise.all([jobs.deleteOne({ _id: userId }), pages.deleteMany({ userId })]);
+}
+
+async function fetchBallsResumable(userId, apiKey, onPage, shouldStop) {
+    const { jobs, pages } = await syncStorage();
+    const job = (await jobs.findOne({ _id: userId })) || {};
+    let cursor = job.cursor || undefined;
+    let page = job.pages || 0;
+    let fetched = job.fetched || 0;
+    let restarted = false;
+    if (page > 0) onPage?.(fetched);
+
+    while (page === 0 || cursor) {
+        if (shouldStop()) throw new SyncCancelled();
+        let response;
+        try {
+            response = await ballsdexFetch(apiKey, "/me/balls", { limit: PAGE_SIZE, cursor });
+        } catch (error) {
+            // A saved cursor the API no longer accepts: start this sync over once
+            if (cursor && page > 0 && !restarted && (error.status === 400 || error.status === 422)) {
+                restarted = true;
+                await pages.deleteMany({ userId });
+                cursor = undefined;
+                page = 0;
+                fetched = 0;
+                continue;
+            }
+            throw error;
+        }
+        const items = getItems(response.data);
+        await pages.updateOne({ userId, page }, { $set: { items } }, { upsert: true });
+        page += 1;
+        fetched += items.length;
+        cursor = response.data.next_cursor || undefined;
+        await jobs.updateOne({ _id: userId }, { $set: { cursor: cursor || null, pages: page, fetched, updatedAt: new Date() } });
+        onPage?.(fetched);
+        if (cursor) await sleep(Math.max(response.waitMs, PAGE_REQUEST_DELAY));
+    }
+
+    const saved = await pages.find({ userId }).sort({ page: 1 }).toArray();
+    return saved.flatMap((entry) => entry.items || []);
+}
+
 async function syncCollection(discordUserId, apiKey, onProgress, shouldStop) {
     const database = await getDatabase();
     const ballsCollection = database.collection("ballsdexBalls");
@@ -498,7 +565,8 @@ async function syncCollection(discordUserId, apiKey, onProgress, shouldStop) {
     const expected = totals?.ballCount ?? null;
 
     onProgress?.({ phase: "balls", fetched: 0, total: expected });
-    const balls = await getAllMyBalls(apiKey, (fetched) => onProgress?.({ phase: "balls", fetched, total: expected }), shouldStop);
+    const balls = await fetchBallsResumable(discordUserId, apiKey, (fetched) => onProgress?.({ phase: "balls", fetched, total: expected }), shouldStop);
+    if (shouldStop()) throw new SyncCancelled(); // e.g. unlinked while the last page was loading
     onProgress?.({ phase: "saving", fetched: balls.length, total: expected });
 
     const summary = buildCollectionSummary(profile, balls, totals);
@@ -731,15 +799,22 @@ function startSync(userId) {
         return { started: false, reason: "BUSY" };
     }
 
+    runSync(userId, encryptedKey);
+    return { started: true };
+}
+
+/** Runs a sync in the background; with `resume`, continues a checkpointed job after a restart. */
+function runSync(userId, encryptedKey, { resume = null } = {}) {
     const state = {
         inProgress: true,
-        startedAt: Date.now(),
+        startedAt: resume?.startedAt ? new Date(resume.startedAt).getTime() : Date.now(),
         finishedAt: null,
         error: null,
         cancelled: false,
         cancelRequested: false,
         ballCount: null,
-        progress: { phase: "starting", fetched: 0, total: null },
+        progress: { phase: "starting", fetched: resume?.fetched || 0, total: null },
+        resumed: Boolean(resume),
     };
     syncStates.set(userId, state);
     activeSync = { userId, state };
@@ -752,6 +827,7 @@ function startSync(userId) {
     void (async () => {
         let outcome = "failed";
         try {
+            if (!resume) await createSyncJob(userId);
             const result = await syncCollection(
                 userId,
                 decryptApiKey(encryptedKey),
@@ -787,11 +863,48 @@ function startSync(userId) {
                     .catch(() => {});
             }
         } finally {
+            await deleteSyncJob(userId).catch((error) => console.error("[BALLSDEX] Couldn't clear sync checkpoint:", error.message));
             finishSync(userId, state, outcome);
+            resumeNext();
         }
     })();
+}
 
-    return { started: true };
+const resumeQueue = []; // interrupted jobs waiting for the sync slot (normally at most one)
+
+function resumeNext() {
+    while (!activeSync && resumeQueue.length) {
+        const job = resumeQueue.shift();
+        const encryptedKey = getSavedApiKey(job._id);
+        if (!encryptedKey) {
+            deleteSyncJob(job._id).catch(() => {});
+            continue;
+        }
+        runSync(job._id, encryptedKey, { resume: job });
+    }
+}
+
+/**
+ * After a restart: continue syncs that were cut off, from their last saved page.
+ * Jobs older than a day, or of users who unlinked, are dropped.
+ * @returns {Promise<string[]>} user ids whose sync was resumed or queued
+ */
+async function resumeInterruptedSyncs() {
+    const { jobs } = await syncStorage();
+    const found = await jobs.find({}).sort({ startedAt: 1 }).toArray();
+    const resumed = [];
+    for (const job of found) {
+        if (syncStates.get(job._id)?.inProgress) continue;
+        const fresh = Date.now() - new Date(job.updatedAt || job.startedAt).getTime() < RESUME_MAX_AGE_MS;
+        if (!fresh || !getSavedApiKey(job._id)) {
+            await deleteSyncJob(job._id);
+            continue;
+        }
+        resumeQueue.push(job);
+        resumed.push(job._id);
+    }
+    resumeNext();
+    return resumed;
 }
 
 /** Ask the user's running sync to stop after the current page. */
@@ -830,6 +943,7 @@ module.exports = {
     cancelSync,
     computeRaws,
     sendDueSyncReminders,
+    resumeInterruptedSyncs,
     decryptFromSite,
     linkApiKey,
     unlinkAccount,

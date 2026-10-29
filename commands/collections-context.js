@@ -87,7 +87,7 @@ module.exports = {
 
         container.addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-                "-# That list may be outdated or not updated with new collectors. If you know something i don't, let me know! (<@334411435633541121> | @meffiu)",
+                "-# Collect one of these? Add yourself on https://ballidentifier.xyz/#/collectors",
             ),
         );
 

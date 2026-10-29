@@ -7,7 +7,7 @@ const { ASSETS_BASE_URL, BOT_NAMES, BOT_DATA_KEYS } = require("../utils/constant
 const { getData, updateData, writeJsonFile, readJsonFile, getAssetsPath } = require("../utils/helpers");
 const notifications = require("../utils/notifications");
 const collectorStore = require("../utils/collector-store");
-const { sendDueSyncReminders } = require("../utils/ballsdex");
+const { sendDueSyncReminders, resumeInterruptedSyncs } = require("../utils/ballsdex");
 
 // Local constants
 const UPVOTES_PATH = getAssetsPath("upvotes.json");
@@ -100,7 +100,8 @@ module.exports = {
                 client.upvotes = fetchedUpvotes;
                 client.logGeneral(`Fetched ${fetchedUpvotes.upvotes.length} upvotes`);
             } catch (error) {
-                client.upvotes = { upvotes: [] };
+                // Keep the last known upvoters (or the saved list) so a DBL hiccup doesn't put cooldowns on them
+                client.upvotes ??= { upvotes: readJsonFile(UPVOTES_PATH, []) };
                 console.error(`[DATAS] ❌ Failed to fetch upvotes:`, error.message);
             }
         };
@@ -181,6 +182,11 @@ module.exports = {
         refreshLoop();
 
         // "You can sync again" reminders (24 h after a Ballsdex sync)
+        // Syncs cut off by a restart continue from their last saved page
+        resumeInterruptedSyncs()
+            .then((ids) => ids.length && client.log("BALLSDEX", `Resumed ${ids.length} interrupted sync(s) after a restart: ${ids.join(", ")}`))
+            .catch((error) => console.error("[BALLSDEX] Couldn't resume interrupted syncs:", error.message));
+
         setInterval(() => sendDueSyncReminders().catch((error) => console.error("[BALLSDEX] Reminder loop:", error.message)), REMINDER_INTERVAL);
 
         // Set up DBL polling and vote handler

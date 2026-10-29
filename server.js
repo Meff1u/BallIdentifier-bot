@@ -54,12 +54,14 @@ const initializeServer = (c) => {
 // Rate limit middleware (each limiter has its own store, so public and API limits don't share a budget)
 const rateLimiterStores = [];
 
-const createRateLimiter = (maxRequests, windowMs) => {
+const clientIp = (req) => req.ip || req.socket.remoteAddress;
+
+const createRateLimiter = (maxRequests, windowMs, keyOf = clientIp) => {
     const store = new Map();
     rateLimiterStores.push({ store, windowMs });
 
     return (req, res, next) => {
-        const ip = req.ip || req.socket.remoteAddress;
+        const ip = keyOf(req);
         const now = Date.now();
         const recentTimestamps = (store.get(ip) || []).filter((timestamp) => timestamp > now - windowMs);
 
@@ -82,9 +84,15 @@ const createRateLimiter = (maxRequests, windowMs) => {
     };
 };
 
-// Rate limiters - requests come through Netlify functions, which share a few IPs across all users
+// Rate limiters. Website requests come through Netlify functions, which share a few IPs across ALL users,
+// so the signed endpoints are limited per Discord user / server instead of per IP (with a high per-IP ceiling).
 const generalLimiter = createRateLimiter(60, 60 * 1000); // public endpoints
-const apiLimiter = createRateLimiter(30, 60 * 1000); // signed dashboard endpoints
+const apiLimiter = createRateLimiter(30, 60 * 1000, (req) => {
+    const owner = req.params.userId ? `user:${req.params.userId}` : req.params.guildId ? `guild:${req.params.guildId}` : null;
+    return owner || clientIp(req);
+});
+const apiCeiling = createRateLimiter(1200, 60 * 1000); // everything under /api, per IP
+app.use("/api", apiCeiling);
 
 // Cleanup old entries every 30 minutes
 setInterval(() => {

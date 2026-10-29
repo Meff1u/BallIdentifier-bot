@@ -178,7 +178,8 @@ module.exports = {
 
             if (!result.started) {
                 const left = result.retryAfterSec || 0;
-                const wait = `${Math.floor(left / 3600) ? `${Math.floor(left / 3600)} h ` : ""}${Math.ceil((left % 3600) / 60)} min`;
+                const minutes = Math.ceil(left / 60);
+                const wait = `${Math.floor(minutes / 60) ? `${Math.floor(minutes / 60)} h ` : ""}${minutes % 60} min`;
                 const messages = {
                     NOT_LINKED: "Link your Ballsdex account first with `/ballsdex link`.",
                     IN_PROGRESS: "Your Ballsdex collection is already being synchronized.",

@@ -166,11 +166,11 @@ function inboxItem(type, title, body, link) {
 /** Changelog entries -> update notifications for everyone who wants them (one data.json write). */
 async function notifyChangelog(entries) {
     if (!entries.length) return;
-    const dms = [];
+    const dms = new Map(); // userId -> lines, so each user gets one DM however many entries there are
     updateData((data) => {
         for (const entry of entries) {
             const type = entry.type === "dex" ? "update_dex" : "update_site";
-            const title = entry.type === "dex" ? "Dex update" : "BallIdentifier update";
+            const title = entry.type === "dex" ? `${entry.dex ? `${entry.dex} ` : "Dex "}update` : entry.type === "bot" ? "Bot update" : "Website update";
             const body = entry.changes.slice(0, 3).join("\n") + (entry.changes.length > 3 ? `\n+${entry.changes.length - 3} more` : "");
             for (const [userId, user] of Object.entries(data.users)) {
                 const settings = getSettings(userId, data)[type];
@@ -181,15 +181,18 @@ async function notifyChangelog(entries) {
                     user.inbox.length = Math.min(user.inbox.length, INBOX_LIMIT);
                 }
                 if (settings.dm) {
-                    dms.push([userId, `**${title}**\n${entry.changes.map((c) => `- ${c}`).join("\n").slice(0, 1800)}\n-# Manage notifications on https://ballidentifier.xyz`]);
+                    if (!dms.has(userId)) dms.set(userId, []);
+                    dms.get(userId).push(`**${title}**`, ...entry.changes.map((change) => `- ${change}`));
                 }
             }
         }
     });
-    for (const [userId, text] of dms) {
+    for (const [userId, lines] of dms) {
+        let text = lines.join("\n");
+        if (text.length > 1800) text = `${text.slice(0, 1800)}\n…`;
         try {
             const user = await client?.users.fetch(userId);
-            await user?.send(text);
+            await user?.send(`${text}\n-# Full changelog and settings: https://ballidentifier.xyz`);
         } catch (error) {
             console.error(`[NOTIFY] update DM to ${userId} failed:`, error.message);
         }

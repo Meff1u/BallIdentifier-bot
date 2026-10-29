@@ -90,9 +90,9 @@ module.exports = {
 
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
-                .setLabel("Changelogs")
-                .setStyle(ButtonStyle.Secondary)
-                .setCustomId("changelogs"),
+                .setLabel("What's new")
+                .setStyle(ButtonStyle.Link)
+                .setURL("https://ballidentifier.xyz/#/identify?whatsnew=1"),
             new ButtonBuilder()
                 .setLabel("Buy me a coffee")
                 .setStyle(ButtonStyle.Link)

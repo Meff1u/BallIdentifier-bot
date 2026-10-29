@@ -353,52 +353,13 @@ module.exports = {
                     )
                     .addTextDisplayComponents(
                         new TextDisplayBuilder().setContent(
-                            "-# That list may be outdated or not updated with new collectors. If you know something i don't, let me know! (<@334411435633541121> | @meffiu)",
+                            "-# Collect one of these? Add yourself on https://ballidentifier.xyz/#/collectors",
                         ),
                     );
 
                 return interaction.reply({
                     components: [container],
                     flags: [MessageFlags.Ephemeral, MessageFlags.IsComponentsV2],
-                });
-            }
-
-            if (interaction.customId === "changelogs") {
-                const embed = new EmbedBuilder()
-                    .setColor(COLORS.INFO)
-                    .setTitle("📋 Changelogs")
-                    .addFields(
-                        {
-                            name: "v1.1.0 - Upvote System",
-                            value: "In this version, a new upvote system was implemented.\n- Users who upvote the bot in the last 12 hours have no restrictions.\n- Otherwise, identification is limited to one use per 10 minutes.\n- Bot checks for upvotes every 3 minutes.",
-                            inline: false,
-                        },
-                        {
-                            name: "v2.0.0 - Notifier",
-                            value: "Server notifier feature has been implemented:\n- With /notifier command you can set up a notifier for your server.\n- You can select bots to receive notifications from, choose a role to mention, and customize the notification message.\n- Notifier can be disabled at any time with /notifier disable command.",
-                            inline: false,
-                        },
-                        {
-                            name: "v2.1.0 - Trainer (Removed)",
-                            value: "⚠️ Trainer feature has been removed due to unauthorized use of Ballsdex bot assets.\n\nTry out trainer feature on [website](https://ballidentifier.xyz) instead!",
-                            inline: false,
-                        },
-                        {
-                            name: "v2.3.0 - Dashboard",
-                            value: "A new dashboard has been implemented for easier management of your bot settings.\n- Access your dashboard at [ballidentifier.xyz/dashboard](https://ballidentifier.xyz/dashboard).",
-                            inline: false,
-                        },
-                        {
-                            name: "v2.3.6 - /info command",
-                            value: "Added /info command to get information about specific balls.",
-                            inline: false,
-                        },
-                    )
-                    .setTimestamp();
-
-                await interaction.reply({
-                    embeds: [embed],
-                    flags: MessageFlags.Ephemeral,
                 });
             }
         }
