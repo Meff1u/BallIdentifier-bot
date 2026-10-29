@@ -1,5 +1,6 @@
 const { getDatabase } = require("./database");
 const { BOT_DATA_KEYS, ADMIN_ID } = require("./constants");
+const { getSavedApiKey, getStoredCollection } = require("./ballsdex");
 
 const PROFILE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MISSING_PROFILE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -201,6 +202,8 @@ async function addSelf(userId, dexKey, ballId) {
         throw fail(409, `You're already a collector of ${found.name}.`, "ALREADY");
     }
 
+    if (dexKey === "BD") await checkBallsdexOwnership(userId, found);
+
     const now = Date.now();
     const recent = (addLog.get(userId) || []).filter((time) => now - time < 24 * 60 * 60 * 1000);
     if (recent.length >= DAILY_ADD_LIMIT) throw fail(429, `You can add yourself to ${DAILY_ADD_LIMIT} balls a day. Try again tomorrow.`, "DAILY_LIMIT");
@@ -224,6 +227,31 @@ async function addSelf(userId, dexKey, ballId) {
     enqueueProfile(userId);
     client?.logAPI?.(`Collectors: <@${userId}> added themselves to **${found.name}** (${dexKey})`);
     return { ballId: found.ball.id, ballName: found.name };
+}
+
+/**
+ * Ballsdex only: the user must have synced their Ballsdex account, and own at least half
+ * of the balls the collector needs (cc in Ballsdex.json), counted from their last sync.
+ */
+async function checkBallsdexOwnership(userId, found) {
+    const required = Number.parseInt(found.ball.cc, 10);
+    const stored = getSavedApiKey(userId) ? await getStoredCollection(userId).catch(() => null) : null;
+    if (!stored) {
+        throw fail(403, "Link and sync your Ballsdex account first (Ballsdex tab), so your collection can be checked.", "SYNC_REQUIRED");
+    }
+    if (!stored.ownedCounts) {
+        throw fail(403, "Sync your Ballsdex account once more (Ballsdex tab), so your collection can be checked.", "SYNC_REQUIRED");
+    }
+    if (!Number.isFinite(required) || required <= 0) return;
+    const needed = Math.ceil(required / 2);
+    const owned = Number(stored.ownedCounts[found.ball.id]) || 0;
+    if (owned < needed) {
+        throw fail(
+            403,
+            `You have ${owned} ${found.name} in your last sync. You need at least ${needed} (half of the ${required} the collector requires).`,
+            "NOT_ENOUGH",
+        );
+    }
 }
 
 /** Removes a self entry. Users remove their own; the admin can remove anyone's. */

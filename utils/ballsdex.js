@@ -424,6 +424,16 @@ function countNonSpecial(balls) {
     return [...counts.values()];
 }
 
+/** Instances owned per ball id (specials included), for the Ballsdex collector check. */
+function countOwned(balls) {
+    const counts = {};
+    for (const ball of balls) {
+        const id = ball.ball?.id ?? ball.ball_id;
+        if (id !== undefined && id !== null) counts[id] = (counts[id] || 0) + 1;
+    }
+    return counts;
+}
+
 function rawValueForTier(tier) {
     if (!Number.isFinite(tier) || tier < 1 || tier > RAW_MAX_TIER) return 0;
     let value = 0;
@@ -501,6 +511,7 @@ async function syncCollection(discordUserId, apiKey, onProgress, shouldStop) {
                 discordUserId,
                 summary,
                 nonSpecial: countNonSpecial(balls),
+                ownedCounts: countOwned(balls),
                 ballCount: summary.totalBalls,
                 lastSyncedAt: syncedAt,
             },
@@ -833,4 +844,4 @@ module.exports = {
     removeApiKey,
     saveApiKey,
     syncCollection,
-};
+};
