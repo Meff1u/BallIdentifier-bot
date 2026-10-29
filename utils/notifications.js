@@ -190,7 +190,32 @@ function inboxItem(type, title, body, link) {
 }
 
 /** Changelog entries -> update notifications for everyone who wants them (one data.json write). */
+// Changelog entries of the same kind (type + dex) less than this apart become one update
+// (the website's What's new panel merges them the same way)
+const CHANGELOG_MERGE_GAP_SEC = 60 * 60;
+
+/** entries: { time (seconds), type, dex?, changes[] }, any order -> merged, oldest first */
+function mergeChangelogEntries(entries) {
+    const merged = [];
+    const open = new Map(); // "type|dex" -> group
+    for (const entry of [...entries].sort((a, b) => a.time - b.time)) {
+        const key = `${entry.type}|${entry.dex || ""}`;
+        const group = open.get(key);
+        if (group && entry.time - group.time <= CHANGELOG_MERGE_GAP_SEC) {
+            // newest changes first, like the changelog
+            group.changes = [...entry.changes.filter((change) => !group.changes.includes(change)), ...group.changes];
+            group.time = entry.time;
+            continue;
+        }
+        const fresh = { ...entry, changes: [...entry.changes] };
+        open.set(key, fresh);
+        merged.push(fresh);
+    }
+    return merged;
+}
+
 async function notifyChangelog(entries) {
+    entries = mergeChangelogEntries(entries);
     if (!entries.length) return;
     const dms = new Map(); // userId -> lines, so each user gets one DM however many entries there are
     updateData((data) => {
@@ -225,4 +250,4 @@ function publicTypes() {
     return Object.entries(TYPES).map(([id, { label, description }]) => ({ id, label, description }));
 }
 
-module.exports = { TYPES, setClient, getSettings, setSetting, markWebUser, getInbox, markRead, notify, notifyChangelog, publicTypes };
+module.exports = { TYPES, setClient, getSettings, setSetting, markWebUser, getInbox, markRead, notify, notifyChangelog, mergeChangelogEntries, CHANGELOG_MERGE_GAP_SEC, publicTypes };

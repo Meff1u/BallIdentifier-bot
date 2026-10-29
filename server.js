@@ -697,7 +697,7 @@ const dexEditorError = (res, error) => {
 
 app.post("/api/users/:userId/dex/save", apiLimiter, jsonBody("8mb"), verifySignature, requireOwner, async (req, res) => {
     try {
-        const { dex, originalName, name, details, image, shift, previousAlt } = req.body || {};
+        const { dex, originalName, name, details, image, shift, previousAlt, previousUntil } = req.body || {};
         if (image !== undefined && image !== null && typeof image !== "string") return res.status(400).json({ error: "Invalid image" });
         const result = await dexEditor.saveEntry({
             dex,
@@ -707,6 +707,7 @@ app.post("/api/users/:userId/dex/save", apiLimiter, jsonBody("8mb"), verifySigna
             image: image ? Buffer.from(image, "base64") : null,
             shift: shift === "same" || shift === "higher" ? shift : null,
             previousAlt: typeof previousAlt === "string" ? previousAlt : "",
+            previousUntil: typeof previousUntil === "string" ? previousUntil : "",
             actor: "website",
         });
         res.status(200).json(result);

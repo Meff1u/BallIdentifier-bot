@@ -120,6 +120,7 @@ module.exports = {
         };
 
         // New changelog.json entries (committed to the website repo) -> update notifications
+        const CHANGELOG_SETTLE_SEC = 30 * 60;
         client.checkChangelog = async () => {
             try {
                 const response = await fetch(CHANGELOG_URL);
@@ -132,13 +133,17 @@ module.exports = {
 
                 const newest = Math.max(...entries.map((entry) => entry.time));
                 const seen = getData().meta?.changelogSeenAt;
-                updateData((data) => {
-                    data.meta ??= {};
-                    data.meta.changelogSeenAt = Math.max(newest, seen || 0);
-                });
+                const markSeen = () =>
+                    updateData((data) => {
+                        data.meta ??= {};
+                        data.meta.changelogSeenAt = Math.max(newest, seen || 0);
+                    });
                 // First run only records where we are, so old entries never spam anyone
-                if (!seen) return;
+                if (!seen) return markSeen();
                 const fresh = entries.filter((entry) => entry.time > seen).sort((a, b) => a.time - b.time);
+                // Several changes in a row (e.g. dex edits) become one notification: wait until it's been quiet for a while
+                if (fresh.length && Date.now() / 1000 - fresh[fresh.length - 1].time < CHANGELOG_SETTLE_SEC) return;
+                markSeen();
                 if (fresh.length) {
                     client.logGeneral(`${fresh.length} new changelog entr${fresh.length === 1 ? "y" : "ies"}, notifications sent`);
                     await notifications.notifyChangelog(fresh);

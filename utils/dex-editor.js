@@ -18,11 +18,9 @@ const PREVIOUS_JSON = "assets/jsons/previous-arts.json";
 const previousDir = (name) => `assets/dexes/${PREVIOUS_DEX}/previous/${name}`;
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
-/** "29th October 2026", like the dates already in previous-arts.json */
+/** "October 2026": default "until" of a replaced art (the owner can type something else) */
 function untilDate(date = new Date()) {
-    const day = date.getUTCDate();
-    const suffix = day % 10 === 1 && day !== 11 ? "st" : day % 10 === 2 && day !== 12 ? "nd" : day % 10 === 3 && day !== 13 ? "rd" : "th";
-    return `${day}${suffix} ${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
+    return `${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
 }
 
 const serializePrevious = (previous, raw) => `${JSON.stringify(previous, null, 4)}${raw.endsWith("\n") ? "\n" : ""}`;
@@ -257,9 +255,10 @@ function applyLocally(dex, data, hashes) {
  *                                       "same" = the same rarity or rarer moves 1 down, anything else = no change
  * @param {boolean} [options.merge]      editing only: empty details keep their current values
  * @param {string} [options.previousAlt] Ballsdex, new art: optional alt text for the old art in Previous arts
+ * @param {string} [options.previousUntil] Ballsdex, new art: "used until" of the old art (default: this month and year)
  * @param {string} [options.actor]       who did it, for the commit message
  */
-function saveEntry({ dex, originalName = null, name, details, image = null, shift = false, merge = false, previousAlt = "", actor = "owner" }) {
+function saveEntry({ dex, originalName = null, name, details, image = null, shift = false, merge = false, previousAlt = "", previousUntil = "", actor = "owner" }) {
     checkDex(dex);
     const newName = cleanName(name);
     const oldName = originalName ? cleanName(originalName) : null;
@@ -350,7 +349,8 @@ function saveEntry({ dex, originalName = null, name, details, image = null, shif
             }
             if (art && oldPreview) {
                 const alt = String(previousAlt || "").trim().slice(0, 200);
-                list.push({ artist: before.artist || "Unknown", until: untilDate(), ...(alt ? { alt } : {}) });
+                const until = String(previousUntil || "").trim().slice(0, 60) || untilDate();
+                list.push({ artist: before.artist || "Unknown", until, ...(alt ? { alt } : {}) });
                 files.push({ path: `${previousDir(newName)}/${list.length}.webp`, sha: oldPreview });
                 changes.push(`The old art of ${newName} is now in Previous arts`);
             }
@@ -416,4 +416,4 @@ function deleteEntry({ dex, name, actor = "owner" }) {
     });
 }
 
-module.exports = { DEXES, DEX_KEYS, FIELDS, setClient, saveEntry, deleteEntry, cleanDetails };
+module.exports = { untilDate, DEXES, DEX_KEYS, FIELDS, setClient, saveEntry, deleteEntry, cleanDetails };

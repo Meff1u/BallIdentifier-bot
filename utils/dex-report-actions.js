@@ -53,6 +53,8 @@ function buildModal(mode, dexKey, name, client) {
                 : textInput("id", "New ID (optional)", { placeholder: keep(entry.id), max: 10 }),
             textInput("extra", "More changes (optional, one per line)", {
                 style: TextInputStyle.Paragraph,
+                // Ballsdex: "used until" of the old art in Previous arts, this month by default (editable)
+                value: dex === "Ballsdex" ? `until: ${dexEditor.untilDate()}` : undefined,
                 placeholder: `wave: 5\ncommon_value: 150\ndemand: A\ncc: 250${dex === "Ballsdex" ? `\nid: ${entry.id ?? 123}` : ""}`,
                 max: 400,
             }),
@@ -78,14 +80,16 @@ function parseForm(interaction) {
         }
     };
     const details = { rarity: get("rarity"), artist: get("artist"), id: get("id") };
-    const fields = [...EXTRA_FIELDS, "id"];
+    const fields = [...EXTRA_FIELDS, "id", "until"];
+    let previousUntil = "";
     for (const line of get("extra").split("\n").map((l) => l.trim()).filter(Boolean)) {
         const match = /^([\w ]+?)\s*[:=]\s*(.*)$/.exec(line);
         const field = match?.[1].toLowerCase().replace(/\s+/g, "_");
         if (!match || !fields.includes(field)) throw Object.assign(new Error(`Can't read "${line}". Use: ${fields.join(", ")} (e.g. "wave: 5").`), { status: 400 });
-        details[field] = match[2];
+        if (field === "until") previousUntil = match[2].trim();
+        else details[field] = match[2];
     }
-    return { name: get("name"), details, previousAlt: get("alt") };
+    return { name: get("name"), details, previousAlt: get("alt"), previousUntil };
 }
 
 function reportImageUrl(message) {
@@ -137,8 +141,8 @@ async function handleDexEdit(interaction, client) {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         try {
             if (!dex || !imageUrl) throw Object.assign(new Error("The report or its spawn image is gone."), { status: 400 });
-            const { name, details, previousAlt } = parseForm(interaction);
-            const options = { dex, name, details, imageUrl, previousAlt };
+            const { name, details, previousAlt, previousUntil } = parseForm(interaction);
+            const options = { dex, name, details, imageUrl, previousAlt, previousUntil };
             if (mode === "update") {
                 options.originalName = name;
                 options.merge = true;
