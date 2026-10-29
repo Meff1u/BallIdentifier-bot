@@ -86,9 +86,98 @@ async function readError(response) {
     return error;
 }
 
+const RATE_PROBE_MAX_AGE_MS = 30 * 1000;
+const RATE_LIMIT_LABELS = {
+    minute: "Per minute",
+    day: "Per day",
+    player_minute: "Player lookups per minute",
+    ip_minute: "Per minute",
+    ip_day: "Per day",
+};
+const keyRateLimits = new Map(); // sha256(apiKey) -> { at, limits }
+let ipRateLimits = null; // { at, limits }
+
+const hashKey = (apiKey) => crypto.createHash("sha256").update(apiKey).digest("hex");
+
+function parseRateLimitList(value) {
+    const out = new Map();
+    for (const part of String(value || "").split(",")) {
+        const match = /^\s*"([^"]+)"\s*;(.*)$/.exec(part);
+        if (!match) continue;
+        const params = {};
+        for (const pair of match[2].split(";")) {
+            const [key, raw] = pair.trim().split("=");
+            if (key && raw !== undefined && Number.isFinite(Number(raw))) params[key] = Number(raw);
+        }
+        out.set(match[1], params);
+    }
+    return out;
+}
+
+function recordRateLimits(apiKey, headers) {
+    const policies = parseRateLimitList(headers.get("ratelimit-policy"));
+    if (!policies.size) return;
+    const states = parseRateLimitList(headers.get("ratelimit"));
+    const limits = [];
+    for (const [name, policy] of policies) {
+        if (!Number.isFinite(policy.q) || policy.q <= 0) continue;
+        const state = states.get(name) || {};
+        limits.push({
+            name,
+            limit: policy.q,
+            windowSec: policy.w,
+            remaining: Number.isFinite(state.r) ? state.r : policy.q,
+            resetSec: Number.isFinite(state.t) ? state.t : policy.w,
+        });
+    }
+    const at = Date.now();
+    const keyLimits = limits.filter((limit) => !limit.name.startsWith("ip_"));
+    const ipLimits = limits.filter((limit) => limit.name.startsWith("ip_"));
+    if (keyLimits.length) keyRateLimits.set(hashKey(apiKey), { at, limits: keyLimits });
+    if (ipLimits.length) ipRateLimits = { at, limits: ipLimits };
+}
+
+// A snapshot as it stands now: a window that has reset since is shown as unused
+function viewRateLimits(snapshot) {
+    if (!snapshot) return null;
+    const elapsedSec = (Date.now() - snapshot.at) / 1000;
+    return {
+        updatedAt: new Date(snapshot.at).toISOString(),
+        limits: snapshot.limits.map((limit) => {
+            const reset = elapsedSec >= limit.resetSec;
+            const remaining = reset ? limit.limit : limit.remaining;
+            return {
+                name: limit.name,
+                label: RATE_LIMIT_LABELS[limit.name] || limit.name,
+                limit: limit.limit,
+                remaining,
+                used: limit.limit - remaining,
+                resetInSec: reset ? null : Math.max(0, Math.ceil(limit.resetSec - elapsedSec)),
+            };
+        }),
+    };
+}
+
+/** Rate-limit usage of the user's key and of the bot's shared IP. Probes /me when the snapshot is stale. */
+async function getRateLimits(userId) {
+    const encryptedKey = getSavedApiKey(userId);
+    if (!encryptedKey) return null;
+    const apiKey = decryptApiKey(encryptedKey);
+    const hash = hashKey(apiKey);
+    const snapshot = keyRateLimits.get(hash);
+    if (!snapshot || Date.now() - snapshot.at > RATE_PROBE_MAX_AGE_MS) {
+        try {
+            await ballsdexFetch(apiKey, "/me", {}, { retry: false });
+        } catch (error) {
+            if (error.status !== 429) throw error; // a 429 still carries the headers
+        }
+    }
+    return { key: viewRateLimits(keyRateLimits.get(hash)), ip: viewRateLimits(ipRateLimits) };
+}
+
 // One API call that follows the documented rate-limit headers (https://ballsdex.com/api/docs/):
 // waits out a 429 using Retry-After, and returns how long to pause before the next call.
-async function ballsdexFetch(apiKey, path, query = {}) {
+async function ballsdexFetch(apiKey, path, query = {}, { retry = true } = {}) {
     const url = new URL(`${API_BASE_URL}${path}`);
     Object.entries(query).forEach(([key, value]) => {
         if (value !== undefined && value !== null) url.searchParams.set(key, value);
@@ -96,8 +185,9 @@ async function ballsdexFetch(apiKey, path, query = {}) {
 
     for (let attempt = 0; ; attempt++) {
         const response = await fetch(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+        recordRateLimits(apiKey, response.headers);
 
-        if (response.status === 429 && attempt < MAX_429_RETRIES) {
+        if (response.status === 429 && retry && attempt < MAX_429_RETRIES) {
             const waitMs = (Number(response.headers.get("retry-after")) || 2) * 1000;
             if (waitMs > MAX_RATE_LIMIT_WAIT_MS) throw await readError(response);
             await sleep(waitMs + 250);
@@ -731,6 +821,7 @@ module.exports = {
     linkApiKey,
     unlinkAccount,
     getSyncState,
+    getRateLimits,
     startSync,
     ballsdexRequest,
     buildCollectionSummary,
@@ -742,4 +833,4 @@ module.exports = {
     removeApiKey,
     saveApiKey,
     syncCollection,
-};
+};

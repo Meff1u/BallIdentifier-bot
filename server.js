@@ -12,11 +12,13 @@ const {
     getSavedApiKey,
     getStoredCollection,
     getSyncState,
+    getRateLimits,
     startSync,
     cancelSync,
     computeRaws,
 } = require("./utils/ballsdex");
 const notifications = require("./utils/notifications");
+const collectorStore = require("./utils/collector-store");
 
 const PORT = process.env.PORT || 3001;
 
@@ -559,6 +561,49 @@ app.get("/api/users/:userId/ballsdex/raws", apiLimiter, verifySignature, async (
     } catch (error) {
         console.error("[API] Raws failed:", error.message);
         res.status(503).json({ error: "Collection storage is unavailable right now." });
+    }
+});
+
+// Ballsdex API rate-limit usage: the user's key and the bot's shared IP
+app.get("/api/users/:userId/ballsdex/ratelimit", apiLimiter, verifySignature, async (req, res) => {
+    const { userId } = req.params;
+    try {
+        const limits = await getRateLimits(userId);
+        if (!limits) return res.status(200).json({ available: false, reason: "NOT_LINKED" });
+        res.status(200).json({ available: true, ...limits });
+    } catch (error) {
+        console.error("[API] Rate limits failed:", error.message);
+        const message = error.status === 401 || error.status === 403 ? "Ballsdex rejected your API key. Link it again." : "Couldn't reach the Ballsdex API.";
+        res.status(502).json({ error: message });
+    }
+});
+
+// Collectors of one dex (verified from the dex data + self-added on the website)
+app.get("/api/collectors/:dexKey", generalLimiter, verifySignature, (req, res) => {
+    const result = collectorStore.getDexCollectors(req.params.dexKey);
+    if (!result) return res.status(503).json({ error: "Dex data is still loading. Try again in a moment." });
+    res.status(200).json(result);
+});
+
+// Add or remove yourself as a collector (the admin can also remove others' self entries)
+app.post("/api/users/:userId/collectors", apiLimiter, verifySignature, async (req, res) => {
+    const { userId } = req.params;
+    const { action, dexKey, ballId, targetUserId } = req.body || {};
+    if (!["add", "remove"].includes(action) || typeof dexKey !== "string" || !Number.isInteger(ballId)) {
+        return res.status(400).json({ error: "Invalid request" });
+    }
+    if (targetUserId !== undefined && (typeof targetUserId !== "string" || !/^\d{17,20}$/.test(targetUserId))) {
+        return res.status(400).json({ error: "Invalid user" });
+    }
+    try {
+        const result = action === "add"
+            ? await collectorStore.addSelf(userId, dexKey, ballId)
+            : await collectorStore.removeSelf(userId, targetUserId || userId, dexKey, ballId);
+        res.status(200).json({ success: true, ...result });
+    } catch (error) {
+        if (error.status) return res.status(error.status).json({ error: error.message, code: error.code });
+        console.error("[API] Collectors update failed:", error.message);
+        res.status(503).json({ error: "Collector storage is unavailable right now. Try again later." });
     }
 });
 

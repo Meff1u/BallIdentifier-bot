@@ -6,6 +6,7 @@ const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fet
 const { ASSETS_BASE_URL, BOT_NAMES, BOT_DATA_KEYS } = require("../utils/constants");
 const { getData, updateData, writeJsonFile, readJsonFile, getAssetsPath } = require("../utils/helpers");
 const notifications = require("../utils/notifications");
+const collectorStore = require("../utils/collector-store");
 const { sendDueSyncReminders } = require("../utils/ballsdex");
 
 // Local constants
@@ -30,6 +31,7 @@ module.exports = {
         client.logDiscord(`🤖 Bot started: ${client.user.tag} | Guilds: ${client.guilds.cache.size}`);
         
         notifications.setClient(client);
+        collectorStore.init(client);
 
         // Initialize DBL client
         client.dbl = createDjsClient(process.env.DBL_TOKEN, client);
@@ -67,6 +69,7 @@ module.exports = {
             await Promise.all(fetchPromises);
             client.hashes = hashes;
             client.rarities = rarities;
+            collectorStore.applyOverlay(); // self-added collectors from the website
         };
 
         client.fetchUpvotes = async () => {
