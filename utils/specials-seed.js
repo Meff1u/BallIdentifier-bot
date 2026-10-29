@@ -6,15 +6,6 @@
 
 module.exports = [
     {
-        "id": 1
-    },
-    {
-        "id": 2
-    },
-    {
-        "id": 3
-    },
-    {
         "id": 4,
         "name": "Halloween 2022",
         "alias": "Pumpkin",
@@ -308,9 +299,6 @@ module.exports = [
     {
         "id": 39,
         "name": "Secret Santa 2025"
-    },
-    {
-        "id": 40
     },
     {
         "id": 41,
