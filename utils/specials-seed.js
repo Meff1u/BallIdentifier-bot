@@ -118,10 +118,6 @@ module.exports = [
         "duration": "3 days"
     },
     {
-        "id": 17,
-        "name": "Corrupted event (?)"
-    },
-    {
         "id": 18,
         "name": "Valentine 2024"
     },

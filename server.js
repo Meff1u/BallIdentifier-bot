@@ -704,6 +704,16 @@ app.get("/api/specials", generalLimiter, verifySignature, async (req, res) => {
     }
 });
 
+app.get("/api/specials/:specialId/market", generalLimiter, verifySignature, async (req, res) => {
+    try {
+        res.status(200).json(await specials.getSpecialMarket(Number(req.params.specialId)));
+    } catch (error) {
+        if (error.status === 404) return res.status(404).json({ error: "Unknown special" });
+        client?.logError?.("Special market data failed", error);
+        res.status(502).json({ error: "Couldn't load the market data from Ballsdex. Try again later." });
+    }
+});
+
 app.post("/api/users/:userId/specials/:specialId", apiLimiter, verifySignature, requireOwner, async (req, res) => {
     try {
         const id = Number(req.params.specialId);
