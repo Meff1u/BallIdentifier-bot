@@ -9,6 +9,9 @@ const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fet
 const API_BASE_URL = process.env.BALLSDEX_API_URL || "https://ballsdex.com/api/v1";
 const ENCRYPTION_ALGORITHM = "aes-256-gcm";
 const PAGE_SIZE = 25;
+// Every sync runs from the bot's one IP (20 000 Ballsdex requests a day in total, 25 balls per request).
+// A sync stops when the shared daily quota gets down to this reserve, so the rest of the bot keeps working.
+const IP_DAY_RESERVE = 2000;
 const PAGE_REQUEST_DELAY = 1000; // ~60 pages/min: the per-key limit, and kind to the shared per-IP limit
 const SYNC_COOLDOWN_MS = 24 * 60 * 60 * 1000; // after a successful sync
 const SYNC_RETRY_COOLDOWN_MS = 5 * 60 * 1000; // after a failed or cancelled sync
@@ -139,6 +142,33 @@ function recordRateLimits(apiKey, headers) {
 }
 
 // A snapshot as it stands now: a window that has reset since is shown as unused
+function syncError(message, code) {
+    const error = new Error(message);
+    error.code = code;
+    return error;
+}
+
+/** What's left today of a limit (by name) in a snapshot, or null when unknown. */
+function remainingToday(snapshot, name) {
+    const limit = viewRateLimits(snapshot)?.limits.find((entry) => entry.name === name);
+    return limit ? limit.remaining : null;
+}
+
+/**
+ * Stops a sync before the next page when today's quota runs out: the bot's shared IP keeps
+ * IP_DAY_RESERVE requests for everyone else, and the user's own key must have a request left.
+ */
+function assertQuota(apiKey) {
+    const ipLeft = remainingToday(ipRateLimits, "ip_day");
+    if (ipLeft !== null && ipLeft <= IP_DAY_RESERVE) {
+        throw syncError("The sync stopped: BallIdentifier has used most of today's Ballsdex API requests. Try again tomorrow.", "QUOTA");
+    }
+    const keyLeft = remainingToday(keyRateLimits.get(hashKey(apiKey)), "day");
+    if (keyLeft !== null && keyLeft <= 0) {
+        throw syncError("The sync stopped: your Ballsdex API key has no requests left today. Try again tomorrow.", "QUOTA");
+    }
+}
+
 function viewRateLimits(snapshot) {
     if (!snapshot) return null;
     const elapsedSec = (Date.now() - snapshot.at) / 1000;
@@ -515,6 +545,22 @@ async function deleteSyncJob(userId) {
     await Promise.all([jobs.deleteOne({ _id: userId }), pages.deleteMany({ userId })]);
 }
 
+// Only what the summary, specials and raws need: keeps big collections small in MongoDB and in memory
+function compactBall(ball) {
+    return {
+        id: ball.id,
+        ball: ball.ball ? { id: ball.ball.id, country: ball.ball.country } : undefined,
+        ball_id: ball.ball_id,
+        special: ball.special ? { id: ball.special.id, name: ball.special.name } : null,
+        special_id: ball.special_id,
+        self_caught: ball.self_caught,
+        favorite: ball.favorite,
+        is_frame: ball.is_frame,
+        caught_at: ball.caught_at,
+        spawned_at: ball.spawned_at,
+    };
+}
+
 async function fetchBallsResumable(userId, apiKey, onPage, shouldStop) {
     const { jobs, pages } = await syncStorage();
     const job = (await jobs.findOne({ _id: userId })) || {};
@@ -526,6 +572,7 @@ async function fetchBallsResumable(userId, apiKey, onPage, shouldStop) {
 
     while (page === 0 || cursor) {
         if (shouldStop()) throw new SyncCancelled();
+        assertQuota(apiKey);
         let response;
         try {
             response = await ballsdexFetch(apiKey, "/me/balls", { limit: PAGE_SIZE, cursor });
@@ -541,7 +588,7 @@ async function fetchBallsResumable(userId, apiKey, onPage, shouldStop) {
             }
             throw error;
         }
-        const items = getItems(response.data);
+        const items = getItems(response.data).map(compactBall);
         await pages.updateOne({ userId, page }, { $set: { items } }, { upsert: true });
         page += 1;
         fetched += items.length;
@@ -563,6 +610,7 @@ async function syncCollection(discordUserId, apiKey, onProgress, shouldStop) {
     const profile = await ballsdexRequest(apiKey, "/me");
     const totals = await getPlayerTotals(apiKey, discordUserId);
     const expected = totals?.ballCount ?? null;
+
 
     onProgress?.({ phase: "balls", fetched: 0, total: expected });
     const balls = await fetchBallsResumable(discordUserId, apiKey, (fetched) => onProgress?.({ phase: "balls", fetched, total: expected }), shouldStop);
