@@ -14,7 +14,13 @@ const PAGE_SIZE = 25;
 const IP_DAY_RESERVE = 2000;
 // A sync stopped by the quota keeps its progress and continues by itself once the quota resets
 const PAUSED_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-const PAGE_REQUEST_DELAY = 1000; // ~60 pages/min: the per-key limit, and kind to the shared per-IP limit
+// Sync pacing (see syncPageDelay): pages go as fast as the per-minute limits allow, but part of the bot's
+// shared per-IP minute limit always stays free for everything else, more of it while others are using it.
+const MIN_PAGE_DELAY = 100;
+const FALLBACK_PAGE_DELAY = 1000; // before the first rate-limit headers are known
+const IP_MINUTE_FREE_IDLE = 12; // ~10% of 120: kept free when nothing else is calling the API
+const IP_MINUTE_FREE_BUSY = 60; // ~50%: kept free while other requests are coming in
+const IP_MINUTE_BUSY_OTHERS = 4; // that many other requests in the current minute = busy
 const SYNC_COOLDOWN_MS = 24 * 60 * 60 * 1000; // after a successful sync
 const SYNC_RETRY_COOLDOWN_MS = 5 * 60 * 1000; // after a failed or cancelled sync
 const TOP_ENTRIES = 5;
@@ -253,6 +259,37 @@ async function ballsdexFetch(apiKey, path, query = {}, { retry = true } = {}) {
     }
 }
 
+// Sync page requests in the last minute (one sync runs at a time), to tell them apart from other traffic
+const syncRequestTimes = [];
+function noteSyncRequest() {
+    const now = Date.now();
+    syncRequestTimes.push(now);
+    while (syncRequestTimes.length && now - syncRequestTimes[0] > 60 * 1000) syncRequestTimes.shift();
+}
+
+/**
+ * Pause before the next sync page: what's left of each per-minute limit is spread over the rest of
+ * its window. The key's own limit is used up to its last request; the shared IP limit keeps
+ * IP_MINUTE_FREE_IDLE free, or IP_MINUTE_FREE_BUSY when other requests are using it this minute
+ * (website, commands, other users), so the sync slows down by itself and speeds up again after.
+ */
+function syncPageDelay(apiKey, waitMs = 0) {
+    const ip = viewRateLimits(ipRateLimits)?.limits.find((limit) => limit.name === "ip_minute");
+    const key = viewRateLimits(keyRateLimits.get(hashKey(apiKey)))?.limits.find((limit) => limit.name === "minute");
+    if (!ip && !key) return Math.max(waitMs, FALLBACK_PAGE_DELAY);
+
+    const budgets = [];
+    if (key) budgets.push({ left: key.remaining - 1, windowMs: (key.resetInSec ?? 60) * 1000 });
+    if (ip) {
+        const others = Math.max(0, ip.used - syncRequestTimes.length);
+        const keepFree = others >= IP_MINUTE_BUSY_OTHERS ? IP_MINUTE_FREE_BUSY : IP_MINUTE_FREE_IDLE;
+        budgets.push({ left: ip.remaining - keepFree, windowMs: (ip.resetInSec ?? 60) * 1000 });
+    }
+    let delay = MIN_PAGE_DELAY;
+    for (const { left, windowMs } of budgets) delay = Math.max(delay, left > 0 ? windowMs / left : windowMs + 250);
+    return Math.min(Math.max(delay, waitMs), MAX_RATE_LIMIT_WAIT_MS);
+}
+
 async function ballsdexRequest(apiKey, path, query = {}) {
     return (await ballsdexFetch(apiKey, path, query)).data;
 }
@@ -277,10 +314,11 @@ async function getAllMyBalls(apiKey, onPage, shouldStop = () => false) {
     do {
         if (shouldStop()) throw new SyncCancelled();
         const { data, waitMs } = await ballsdexFetch(apiKey, "/me/balls", { limit: PAGE_SIZE, cursor });
+        noteSyncRequest();
         balls.push(...getItems(data));
         cursor = data.next_cursor;
         onPage?.(balls.length);
-        if (cursor) await sleep(Math.max(waitMs, PAGE_REQUEST_DELAY));
+        if (cursor) await sleep(syncPageDelay(apiKey, waitMs));
     } while (cursor);
 
     return balls;
@@ -600,15 +638,21 @@ async function fetchBallsResumable(userId, apiKey, onPage, shouldStop) {
     let page = job.pages || 0;
     let fetched = job.fetched || 0;
     let restarted = false;
+    let saving = Promise.resolve(); // the previous page's checkpoint, written while the next page loads
     if (page > 0) onPage?.(fetched);
 
     while (page === 0 || cursor) {
-        if (shouldStop()) throw new SyncCancelled();
+        if (shouldStop()) {
+            await saving;
+            throw new SyncCancelled();
+        }
         assertQuota(apiKey);
         let response;
         try {
             response = await ballsdexFetch(apiKey, "/me/balls", { limit: PAGE_SIZE, cursor });
+            noteSyncRequest();
         } catch (error) {
+            await saving.catch(() => {});
             // A saved cursor the API no longer accepts: start this sync over once
             if (cursor && page > 0 && !restarted && (error.status === 400 || error.status === 422)) {
                 restarted = true;
@@ -621,14 +665,22 @@ async function fetchBallsResumable(userId, apiKey, onPage, shouldStop) {
             throw error;
         }
         const items = getItems(response.data).map(compactBall);
-        await pages.updateOne({ userId, page }, { $set: { items } }, { upsert: true });
+        const pageIndex = page;
         page += 1;
         fetched += items.length;
         cursor = response.data.next_cursor || undefined;
-        await jobs.updateOne({ _id: userId }, { $set: { cursor: cursor || null, pages: page, fetched, updatedAt: new Date() } });
+        // Checkpoints stay in order (page first, then the job), but don't hold up the next request
+        await saving;
+        const checkpoint = { cursor: cursor || null, pages: page, fetched, updatedAt: new Date() };
+        saving = (async () => {
+            await pages.updateOne({ userId, page: pageIndex }, { $set: { items } }, { upsert: true });
+            await jobs.updateOne({ _id: userId }, { $set: checkpoint });
+        })();
+        saving.catch(() => {}); // awaited below
         onPage?.(fetched);
-        if (cursor) await sleep(Math.max(response.waitMs, PAGE_REQUEST_DELAY));
+        if (cursor) await sleep(syncPageDelay(apiKey, response.waitMs));
     }
+    await saving;
 
     const saved = await pages.find({ userId }).sort({ page: 1 }).toArray();
     return saved.flatMap((entry) => entry.items || []);
