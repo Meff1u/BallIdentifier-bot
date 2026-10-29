@@ -29,8 +29,6 @@ const {
     sendThreadReport,
 } = require("../utils/helpers");
 
-// Lazy-load node-fetch
-const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
 // Bot config with dex names
 const BOT_CONFIG = Object.fromEntries(SUPPORTED_BOT_IDS.map((id) => [id, { dex: BOT_NAMES[id], dKey: BOT_DATA_KEYS[id] }]));
@@ -130,7 +128,7 @@ module.exports = {
                 thumbnail: imageUrl,
                 image: isConfident ? null : spawnData.imageUrl,
                 color: logColor,
-            }).catch((e) => console.error("[IDENTIFY] Failed to send log:", e));
+            }).catch((e) => console.error("[IDENTIFY] Failed to send log:", e.message));
 
             // Create result embed
             const embed = new EmbedBuilder()
@@ -195,30 +193,7 @@ module.exports = {
                 }
             }
         } catch (error) {
-            // Log error to webhook
-            const webhookUrl = process.env.ERROR_WEBHOOK_URL;
-            if (webhookUrl) {
-                try {
-                    await fetch(webhookUrl, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            embeds: [
-                                {
-                                    title: "Identify Command Error",
-                                    description: error.stack || String(error),
-                                    color: 0xff0000,
-                                    timestamp: new Date().toISOString(),
-                                },
-                            ],
-                        }),
-                    });
-                } catch (e) {
-                    console.error("[IDENTIFY] Error sending error report:", e);
-                }
-            }
-
-            // Re-throw to let the error handler catch it
+            // interactionCreate logs it to the Errors thread
             throw error;
         }
     },

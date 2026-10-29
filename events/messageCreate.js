@@ -174,9 +174,6 @@ async function notify(m, client, settings, info) {
         client.logImage(`[${guildName}] ${isConfident ? "✅ Identified" : "⚠️ Unknown"}: ${ballName} (diff: ${bestMatch.diff})`);
 
         if (isConfident) {
-            console.log(
-                `[NOTIFIER] Guild: ${guildName} | Best match: ${bestMatch.country} (${BOT_NAMES[m.author.id] || "Unknown Bot"}) | Diff: ${bestMatch.diff}`,
-            );
 
             // Increment identifyAmount counter (atomic read-modify-write)
             updateData((data) => {

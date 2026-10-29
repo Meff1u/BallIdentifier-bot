@@ -11,7 +11,7 @@ const DEX_KEYS = new Set(Object.values(BOT_DATA_KEYS));
 
 let client = null;
 let ready = false;
-const selfEntries = new Map(); // "dexKey:ballId" -> Map(userId -> addedAt ISO)
+const selfEntries = new Map(); // "dexKey:ballId" -> Map(userId -> { addedAt, status: "self" | "verified" | "removed" })
 const staticCollectors = new WeakMap(); // ball object -> collectors from the dex JSON
 const profiles = new Map(); // userId -> { name, username, avatarUrl, missing, fetchedAt }
 const addLog = new Map(); // userId -> [timestamps] of recent adds
@@ -39,10 +39,18 @@ function staticOf(ball) {
     return staticCollectors.get(ball);
 }
 
+// "removed" entries hide a collector from the dex data; "self"/"verified" ones add a collector
+function activeIds(dexKey, ball) {
+    const statics = staticOf(ball) || [];
+    const entries = selfEntries.get(entryKey(dexKey, ball.id));
+    const ids = statics.filter((id) => entries?.get(id)?.status !== "removed");
+    for (const [userId, entry] of entries || []) if (entry.status !== "removed") ids.push(userId);
+    return [...new Set(ids)];
+}
+
 function applyBall(dexKey, ball) {
     const statics = staticOf(ball);
-    const self = selfEntries.get(entryKey(dexKey, ball.id));
-    const merged = [...new Set([...(statics || []), ...(self ? self.keys() : [])])];
+    const merged = activeIds(dexKey, ball);
     if (merged.length) ball.collectors = merged;
     else if (statics) ball.collectors = [];
     else delete ball.collectors;
@@ -125,7 +133,7 @@ function warmProfiles() {
     }
 }
 
-function collectorView(userId, source, addedAt) {
+function collectorView(userId, source, addedAt, origin = "site") {
     const profile = profiles.get(userId);
     if (!profile) enqueueProfile(userId);
     return {
@@ -135,6 +143,7 @@ function collectorView(userId, source, addedAt) {
         avatarUrl: profile?.avatarUrl || defaultAvatar(userId),
         missing: Boolean(profile?.missing),
         source,
+        origin, // "data": from the dex JSON (only the owner can remove it), "site": added on the website
         addedAt: addedAt || null,
     };
 }
@@ -153,11 +162,11 @@ async function init(discordClient) {
         for (const entry of entries) {
             const key = entryKey(entry.dexKey, entry.ballId);
             if (!selfEntries.has(key)) selfEntries.set(key, new Map());
-            selfEntries.get(key).set(entry.userId, entry.addedAt);
+            selfEntries.get(key).set(entry.userId, { addedAt: entry.addedAt, status: entry.status || "self" });
         }
         for (const { _id, ...profile } of cachedProfiles) profiles.set(_id, profile);
         ready = true;
-        console.log(`[COLLECTORS] ✅ Loaded ${entries.length} self entries, ${cachedProfiles.length} profiles`);
+        client?.logGeneral?.(`Collectors: loaded ${entries.length} website entries, ${cachedProfiles.length} cached profiles`);
     } catch (error) {
         console.error("[COLLECTORS] ❌ Storage unavailable:", error.message);
     }
@@ -174,12 +183,19 @@ function getDexCollectors(dexKey) {
         if (!ball || ball.id === undefined) continue;
         const statics = staticOf(ball) || [];
         const self = selfEntries.get(entryKey(dexKey, ball.id));
-        if (!statics.length && !self?.size) continue;
-        const list = statics.map((id) => collectorView(id, "verified"));
-        for (const [userId, addedAt] of self || []) {
-            if (!statics.includes(userId)) list.push(collectorView(userId, "self", addedAt));
+        const list = [];
+        for (const id of statics) {
+            const entry = self?.get(id);
+            if (entry?.status === "removed") continue;
+            list.push(entry ? collectorView(id, entry.status, entry.addedAt) : collectorView(id, "verified", null, "data"));
         }
-        entries[ball.id] = list;
+        for (const [userId, entry] of self || []) {
+            if (entry.status === "verified" && !statics.includes(userId)) list.push(collectorView(userId, "verified", entry.addedAt));
+        }
+        for (const [userId, entry] of self || []) {
+            if (entry.status === "self" && !statics.includes(userId)) list.push(collectorView(userId, "self", entry.addedAt));
+        }
+        if (list.length) entries[ball.id] = list;
     }
     return { entries, pendingProfiles: queue.length };
 }
@@ -192,13 +208,8 @@ function fail(status, message, code) {
 }
 
 async function addSelf(userId, dexKey, ballId) {
-    if (!ready) throw fail(503, "Collector storage is unavailable right now. Try again later.", "UNAVAILABLE");
-    if (!DEX_KEYS.has(dexKey)) throw fail(400, "Unknown dex.", "BAD_DEX");
-    const found = findBall(dexKey, ballId);
-    if (!found) throw fail(404, "That ball doesn't exist in this dex.", "BAD_BALL");
-
-    const key = entryKey(dexKey, found.ball.id);
-    if ((staticOf(found.ball) || []).includes(userId) || selfEntries.get(key)?.has(userId)) {
+    const found = resolveBall(dexKey, ballId);
+    if (activeIds(dexKey, found.ball).includes(userId)) {
         throw fail(409, `You're already a collector of ${found.name}.`, "ALREADY");
     }
 
@@ -208,24 +219,16 @@ async function addSelf(userId, dexKey, ballId) {
     const recent = (addLog.get(userId) || []).filter((time) => now - time < 24 * 60 * 60 * 1000);
     if (recent.length >= DAILY_ADD_LIMIT) throw fail(429, `You can add yourself to ${DAILY_ADD_LIMIT} balls a day. Try again tomorrow.`, "DAILY_LIMIT");
     let total = 0;
-    for (const users of selfEntries.values()) if (users.has(userId)) total++;
+    for (const users of selfEntries.values()) if (users.get(userId)?.status === "self") total++;
     if (total >= MAX_SELF_ENTRIES) throw fail(429, `You've reached the limit of ${MAX_SELF_ENTRIES} self-added collectors.`, "MAX_ENTRIES");
 
     const addedAt = new Date(now).toISOString();
-    const db = await getDatabase();
-    try {
-        await db.collection("collectorEntries").insertOne({ dexKey, ballId: found.ball.id, ballName: found.name, userId, addedAt });
-    } catch (error) {
-        if (error.code === 11000) throw fail(409, `You're already a collector of ${found.name}.`, "ALREADY");
-        throw error;
-    }
-    if (!selfEntries.has(key)) selfEntries.set(key, new Map());
-    selfEntries.get(key).set(userId, addedAt);
+    await saveEntry(dexKey, found, userId, { addedAt, status: "self" });
     recent.push(now);
     addLog.set(userId, recent);
     applyBall(dexKey, found.ball);
     enqueueProfile(userId);
-    client?.logAPI?.(`Collectors: <@${userId}> added themselves to **${found.name}** (${dexKey})`);
+    client?.log?.("COLLECTORS", `<@${userId}> added themselves to **${found.name}** (${dexKey})`);
     return { ballId: found.ball.id, ballName: found.name };
 }
 
@@ -254,29 +257,66 @@ async function checkBallsdexOwnership(userId, found) {
     }
 }
 
-/** Removes a self entry. Users remove their own; the admin can remove anyone's. */
-async function removeSelf(actorId, targetId, dexKey, ballId) {
+async function saveEntry(dexKey, found, userId, entry, extra = {}) {
+    const db = await getDatabase();
+    await db.collection("collectorEntries").updateOne(
+        { dexKey, ballId: found.ball.id, userId },
+        { $set: { ballName: found.name, ...entry, ...extra } },
+        { upsert: true },
+    );
+    const key = entryKey(dexKey, found.ball.id);
+    if (!selfEntries.has(key)) selfEntries.set(key, new Map());
+    selfEntries.get(key).set(userId, entry);
+    applyBall(dexKey, found.ball);
+}
+
+function resolveBall(dexKey, ballId) {
     if (!ready) throw fail(503, "Collector storage is unavailable right now. Try again later.", "UNAVAILABLE");
-    if (actorId !== targetId && actorId !== ADMIN_ID) throw fail(403, "You can only remove yourself.", "FORBIDDEN");
     if (!DEX_KEYS.has(dexKey)) throw fail(400, "Unknown dex.", "BAD_DEX");
     const found = findBall(dexKey, ballId);
     if (!found) throw fail(404, "That ball doesn't exist in this dex.", "BAD_BALL");
+    return found;
+}
 
-    const key = entryKey(dexKey, found.ball.id);
-    if (!selfEntries.get(key)?.has(targetId)) {
-        if ((staticOf(found.ball) || []).includes(targetId)) {
-            throw fail(400, "This entry comes from the dex data. Ask @meffiu to change it.", "STATIC");
-        }
-        throw fail(404, "No such collector entry.", "NOT_FOUND");
+/** Owner only: add any Discord user as a verified collector (no ownership checks). */
+async function addVerified(actorId, targetId, dexKey, ballId) {
+    if (actorId !== ADMIN_ID) throw fail(403, "Only the owner can add other collectors.", "FORBIDDEN");
+    const found = resolveBall(dexKey, ballId);
+    const current = selfEntries.get(entryKey(dexKey, found.ball.id))?.get(targetId);
+    const fromData = (staticOf(found.ball) || []).includes(targetId);
+    if ((fromData && current?.status !== "removed") || current?.status === "verified") {
+        throw fail(409, `That user is already a verified collector of ${found.name}.`, "ALREADY");
     }
-
-    const db = await getDatabase();
-    await db.collection("collectorEntries").deleteOne({ dexKey, ballId: found.ball.id, userId: targetId });
-    selfEntries.get(key).delete(targetId);
-    if (!selfEntries.get(key).size) selfEntries.delete(key);
-    applyBall(dexKey, found.ball);
-    client?.logAPI?.(`Collectors: <@${actorId}> removed <@${targetId}> from **${found.name}** (${dexKey})`);
+    await saveEntry(dexKey, found, targetId, { addedAt: new Date().toISOString(), status: "verified" }, { addedBy: actorId });
+    enqueueProfile(targetId);
+    client?.log?.("COLLECTORS", `<@${actorId}> added <@${targetId}> to **${found.name}** (${dexKey}) as verified`);
     return { ballId: found.ball.id, ballName: found.name };
 }
 
-module.exports = { init, applyOverlay, getDexCollectors, addSelf, removeSelf };
+/** Users remove their own website entries; the owner can remove anyone, including dex-data collectors. */
+async function removeSelf(actorId, targetId, dexKey, ballId) {
+    if (actorId !== targetId && actorId !== ADMIN_ID) throw fail(403, "You can only remove yourself.", "FORBIDDEN");
+    const found = resolveBall(dexKey, ballId);
+    const key = entryKey(dexKey, found.ball.id);
+    const current = selfEntries.get(key)?.get(targetId);
+    const fromData = (staticOf(found.ball) || []).includes(targetId);
+    if (!activeIds(dexKey, found.ball).includes(targetId)) throw fail(404, "No such collector entry.", "NOT_FOUND");
+    if (fromData && actorId !== ADMIN_ID && !current) {
+        throw fail(400, "This entry comes from the dex data. Ask @meffiu to change it.", "STATIC");
+    }
+
+    const db = await getDatabase();
+    if (fromData) {
+        // Collectors from the dex JSON can't be deleted from the file: hide them instead
+        await saveEntry(dexKey, found, targetId, { addedAt: new Date().toISOString(), status: "removed" }, { removedBy: actorId });
+    } else {
+        await db.collection("collectorEntries").deleteOne({ dexKey, ballId: found.ball.id, userId: targetId });
+        selfEntries.get(key)?.delete(targetId);
+        if (selfEntries.get(key)?.size === 0) selfEntries.delete(key);
+        applyBall(dexKey, found.ball);
+    }
+    client?.log?.("COLLECTORS", `<@${actorId}> removed <@${targetId}> from **${found.name}** (${dexKey})`);
+    return { ballId: found.ball.id, ballName: found.name };
+}
+
+module.exports = { init, applyOverlay, getDexCollectors, addSelf, addVerified, removeSelf };

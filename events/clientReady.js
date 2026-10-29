@@ -28,7 +28,7 @@ module.exports = {
     once: true,
     async execute(client) {
         console.log(`[STARTUP] ✅ ${client.user.tag} ready`);
-        client.logDiscord(`🤖 Bot started: ${client.user.tag} | Guilds: ${client.guilds.cache.size}`);
+        client.logGeneral(`🤖 Bot started: ${client.user.tag} | Guilds: ${client.guilds.cache.size}`);
         
         notifications.setClient(client);
         collectorStore.init(client);
@@ -60,7 +60,7 @@ module.exports = {
                     const [rarityData, hashData] = await Promise.all([raritiesRes.json(), hashesRes.json()]);
                     rarities[key] = rarityData;
                     hashes[key] = hashData;
-                    console.log(`[DATAS] ✅ Fetched ${key} hashes and rarities`);
+                    client.logGeneral(`Fetched ${key} hashes and rarities`);
                 } catch (error) {
                     console.error(`[DATAS] ❌ Failed to fetch ${key}:`, error.message);
                 }
@@ -92,13 +92,13 @@ module.exports = {
                 
                 if (expiredUsers.length > 0) {
                     await client.upvoteReminder(expiredUsers);
-                    console.log(`[DATAS] 📤 Sent reminders to expired upvoters: ${expiredUsers.length}`);
+                    client.log("VOTES", `Upvotes expired: ${expiredUsers.length}, reminders sent`);
                 }
                 
 
                 writeJsonFile(UPVOTES_PATH, fetchedUpvotes.upvotes);
                 client.upvotes = fetchedUpvotes;
-                console.log(`[DATAS] ✅ Fetched ${fetchedUpvotes.upvotes.length} upvotes`);
+                client.logGeneral(`Fetched ${fetchedUpvotes.upvotes.length} upvotes`);
             } catch (error) {
                 client.upvotes = { upvotes: [] };
                 console.error(`[DATAS] ❌ Failed to fetch upvotes:`, error.message);
@@ -113,7 +113,7 @@ module.exports = {
                     link: "https://discordbotlist.com/bots/ballidentifier/upvote",
                     dmText: "Your upvote expired! [Upvote](https://discordbotlist.com/bots/ballidentifier/upvote) again!",
                 });
-                if (result.dm) console.log(`[DATAS] 📨 Reminder sent to ${userId}`);
+                if (result.dm) client.log("VOTES", `Reminder DM sent to <@${userId}>`);
             }
         };
 
@@ -138,7 +138,7 @@ module.exports = {
                 if (!seen) return;
                 const fresh = entries.filter((entry) => entry.time > seen).sort((a, b) => a.time - b.time);
                 if (fresh.length) {
-                    console.log(`[DATAS] 📰 ${fresh.length} new changelog entr${fresh.length === 1 ? "y" : "ies"}`);
+                    client.logGeneral(`${fresh.length} new changelog entr${fresh.length === 1 ? "y" : "ies"}, notifications sent`);
                     await notifications.notifyChangelog(fresh);
                 }
             } catch (error) {
@@ -159,7 +159,7 @@ module.exports = {
                 );
                 
                 await client.dbl.postBotStats({ guilds: client.guilds.cache.size, users: userCount });
-                console.log(`[DATAS] ✅ DBL stats posted`);
+                client.logGeneral("DBL stats posted");
             } catch (error) {
                 console.error(`[DATAS] ❌ DBL stats error:`, error.message);
             }
@@ -198,22 +198,7 @@ module.exports = {
                     dmText: "Thanks for voting!\n-# You can turn this message off on https://ballidentifier.xyz (bell icon)",
                 });
 
-                // Send webhook notification
-                const webhookUrl = process.env.UPVOTE_WEBHOOK_URL;
-                if (webhookUrl) {
-                    await fetch(webhookUrl, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            embeds: [{
-                                title: "New Upvote!",
-                                description: `<@${vote.id}> (${vote.username}) just upvoted!`,
-                                color: 0x00ff00,
-                                timestamp: vote.time ? new Date(vote.time).toISOString() : new Date().toISOString(),
-                            }],
-                        }),
-                    });
-                }
+                client.log("VOTES", `🗳️ New upvote: <@${vote.id}> (${vote.username})`);
             } catch (error) {
                 console.error(`[DATAS] ❌ Error handling vote:`, error.message);
             }

@@ -1,38 +1,39 @@
 /**
- * Batched logging system for Discord channels
- * Groups logs by category and sends them in batches
- * Sends every 10 minutes or when batch exceeds 20 items
+ * Discord logging. Every log goes to a thread of the log channel (LOG_CHANNEL_ID), one thread per
+ * category, created by the bot when missing. Text logs are batched (every 2 min or 20 lines);
+ * errors and embeds (identify logs) are sent right away. The console only gets errors and
+ * a few important lines (startup, shutdown, logging failures).
  */
 
-const { EmbedBuilder } = require("discord.js");
-const { LOG_IDS } = require("./constants");
+const { EmbedBuilder, ChannelType } = require("discord.js");
+const { LOG_CHANNEL_ID } = require("./constants");
 
-// Store for batched logs by category
-const logBatches = new Map([
-    ["DISCORD", []],
-    ["IMAGE", []],
-    ["API", []],
-    ["GENERAL", []],
-]);
-
-// Batch timers
-const batchTimers = new Map();
-
-// Category to thread ID mapping
-const categoryToThreadId = {
-    DISCORD: LOG_IDS.DISCORD,
-    IMAGE: LOG_IDS.IMAGE,
-    API: LOG_IDS.API,
-    GENERAL: LOG_IDS.GENERAL,
+const CATEGORIES = {
+    COMMANDS: { name: "Commands", color: 0x7289da }, // slash / context command usage
+    IDENTIFY: { name: "Identify", color: 0x6839a6 }, // Identify results (embeds)
+    NOTIFIER: { name: "Notifier", color: 0x9966ff }, // spawn notifier results
+    API: { name: "API", color: 0x2ecc71 }, // website <-> bot API
+    BALLSDEX: { name: "Ballsdex", color: 0xa020f0 }, // linking, syncs
+    COLLECTORS: { name: "Collectors", color: 0xe67e22 }, // collector entries added/removed
+    VOTES: { name: "Votes", color: 0x00c853 }, // upvotes and reminders
+    CATCHES: { name: "Catches", color: 0x3498db }, // Ballsdex catch messages
+    SYSTEM: { name: "System", color: 0xf39c12 }, // startup, data refresh, database, reports
+    ERRORS: { name: "Errors", color: 0xff0000 }, // errors and crashes
 };
+// Old category names still used in a few places
+const ALIASES = { DISCORD: "COMMANDS", IMAGE: "NOTIFIER", GENERAL: "SYSTEM" };
 
-/**
- * Format timestamp with full date and time
- * @returns {string} Formatted timestamp
- */
+const BATCH_SIZE = 20;
+const BATCH_DELAY_MS = 2 * 60 * 1000;
+
+const logBatches = new Map(Object.keys(CATEGORIES).map((category) => [category, []]));
+const batchTimers = new Map();
+const threadIds = new Map(); // category -> thread id
+const threadLookups = new Map(); // category -> pending Promise<thread>
+let warnedChannel = false;
+
 function getTimestamp() {
-    const now = new Date();
-    return now.toLocaleString("pl-PL", {
+    return new Date().toLocaleString("pl-PL", {
         year: "numeric",
         month: "2-digit",
         day: "2-digit",
@@ -42,155 +43,158 @@ function getTimestamp() {
     });
 }
 
-/**
- * Add a log entry to a category batch
- * @param {string} category - Log category (DISCORD, IMAGE, API, GENERAL)
- * @param {string} message - Log message
- * @param {object} client - Discord client
- */
+const resolveCategory = (category) => (CATEGORIES[category] ? category : ALIASES[category] || "SYSTEM");
+
+/** The category's thread in the log channel: found by name (active or archived) or created. */
+async function getThread(client, category) {
+    if (!client?.isReady?.()) return null;
+    if (threadLookups.has(category)) return threadLookups.get(category);
+
+    const lookup = (async () => {
+        const known = threadIds.get(category);
+        if (known) {
+            const thread = await client.channels.fetch(known).catch(() => null);
+            if (thread) return thread;
+            threadIds.delete(category);
+        }
+
+        const channel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+        if (!channel?.threads) {
+            if (!warnedChannel) console.error(`[LOGGER] Log channel ${LOG_CHANNEL_ID} not found or has no threads. Logs are kept until it's reachable.`);
+            warnedChannel = true;
+            return null;
+        }
+
+        const name = `${CATEGORIES[category].name} logs`;
+        const active = await channel.threads.fetchActive().catch(() => null);
+        let thread = active?.threads.find((t) => t.parentId === channel.id && t.name === name);
+        if (!thread) {
+            const archived = await channel.threads.fetchArchived({ limit: 100 }).catch(() => null);
+            thread = archived?.threads.find((t) => t.name === name);
+        }
+        if (!thread) {
+            thread = await channel.threads.create({
+                name,
+                type: ChannelType.PublicThread,
+                autoArchiveDuration: 10080, // a week; sending a message reopens it anyway
+                reason: "BallIdentifier logs",
+            });
+        }
+        if (thread.archived) await thread.setArchived(false).catch(() => {});
+        threadIds.set(category, thread.id);
+        return thread;
+    })()
+        .catch((error) => {
+            console.error(`[LOGGER] Couldn't open the ${category} log thread:`, error.message);
+            return null;
+        })
+        .finally(() => threadLookups.delete(category));
+
+    threadLookups.set(category, lookup);
+    return lookup;
+}
+
+/** Add a text log line; it's sent with the next batch of its category. */
 function addLog(category, message, client) {
-    const validCategories = ["DISCORD", "IMAGE", "API", "GENERAL"];
-    
-    if (!validCategories.includes(category)) {
-        console.warn(`[LOGGER] Invalid category: ${category}`);
+    category = resolveCategory(category);
+    const batch = logBatches.get(category);
+    batch.push(`[${getTimestamp()}] ${message}`);
+
+    if (batch.length >= BATCH_SIZE) {
+        sendBatch(category, client);
+    } else if (!batchTimers.has(category)) {
+        batchTimers.set(category, setTimeout(() => sendBatch(category, client), BATCH_DELAY_MS));
+    }
+}
+
+async function sendBatch(category, client) {
+    const batch = logBatches.get(category) || [];
+    logBatches.set(category, []);
+    clearTimeout(batchTimers.get(category));
+    batchTimers.delete(category);
+    if (!batch.length) return;
+
+    const thread = await getThread(client, category);
+    if (!thread) {
+        // Not ready yet (startup) or no log channel: keep the lines for the next try, capped
+        logBatches.set(category, [...batch, ...logBatches.get(category)].slice(-200));
+        if (!batchTimers.has(category)) batchTimers.set(category, setTimeout(() => sendBatch(category, client), BATCH_DELAY_MS));
         return;
     }
 
-    const timestamp = getTimestamp();
-    const formattedLog = `[${timestamp}] ${message}`;
-
-    // Add to batch
-    logBatches.get(category).push(formattedLog);
-
-    // Check if batch should be sent
-    if (logBatches.get(category).length >= 20) {
-        sendBatch(category, client);
-    } else {
-        // Set up timer if not already scheduled
-        if (!batchTimers.has(category)) {
-            const timer = setTimeout(() => {
-                sendBatch(category, client);
-            }, 2 * 60 * 1000); // 2 minutes
-
-            batchTimers.set(category, timer);
+    // ~1900 characters per message
+    const chunks = [];
+    let current = "";
+    for (const line of batch) {
+        const safe = line.replace(/```/g, "ˋˋˋ").slice(0, 1800);
+        if ((current + safe + "\n").length > 1900) {
+            chunks.push(current);
+            current = "";
         }
+        current += safe + "\n";
     }
-}
+    if (current) chunks.push(current);
 
-/**
- * Send a batch of logs to Discord thread
- * @param {string} category - Log category
- * @param {object} client - Discord client
- */
-async function sendBatch(category, client) {
-    // Take the current batch and reset immediately, so logs added while sending go to the next batch
-    const batch = logBatches.get(category);
-    logBatches.set(category, []);
-    const pendingTimer = batchTimers.get(category);
-    if (pendingTimer) {
-        clearTimeout(pendingTimer);
-        batchTimers.delete(category);
-    }
-
-    if (batch.length === 0) return;
-
-    const threadId = categoryToThreadId[category];
-    
     try {
-        const channel = await client.channels.fetch(threadId);
-        
-        if (!channel) {
-            console.error(`[LOGGER] Thread not found: ${threadId}`);
-            return;
-        }
-
-        // Split logs into chunks of ~1900 chars to avoid message length limits
-        const chunks = [];
-        let currentChunk = "";
-
-        for (const log of batch) {
-            if ((currentChunk + log + "\n").length > 1900) {
-                if (currentChunk) chunks.push(currentChunk.trim());
-                currentChunk = log + "\n";
-            } else {
-                currentChunk += log + "\n";
-            }
-        }
-        
-        if (currentChunk) chunks.push(currentChunk.trim());
-
-        // Send chunks
         for (const chunk of chunks) {
             const embed = new EmbedBuilder()
-                .setTitle(`📋 ${category} Logs`)
-                .setDescription(`\`\`\`\n${chunk}\n\`\`\``)
-                .setColor(getCategoryColor(category))
+                .setDescription(`\`\`\`\n${chunk.trim()}\n\`\`\``)
+                .setColor(CATEGORIES[category].color)
                 .setTimestamp();
-
-            await channel.send({ embeds: [embed] });
+            await thread.send({ embeds: [embed], allowedMentions: { parse: [] } });
         }
-
-        console.log(`[LOGGER] Sent ${batch.length} ${category} logs`);
     } catch (error) {
-        console.error(`[LOGGER] Error sending batch for ${category}:`, error);
+        console.error(`[LOGGER] Couldn't send ${category} logs:`, error.message);
+        threadIds.delete(category);
     }
-
 }
 
-/**
- * Get color for log category
- * @param {string} category - Log category
- * @returns {number} Discord color code
- */
-function getCategoryColor(category) {
-    const colors = {
-        DISCORD: 0x7289da,  // Discord blue
-        IMAGE: 0x9966ff,    // Purple
-        API: 0x2ecc71,      // Green
-        GENERAL: 0xf39c12,  // Orange
-    };
-    return colors[category] || 0x95a5a6;
+/** Send an embed (or embed data) to a category thread right away. */
+async function logEmbed(category, embed, client) {
+    category = resolveCategory(category);
+    const thread = await getThread(client, category);
+    if (!thread) return false;
+    try {
+        await thread.send({ embeds: [embed], allowedMentions: { parse: [] } });
+        return true;
+    } catch (error) {
+        console.error(`[LOGGER] Couldn't send ${category} embed:`, error.message);
+        threadIds.delete(category);
+        return false;
+    }
 }
 
-/**
- * Force send all pending batches
- * @param {object} client - Discord client
- */
+/** An error: always to the console (short), and to the Errors thread with details. */
+async function logError(title, detail, client) {
+    const text = detail instanceof Error ? detail.stack || detail.message : String(detail ?? "");
+    console.error(`[ERROR] ${title}${text ? `: ${text.split("\n")[0]}` : ""}`);
+    const embed = new EmbedBuilder()
+        .setTitle(String(title).slice(0, 256))
+        .setDescription(text ? `\`\`\`\n${text.replace(/```/g, "ˋˋˋ").slice(0, 3900)}\n\`\`\`` : null)
+        .setColor(CATEGORIES.ERRORS.color)
+        .setTimestamp();
+    return logEmbed("ERRORS", embed, client);
+}
+
 async function flushAllBatches(client) {
-    for (const [category] of logBatches) {
-        await sendBatch(category, client);
-    }
+    for (const category of logBatches.keys()) await sendBatch(category, client);
 }
 
-/**
- * Clear all timers and batches (for cleanup)
- */
 function clearAllBatches() {
-    for (const [, timer] of batchTimers) {
-        clearTimeout(timer);
-    }
-    logBatches.clear();
+    for (const timer of batchTimers.values()) clearTimeout(timer);
     batchTimers.clear();
-    logBatches.set("DISCORD", []);
-    logBatches.set("IMAGE", []);
-    logBatches.set("API", []);
-    logBatches.set("GENERAL", []);
+    for (const category of logBatches.keys()) logBatches.set(category, []);
 }
 
-/**
- * Get current batch sizes (for debugging)
- * @returns {object} Current batch sizes by category
- */
 function getBatchSizes() {
-    const sizes = {};
-    for (const [category, batch] of logBatches) {
-        sizes[category] = batch.length;
-    }
-    return sizes;
+    return Object.fromEntries([...logBatches].map(([category, batch]) => [category, batch.length]));
 }
 
 module.exports = {
+    CATEGORIES,
     addLog,
+    logEmbed,
+    logError,
     sendBatch,
     flushAllBatches,
     clearAllBatches,

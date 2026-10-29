@@ -489,7 +489,7 @@ app.post("/api/users/:userId/ballsdex/link", apiLimiter, verifySignature, async 
 
     try {
         await linkApiKey(userId, apiKey);
-        client?.logAPI?.(`POST /api/users/${userId}/ballsdex/link | Linked`);
+        client?.log?.("BALLSDEX", `<@${userId}> linked a Ballsdex account (website)`);
         res.status(200).json({ success: true, linked: true });
     } catch (error) {
         if (error.code === "COOLDOWN") {
@@ -513,7 +513,7 @@ app.post("/api/users/:userId/ballsdex/link", apiLimiter, verifySignature, async 
 app.post("/api/users/:userId/ballsdex/unlink", apiLimiter, verifySignature, async (req, res) => {
     const { userId } = req.params;
     const wasLinked = await unlinkAccount(userId);
-    client?.logAPI?.(`POST /api/users/${userId}/ballsdex/unlink | ${wasLinked ? "Unlinked" : "Not linked"}`);
+    client?.log?.("BALLSDEX", `<@${userId}> ${wasLinked ? "unlinked their Ballsdex account" : "tried to unlink (not linked)"} (website)`);
     res.status(200).json({ success: true, linked: false, wasLinked });
 });
 
@@ -535,7 +535,7 @@ app.post("/api/users/:userId/ballsdex/sync", apiLimiter, verifySignature, (req, 
         return res.status(status).json({ error: message, code: result.reason, retryAfterSec: result.retryAfterSec ?? null, sync: getSyncState(userId) });
     }
 
-    client?.logAPI?.(`POST /api/users/${userId}/ballsdex/sync | Started`);
+    client?.log?.("BALLSDEX", `<@${userId}> started a sync (website)`);
     res.status(202).json({ success: true, sync: getSyncState(userId) });
 });
 
@@ -543,7 +543,7 @@ app.post("/api/users/:userId/ballsdex/sync", apiLimiter, verifySignature, (req, 
 app.post("/api/users/:userId/ballsdex/cancel", apiLimiter, verifySignature, (req, res) => {
     const { userId } = req.params;
     if (!cancelSync(userId)) return res.status(409).json({ error: "No sync is running.", code: "NOT_RUNNING" });
-    client?.logAPI?.(`POST /api/users/${userId}/ballsdex/cancel`);
+    client?.log?.("BALLSDEX", `<@${userId}> cancelled their sync (website)`);
     res.status(200).json({ success: true, sync: getSyncState(userId) });
 });
 
@@ -585,7 +585,7 @@ app.get("/api/collectors/:dexKey", generalLimiter, verifySignature, (req, res) =
     res.status(200).json(result);
 });
 
-// Add or remove yourself as a collector (the admin can also remove others' self entries)
+// Add or remove yourself as a collector; the owner can also add anyone (verified) and remove anyone
 app.post("/api/users/:userId/collectors", apiLimiter, verifySignature, async (req, res) => {
     const { userId } = req.params;
     const { action, dexKey, ballId, targetUserId } = req.body || {};
@@ -596,9 +596,10 @@ app.post("/api/users/:userId/collectors", apiLimiter, verifySignature, async (re
         return res.status(400).json({ error: "Invalid user" });
     }
     try {
-        const result = action === "add"
-            ? await collectorStore.addSelf(userId, dexKey, ballId)
-            : await collectorStore.removeSelf(userId, targetUserId || userId, dexKey, ballId);
+        let result;
+        if (action === "remove") result = await collectorStore.removeSelf(userId, targetUserId || userId, dexKey, ballId);
+        else if (targetUserId && targetUserId !== userId) result = await collectorStore.addVerified(userId, targetUserId, dexKey, ballId);
+        else result = await collectorStore.addSelf(userId, dexKey, ballId);
         res.status(200).json({ success: true, ...result });
     } catch (error) {
         if (error.status) return res.status(error.status).json({ error: error.message, code: error.code });
@@ -645,8 +646,7 @@ app.use((req, res) => {
 // Start server
 const startServer = () => {
     app.listen(PORT, () => {
-        console.log(`[API] Server running on http://localhost:${PORT}`);
-        console.log(`[API] Dashboard API ready at http://localhost:${PORT}/api`);
+        console.log(`[API] Listening on port ${PORT}`);
     });
 };
 

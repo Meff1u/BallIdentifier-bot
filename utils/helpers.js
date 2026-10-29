@@ -323,11 +323,10 @@ async function sendThreadReport(client, dexName, containerBuilder, options = {})
                 name: dexName,
                 autoArchiveDuration: 60, // Archive after 1 hour of inactivity
             });
-            console.log(`[REPORT] Created new thread for ${dexName}`);
+            client.logGeneral?.(`Reports: created thread for ${dexName}`);
         } else if (thread.archived) {
             // Unarchive thread if needed
             await thread.edit({ archived: false });
-            console.log(`[REPORT] Unarchived thread for ${dexName}`);
         }
 
         const messagePayload = {
@@ -346,7 +345,7 @@ async function sendThreadReport(client, dexName, containerBuilder, options = {})
         }
 
         await thread.send(messagePayload);
-        console.log(`[REPORT] Sent report to ${dexName} thread`);
+        client.logGeneral?.(`Reports: unknown spawn art reported in ${dexName}`);
         return true;
     } catch (error) {
         console.error("[REPORT] Error sending thread report:", error);

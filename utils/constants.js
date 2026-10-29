@@ -54,13 +54,8 @@ const COLORS = {
     DISABLED: 0x808080,
 };
 
-// Log thread IDs
-const LOG_IDS = {
-    DISCORD: "1462201646405652482",
-    IMAGE: "1462201441023430942",
-    API: "1485975095066497024",
-    GENERAL: "1462200615160643584"
-};
+// Log channel
+const LOG_CHANNEL_ID = "1565286048471326791";
 
 // File paths
 const DATA_FILE = "data.json";
@@ -88,7 +83,7 @@ module.exports = {
     INACTIVITY_TIMEOUT,
     NEXT_SPAWN_DELAY,
     COLORS,
-    LOG_IDS,
+    LOG_CHANNEL_ID,
     DATA_FILE,
     UPVOTES_FILE,
     SPAWN_BUTTON_LABELS,

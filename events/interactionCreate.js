@@ -13,7 +13,6 @@ const {
     TextInputStyle,
     WebhookClient,
 } = require("discord.js");
-const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
 // Import shared utilities
 const { COLORS, INACTIVITY_TIMEOUT } = require("../utils/constants");
@@ -61,29 +60,7 @@ module.exports = {
             try {
                 await command.execute(interaction);
             } catch (error) {
-                console.error(`[INTERACTION] Error executing command ${interaction.commandName}:`, error);
-                client.logDiscord(
-                    `⚠️ Command Error in \`${interaction.commandName}\`: ${error.message}`,
-                );
-                const webhookUrl = process.env.ERROR_WEBHOOK_URL;
-                if (webhookUrl) {
-                    try {
-                        await fetch(webhookUrl, {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                                embeds: [
-                                    {
-                                        title: `Command Error: ${interaction.commandName}`,
-                                        description: error.stack || String(error),
-                                        color: 0xff0000,
-                                        timestamp: new Date().toISOString(),
-                                    },
-                                ],
-                            }),
-                        });
-                    } catch (e) {}
-                }
+                client.logError(`Command error: ${interaction.commandName} (${userTag}, ${guildName})`, error);
                 if (interaction.replied || interaction.deferred) {
                     await interaction.followUp({
                         content: "Error.",

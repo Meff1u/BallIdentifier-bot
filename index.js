@@ -3,10 +3,8 @@ require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
 const { startServer, initializeServer } = require("./server");
-const { addLog, flushAllBatches, clearAllBatches } = require("./utils/logger");
+const { addLog, logEmbed, logError, flushAllBatches } = require("./utils/logger");
 const { closeDatabase, initializeDatabase } = require("./utils/database");
-
-const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
 const TOKEN = process.env.TOKEN;
 const { PRIVATE_GUILD_ID } = require("./utils/constants");
@@ -29,12 +27,13 @@ client.reportCooldowns = new Map();
 
 client.slashCommands = new Collection();
 
-// Attach logger functions to client
+// Logging: everything goes to threads of the log channel (see utils/logger.js), errors also to the console
 client.log = (category, message) => addLog(category, message, client);
-client.logDiscord = (message) => client.log("DISCORD", message);
-client.logImage = (message) => client.log("IMAGE", message);
+client.logDiscord = (message) => client.log("COMMANDS", message);
+client.logImage = (message) => client.log("NOTIFIER", message);
 client.logAPI = (message) => client.log("API", message);
-client.logGeneral = (message) => client.log("GENERAL", message);
+client.logGeneral = (message) => client.log("SYSTEM", message);
+client.logError = (title, detail) => logError(title, detail, client);
 
 // Load commands
 const commandsPath = path.join(__dirname, "commands");
@@ -63,7 +62,7 @@ fs.readdirSync(eventsPath)
 
 // Handle disconnect - flush pending logs
 client.on("shardDisconnect", async () => {
-    console.log("[BOT] Disconnect detected, flushing pending logs...");
+    console.warn("[BOT] Disconnected from Discord");
     await flushAllBatches(client);
 });
 
@@ -74,7 +73,7 @@ client.once("clientReady", async () => {
     try {
         await initializeDatabase();
     } catch (error) {
-        console.error("[DATABASE] MongoDB unavailable:", error.message);
+        client.logError("MongoDB unavailable", error.message);
     }
 
     // Separate global and private commands
@@ -84,15 +83,15 @@ client.once("clientReady", async () => {
     // Register commands in parallel
     const registrations = [
         rest.put(Routes.applicationCommands(appId), { body: globalCommands })
-            .then(() => console.log("[STARTUP] ✅ Global commands registered."))
-            .catch((err) => console.error("[STARTUP] ❌ Error registering global commands:", err)),
+            .then(() => client.logGeneral("Global commands registered"))
+            .catch((err) => client.logError("Registering global commands failed", err)),
     ];
 
     if (privateCommands.length > 0) {
         registrations.push(
             rest.put(Routes.applicationGuildCommands(appId, PRIVATE_GUILD_ID), { body: privateCommands })
-                .then(() => console.log(`[STARTUP] ✅ Private commands registered for guild ${PRIVATE_GUILD_ID}.`))
-                .catch((err) => console.error("[STARTUP] ❌ Error registering private commands:", err))
+                .then(() => client.logGeneral(`Private commands registered for guild ${PRIVATE_GUILD_ID}`))
+                .catch((err) => client.logError("Registering private commands failed", err))
         );
     }
 
@@ -103,55 +102,26 @@ client.once("clientReady", async () => {
     startServer();
 });
 
-// Utility function to send webhook
-const sendWebhook = async (webhookUrl, payload) => {
-    if (!webhookUrl) return;
-    try {
-        await fetch(webhookUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-        });
-    } catch (e) {
-        console.error("[WEBHOOK] Error sending webhook:", e);
-    }
-};
-
+// Identify logs (embed data, as the webhook used to take)
 client.sendLog = async (logData) => {
-    await sendWebhook(process.env.LOG_WEBHOOK_URL, {
-        embeds: [{
-            title: logData.title || "Log",
-            description: logData.description || null,
-            fields: logData.fields || [],
-            color: logData.color || 0x6839a6,
-            timestamp: new Date().toISOString(),
-            ...(logData.thumbnail && { thumbnail: { url: logData.thumbnail } }),
-            ...(logData.image && { image: { url: logData.image } }),
-        }],
-    });
+    const embed = {
+        title: logData.title || "Log",
+        description: logData.description || undefined,
+        fields: logData.fields || [],
+        color: logData.color || 0x6839a6,
+        timestamp: new Date().toISOString(),
+        ...(logData.thumbnail && { thumbnail: { url: logData.thumbnail } }),
+        ...(logData.image && { image: { url: logData.image } }),
+    };
+    await logEmbed("IDENTIFY", embed, client);
 };
 
-// Error handlers
-const handleError = async (title, description) => {
-    await sendWebhook(process.env.ERROR_WEBHOOK_URL, {
-        embeds: [{
-            title,
-            description,
-            color: 0xff0000,
-            timestamp: new Date().toISOString(),
-        }],
-    });
-};
-
-process.on("unhandledRejection", (reason, promise) => {
-    handleError(
-        "Unhandled Rejection",
-        `**Reason:** ${reason instanceof Error ? reason.stack : reason}\n**Promise:** ${promise}`
-    );
+process.on("unhandledRejection", (reason) => {
+    client.logError("Unhandled Rejection", reason instanceof Error ? reason : String(reason));
 });
 
 process.on("uncaughtException", (error) => {
-    handleError("Uncaught Exception", error.stack || String(error));
+    client.logError("Uncaught Exception", error);
 });
 
 // Handle graceful shutdown
