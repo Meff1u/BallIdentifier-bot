@@ -183,6 +183,8 @@ module.exports = {
 
                     // Send report to thread
                     await sendThreadReport(client, config.dex, container, {
+                        dexKey: config.dKey,
+                        bestMatch: bestMatch.country,
                         files: [
                             { attachment: spawnImageBuffer, name: "spawn.png" },
                             { attachment: matchImageBuffer, name: "match.png" },

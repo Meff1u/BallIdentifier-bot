@@ -336,7 +336,8 @@ function buildCollectionSummary(profile, balls, totals = null) {
         if (ball.is_frame) frameCount += 1;
 
         const country = ball.ball?.country;
-        if (country) countryCounts.set(country, (countryCounts.get(country) || 0) + 1);
+        // Bronze/Silver/Gold count as the non-specials they stand for
+        if (country) countryCounts.set(country, (countryCounts.get(country) || 0) + Math.max(1, nonSpecialWorth(ball)));
 
         const special = ball.special?.name;
         if (special) specialCounts.set(special, (specialCounts.get(special) || 0) + 1);
@@ -1122,4 +1123,4 @@ module.exports = {
     removeApiKey,
     saveApiKey,
     syncCollection,
-};
+};

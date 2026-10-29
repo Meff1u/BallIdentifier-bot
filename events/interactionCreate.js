@@ -26,11 +26,25 @@ const {
     getCollectorsSession,
 } = require("../utils/collectors");
 
+const { handleDexEdit } = require("../utils/dex-report-actions");
+
 const DATA_PATH = getAssetsPath("data.json");
 
 module.exports = {
     name: "interactionCreate",
     async execute(interaction, client) {
+        // Dex entry editing from spawn art reports (owner only)
+        if ((interaction.isButton() || interaction.isModalSubmit()) && interaction.customId.startsWith("dexedit:")) {
+            try {
+                await handleDexEdit(interaction, client);
+            } catch (error) {
+                client.logError?.("Dex edit interaction failed", error);
+                const reply = { content: `❌ ${error.message}`, flags: MessageFlags.Ephemeral };
+                await (interaction.deferred || interaction.replied ? interaction.followUp(reply) : interaction.reply(reply)).catch(() => {});
+            }
+            return;
+        }
+
         // Autocomplete interactions
         if (interaction.isAutocomplete()) {
             const command = client.slashCommands.get(interaction.commandName);

@@ -210,6 +210,8 @@ async function notify(m, client, settings, info) {
             );
 
             await sendThreadReport(client, botDex, container, {
+                dexKey: BOT_DATA_KEYS[m.author.id],
+                bestMatch: bestMatch.country,
                 files: [
                     { attachment: imageBuffer, name: "spawn.png" },
                     { attachment: matchImageBuffer, name: "match.png" },

@@ -288,7 +288,7 @@ function getAssetsPath(filename) {
  * @param {object} client - Discord client
  * @param {string} dexName - Name of the dex (e.g., "Ballsdex")
  * @param {object} containerBuilder - ContainerBuilder for message content
- * @param {object} options - Additional options (files array with {attachment, name})
+ * @param {object} options - Additional options (files array with {attachment, name}; dexKey + bestMatch add the edit buttons)
  * @returns {Promise<boolean>} Success status
  */
 async function sendThreadReport(client, dexName, containerBuilder, options = {}) {
@@ -337,6 +337,11 @@ async function sendThreadReport(client, dexName, containerBuilder, options = {})
         // Add media gallery if provided
         if (options.mediaGallery) {
             messagePayload.components.push(options.mediaGallery);
+        }
+
+        // Owner buttons: update the matched entry with this art, or add it as a new one
+        if (options.dexKey) {
+            messagePayload.components.push(require("./dex-report-actions").reportButtons(options.dexKey, options.bestMatch));
         }
 
         // Add files if provided

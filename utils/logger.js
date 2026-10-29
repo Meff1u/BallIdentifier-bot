@@ -113,7 +113,8 @@ function addLog(category, message, client) {
     category = resolveCategory(category);
     remember(category, message);
     const batch = logBatches.get(category);
-    batch.push(`[${getTimestamp()}] ${message}`);
+    // Discord timestamp: shown in each reader's own time zone
+    batch.push(`<t:${Math.floor(Date.now() / 1000)}:T> ${message}`);
 
     if (batch.length >= BATCH_SIZE) {
         sendBatch(category, client);
@@ -137,12 +138,12 @@ async function sendBatch(category, client) {
         return;
     }
 
-    // ~1900 characters per message
+    // Plain text (no code block), so mentions, channels and links render; ~3900 characters per embed
     const chunks = [];
     let current = "";
     for (const line of batch) {
-        const safe = line.replace(/```/g, "ˋˋˋ").slice(0, 1800);
-        if ((current + safe + "\n").length > 1900) {
+        const safe = line.slice(0, 1800);
+        if (current && (current + safe + "\n").length > 3900) {
             chunks.push(current);
             current = "";
         }
@@ -153,7 +154,7 @@ async function sendBatch(category, client) {
     try {
         for (const chunk of chunks) {
             const embed = new EmbedBuilder()
-                .setDescription(`\`\`\`\n${chunk.trim()}\n\`\`\``)
+                .setDescription(chunk.trim())
                 .setColor(CATEGORIES[category].color)
                 .setTimestamp();
             await thread.send({ embeds: [embed], allowedMentions: { parse: [] } });

@@ -24,6 +24,7 @@ const {
 const notifications = require("./utils/notifications");
 const collectorStore = require("./utils/collector-store");
 const specials = require("./utils/specials");
+const dexEditor = require("./utils/dex-editor");
 
 const PORT = process.env.PORT || 3001;
 
@@ -39,21 +40,24 @@ app.use(
     })
 );
 
-// Request size limit - 1KB to prevent DoS attacks
+// Request size limit - 1KB to prevent DoS attacks (the owner's dex art upload has its own, bigger limit)
 // rawBody is kept so request signatures can be verified
-app.use(
+const jsonBody = (limit) =>
     express.json({
-        limit: "1kb",
+        limit,
         verify: (req, res, buf) => {
             req.rawBody = buf.toString("utf8");
         },
-    })
-);
+    });
+const smallJson = jsonBody("1kb");
+const DEX_UPLOAD_PATH = /^\/api\/users\/\d{17,20}\/dex\/save$/;
+app.use((req, res, next) => (DEX_UPLOAD_PATH.test(req.path) ? next() : smallJson(req, res, next)));
 
 let client;
 
 const initializeServer = (c) => {
     client = c;
+    dexEditor.setClient(c);
 };
 
 // Rate limit middleware (each limiter has its own store, so public and API limits don't share a budget)
@@ -682,6 +686,41 @@ app.post("/api/users/:userId/admin/sync/cancel", apiLimiter, verifySignature, re
 });
 
 // Reload dex data (arts, hashes, details) now instead of waiting for the hourly refresh
+// Dex entries (owner, Spawn Arts tab): add / update / remove, committed to the website repo
+const dexEditorError = (res, error) => {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    client?.logError?.("Dex editor failed", error);
+    return res.status(502).json({ error: error.message.startsWith("GitHub") ? error.message : "Couldn't save the entry. Check the Errors log." });
+};
+
+app.post("/api/users/:userId/dex/save", apiLimiter, jsonBody("8mb"), verifySignature, requireOwner, async (req, res) => {
+    try {
+        const { dex, originalName, name, details, image, shift, previousAlt } = req.body || {};
+        if (image !== undefined && image !== null && typeof image !== "string") return res.status(400).json({ error: "Invalid image" });
+        const result = await dexEditor.saveEntry({
+            dex,
+            originalName: originalName || null,
+            name,
+            details: details && typeof details === "object" ? details : {},
+            image: image ? Buffer.from(image, "base64") : null,
+            shift: shift === true,
+            previousAlt: typeof previousAlt === "string" ? previousAlt : "",
+            actor: "website",
+        });
+        res.status(200).json(result);
+    } catch (error) {
+        dexEditorError(res, error);
+    }
+});
+
+app.post("/api/users/:userId/dex/delete", apiLimiter, verifySignature, requireOwner, async (req, res) => {
+    try {
+        res.status(200).json(await dexEditor.deleteEntry({ dex: req.body?.dex, name: req.body?.name, actor: "website" }));
+    } catch (error) {
+        dexEditorError(res, error);
+    }
+});
+
 app.post("/api/users/:userId/admin/refresh-data", apiLimiter, verifySignature, requireOwner, async (req, res) => {
     try {
         await client.fetchHashes();
