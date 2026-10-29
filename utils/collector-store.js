@@ -234,7 +234,7 @@ async function addSelf(userId, dexKey, ballId) {
  * of the balls the collector needs (cc in Ballsdex.json), counted from their last sync.
  */
 async function checkBallsdexOwnership(userId, found) {
-    const required = Number.parseInt(found.ball.cc, 10);
+    const required = Number(String(found.ball.cc ?? "").replace(/\D/g, "")); // "2,800" -> 2800
     const stored = getSavedApiKey(userId) ? await getStoredCollection(userId).catch(() => null) : null;
     if (!stored) {
         throw fail(403, "Link and sync your Ballsdex account first (Ballsdex tab), so your collection can be checked.", "SYNC_REQUIRED");
