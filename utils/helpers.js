@@ -116,6 +116,38 @@ function getSpawnMessageData(message) {
     return { isSpawn: false, imageUrl: null, imageName: null, messageType: null };
 }
 
+/** Visit every component of a message, nested ones (containers, action rows, accessories) included. */
+function walkComponents(components, visit) {
+    for (const component of components || []) {
+        visit(component);
+        if (component.components) walkComponents(component.components, visit);
+        if (component.accessory) visit(component.accessory);
+    }
+}
+
+function getTradesmanData(message) {
+    const buttons = [];
+    const texts = [];
+    walkComponents(message.components, (component) => {
+        const customId = component.customId ?? component.data?.custom_id;
+        if (typeof customId === "string" && customId.startsWith("tradesman:")) {
+            buttons.push({ label: component.label ?? component.data?.label ?? "", disabled: Boolean(component.disabled ?? component.data?.disabled) });
+        }
+        const content = component.content ?? component.data?.content;
+        if (typeof content === "string") texts.push(content);
+    });
+    if (!buttons.length) return { isTradesman: false, offers: [] };
+
+    const clean = (text) => text.replace(/~~/g, "").replace(/\s*·?\s*\*\*SOLD OUT\*\*/gi, "").trim();
+    let offers = texts
+        .flatMap((text) => text.split("\n"))
+        .map((line) => /^\s*\d+\.\s+(.+)$/.exec(line)?.[1])
+        .filter(Boolean)
+        .map(clean);
+    if (!offers.length) offers = buttons.map((button) => clean(button.label.replace(/^#\d+\s*/, "")));
+    return { isTradesman: buttons.some((button) => !button.disabled), offers };
+}
+
 /**
  * Safely read and parse JSON file
  * @param {string} filePath - Path to the JSON file
@@ -365,6 +397,7 @@ module.exports = {
     hashImageBuffer,
     getMatchThreshold,
     getSpawnMessageData,
+    getTradesmanData,
     readJsonFile,
     writeJsonFile,
     compareHashes,

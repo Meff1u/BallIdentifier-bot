@@ -12,6 +12,7 @@ const {
     findBestMatch,
     getMatchThreshold,
     getSpawnMessageData,
+    getTradesmanData,
     buildBallImageUrl,
     sendThreadReport,
 } = require("../utils/helpers");
@@ -53,8 +54,18 @@ module.exports = {
         // Handle bot spawn messages for notifier
         if (m.author.bot && SUPPORTED_BOT_IDS.includes(m.author.id)) {
             // Cheap checks first: most guilds have no notifier configured
-            const guildConfig = getData().guilds[m.guildId]?.notifier;
-            if (!guildConfig?.selectedBots?.includes(m.author.id)) return;
+            const guildData = getData().guilds[m.guildId];
+            const guildConfig = guildData?.notifier;
+            const tradesmanConfig = guildData?.tradesman;
+            const watchSpawns = guildConfig?.selectedBots?.includes(m.author.id);
+            const watchTradesman = tradesmanConfig?.selectedBots?.includes(m.author.id);
+            if (!watchSpawns && !watchTradesman) return;
+
+            if (watchTradesman) {
+                const tradesman = getTradesmanData(m);
+                if (tradesman.isTradesman) return notifyTradesman(m, client, tradesmanConfig, tradesman.offers);
+            }
+            if (!watchSpawns) return;
 
             const spawnData = getSpawnMessageData(m);
             if (spawnData.isSpawn) {
@@ -133,6 +144,25 @@ function formatNotifierMessage(template, values) {
         .replaceAll("{role}", `<@&${values.role}>`)
         .replaceAll("{rarity}", values.rarity)
         .replaceAll("{artist}", values.artist);
+}
+
+/**
+ * Tradesman notifier: ping the role when a wandering tradesman shows up.
+ * Placeholders: {role}, {offers} (what's for sale).
+ */
+async function notifyTradesman(m, client, settings, offers) {
+    const { customMessage, selectedRole } = settings;
+    const guildName = m.guild?.name || m.guildId;
+    const content = customMessage
+        .replaceAll("{role}", `<@&${selectedRole}>`)
+        .replaceAll("{offers}", offers.length ? offers.join(", ") : "unknown")
+        .slice(0, 2000);
+    try {
+        await m.reply({ content, allowedMentions: { parse: [], roles: [selectedRole], repliedUser: false } });
+        client.logImage(`[${guildName}] 🛒 Tradesman notified (${offers.length} offer${offers.length === 1 ? "" : "s"})`);
+    } catch (error) {
+        client.logImage(`[${guildName}] ❌ Could not send tradesman message: ${error.message}`);
+    }
 }
 
 /**

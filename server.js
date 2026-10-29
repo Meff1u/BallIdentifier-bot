@@ -371,6 +371,8 @@ app.post("/api/guilds/:guildId/config", apiLimiter, verifySignature, validateGui
 
     const { guildId } = req.params;
     const { selectedBots, selectedRole, customMessage, setupBy, setupAt, isDelete } = req.body;
+    // "spawn" (default) = Spawn notifier, "tradesman" = Tradesman notifier; stored side by side
+    const kind = req.body.kind === "tradesman" ? "tradesman" : "notifier";
 
     // Validate guild exists
     const guild = client.guilds.cache.get(guildId);
@@ -383,10 +385,10 @@ app.post("/api/guilds/:guildId/config", apiLimiter, verifySignature, validateGui
         // Handle delete operation
         if (isDelete) {
             updateData((data) => {
-                if (data.guilds[guildId]) delete data.guilds[guildId].notifier;
+                if (data.guilds[guildId]) delete data.guilds[guildId][kind];
             });
 
-            client.logAPI(`POST /api/guilds/${guildId}/config | Configuration deleted for guild: ${guild.name} (${guildId}) by ${setupBy}`);
+            client.logAPI(`POST /api/guilds/${guildId}/config | ${kind} deleted for guild: ${guild.name} (${guildId}) by ${setupBy}`);
 
             return res.status(200).json({
                 success: true,
@@ -428,10 +430,10 @@ app.post("/api/guilds/:guildId/config", apiLimiter, verifySignature, validateGui
         const notifier = { selectedBots, selectedRole, customMessage, setupBy, setupAt };
         updateData((data) => {
             data.guilds[guildId] ??= {};
-            data.guilds[guildId].notifier = notifier;
+            data.guilds[guildId][kind] = notifier;
         });
 
-        client.logAPI(`POST /api/guilds/${guildId}/config | Configuration updated for guild: ${guild.name} (${guildId}) by ${setupBy} | Bots: ${selectedBots.length}`);
+        client.logAPI(`POST /api/guilds/${guildId}/config | ${kind} updated for guild: ${guild.name} (${guildId}) by ${setupBy} | Bots: ${selectedBots.length}`);
 
         res.status(200).json({
             success: true,
