@@ -1,6 +1,7 @@
 const { getDatabase } = require("./database");
 const { BOT_DATA_KEYS, ADMIN_ID } = require("./constants");
 const { getSavedApiKey, getStoredCollection, verifyFileBall } = require("./ballsdex");
+const { getData } = require("./helpers");
 
 const PROFILE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MISSING_PROFILE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -133,10 +134,20 @@ function warmProfiles() {
     }
 }
 
-function collectorView(userId, source, addedAt, origin = "site") {
+// Users with a public website profile (their names link to /u/<id>)
+function publicProfileIds() {
+    const ids = new Set();
+    for (const [userId, user] of Object.entries(getData().users || {})) {
+        if (user?.profile?.public && !user.profile.blocked) ids.add(userId);
+    }
+    return ids;
+}
+
+function collectorView(userId, source, addedAt, origin = "site", publicIds = null) {
     const profile = profiles.get(userId);
     if (!profile) enqueueProfile(userId);
     return {
+        hasProfile: Boolean(publicIds?.has(userId)),
         id: userId,
         name: profile?.name || null,
         username: profile?.username || null,
@@ -179,6 +190,7 @@ function getDexCollectors(dexKey) {
     const rarities = client?.rarities?.[dexKey];
     if (!rarities) return null;
     const entries = {};
+    const publicIds = publicProfileIds();
     for (const ball of Object.values(rarities)) {
         if (!ball || ball.id === undefined) continue;
         const statics = staticOf(ball) || [];
@@ -187,13 +199,13 @@ function getDexCollectors(dexKey) {
         for (const id of statics) {
             const entry = self?.get(id);
             if (entry?.status === "removed") continue;
-            list.push(entry ? collectorView(id, entry.status, entry.addedAt) : collectorView(id, "verified", null, "data"));
+            list.push(entry ? collectorView(id, entry.status, entry.addedAt, "site", publicIds) : collectorView(id, "verified", null, "data", publicIds));
         }
         for (const [userId, entry] of self || []) {
-            if (entry.status === "verified" && !statics.includes(userId)) list.push(collectorView(userId, "verified", entry.addedAt));
+            if (entry.status === "verified" && !statics.includes(userId)) list.push(collectorView(userId, "verified", entry.addedAt, "site", publicIds));
         }
         for (const [userId, entry] of self || []) {
-            if (entry.status === "self" && !statics.includes(userId)) list.push(collectorView(userId, "self", entry.addedAt));
+            if (entry.status === "self" && !statics.includes(userId)) list.push(collectorView(userId, "self", entry.addedAt, "site", publicIds));
         }
         if (list.length) entries[ball.id] = list;
     }
@@ -343,4 +355,43 @@ async function removeSelf(actorId, targetId, dexKey, ballId) {
     return { ballId: found.ball.id, ballName: found.name };
 }
 
-module.exports = { init, applyOverlay, getDexCollectors, addSelf, addVerified, removeSelf };
+/* ----- Profiles (website /u/<id>) ----- */
+
+/** Every ball a user collects: [{ dexKey, id, name, rarity, verified }]. */
+function getUserCollections(userId) {
+    const result = [];
+    for (const [dexKey, rarities] of Object.entries(client?.rarities || {})) {
+        if (!DEX_KEYS.has(dexKey) || !rarities) continue;
+        for (const [name, ball] of Object.entries(rarities)) {
+            if (!ball || typeof ball !== "object" || ball.id === undefined) continue;
+            const entry = selfEntries.get(entryKey(dexKey, ball.id))?.get(userId);
+            if (entry?.status === "removed") continue;
+            const fromData = (staticOf(ball) || []).includes(userId);
+            if (!fromData && !entry) continue;
+            result.push({ dexKey, id: Number(ball.id), name, rarity: ball.rarity, verified: fromData || entry.status === "verified" });
+        }
+    }
+    return result;
+}
+
+/** userId -> number of balls collected, over every dex. */
+function collectionCounts() {
+    const counts = new Map();
+    for (const [dexKey, rarities] of Object.entries(client?.rarities || {})) {
+        if (!DEX_KEYS.has(dexKey) || !rarities) continue;
+        for (const ball of Object.values(rarities)) {
+            if (!ball || typeof ball !== "object" || ball.id === undefined) continue;
+            for (const userId of activeIds(dexKey, ball)) counts.set(userId, (counts.get(userId) || 0) + 1);
+        }
+    }
+    return counts;
+}
+
+/** Cached Discord name and avatar (fetched in the background when missing or old). */
+function getDiscordProfile(userId) {
+    enqueueProfile(userId);
+    const profile = profiles.get(userId);
+    return profile && !profile.missing ? profile : null;
+}
+
+module.exports = { init, applyOverlay, getDexCollectors, addSelf, addVerified, removeSelf, getUserCollections, collectionCounts, getDiscordProfile, defaultAvatar };

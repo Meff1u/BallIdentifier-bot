@@ -26,6 +26,7 @@ const notifications = require("./utils/notifications");
 const collectorStore = require("./utils/collector-store");
 const specials = require("./utils/specials");
 const dexEditor = require("./utils/dex-editor");
+const profiles = require("./utils/profiles");
 
 const PORT = process.env.PORT || 3001;
 
@@ -53,13 +54,17 @@ const jsonBody = (limit) =>
 const smallJson = jsonBody("1kb");
 // Routes with their own, bigger body limit: dex art uploads
 const BIG_BODY_PATH = /^\/api\/users\/\d{17,20}\/dex\/save$/;
-app.use((req, res, next) => (BIG_BODY_PATH.test(req.path) ? next() : smallJson(req, res, next)));
+// Profile settings (bio, showcase) don't fit in 1 KB
+const PROFILE_BODY_PATH = /^\/api\/users\/\d{17,20}\/profile$/;
+const profileJson = jsonBody("8kb");
+app.use((req, res, next) => (BIG_BODY_PATH.test(req.path) ? next() : PROFILE_BODY_PATH.test(req.path) ? profileJson(req, res, next) : smallJson(req, res, next)));
 
 let client;
 
 const initializeServer = (c) => {
     client = c;
     dexEditor.setClient(c);
+    profiles.setClient(c);
 };
 
 // Rate limit middleware (each limiter has its own store, so public and API limits don't share a budget)
@@ -806,6 +811,75 @@ app.post("/api/users/:userId/notifications/settings", apiLimiter, verifySignatur
         return res.status(400).json({ error: "enabled and dm must be booleans" });
     }
     res.status(200).json({ success: true, settings: notifications.setSetting(userId, type, { enabled, dm }) });
+});
+
+// ---------------------------------------------------------------------------
+// Public profiles (website /u/<id> and the Users tab). Private until the owner turns them on.
+// ---------------------------------------------------------------------------
+
+// Profile pages are read through the website's functions (a few shared IPs), so this limit is generous
+const profileLimiter = createRateLimiter(600, 60 * 1000);
+
+const profileError = (res, error, what) => {
+    if (error.status) return res.status(error.status).json({ error: error.message, code: error.code });
+    client?.logError?.(what, error);
+    res.status(500).json({ error: "Profiles are unavailable right now. Try again later." });
+};
+
+app.param("targetId", (req, res, next, targetId) => (/^\d{17,20}$/.test(targetId) ? next() : res.status(400).json({ error: "Invalid user ID" })));
+
+// Search public profiles by Discord name (empty query: recently updated)
+app.get("/api/profiles", profileLimiter, verifySignature, (req, res) => {
+    try {
+        res.status(200).json(profiles.searchProfiles(typeof req.query.q === "string" ? req.query.q : ""));
+    } catch (error) {
+        profileError(res, error, "Profile search failed");
+    }
+});
+
+app.get("/api/profiles/:userId", profileLimiter, verifySignature, async (req, res) => {
+    try {
+        const profile = await profiles.getPublicProfile(req.params.userId);
+        if (!profile) return res.status(404).json({ error: "This profile is private or doesn't exist.", code: "NOT_FOUND" });
+        res.status(200).json({ profile });
+    } catch (error) {
+        profileError(res, error, "Profile read failed");
+    }
+});
+
+// Own settings + own profile (also while it's private)
+app.get("/api/users/:userId/profile", apiLimiter, verifySignature, async (req, res) => {
+    try {
+        const { userId } = req.params;
+        res.status(200).json({ ...profiles.getSettings(userId), profile: await profiles.getPublicProfile(userId, { self: true }) });
+    } catch (error) {
+        profileError(res, error, "Profile settings read failed");
+    }
+});
+
+app.post("/api/users/:userId/profile", apiLimiter, verifySignature, async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { settings, discord } = req.body || {};
+        if (!settings || typeof settings !== "object" || Array.isArray(settings)) return res.status(400).json({ error: "Invalid settings" });
+        const wasPublic = profiles.isPublic(userId);
+        const result = profiles.saveSettings(userId, settings, discord);
+        if (wasPublic !== profiles.isPublic(userId)) client?.log?.("PROFILES", `${profiles.isPublic(userId) ? "🌐" : "🔒"} ${userId} made their profile ${profiles.isPublic(userId) ? "public" : "private"}`);
+        res.status(200).json({ ...result, profile: await profiles.getPublicProfile(userId, { self: true }) });
+    } catch (error) {
+        profileError(res, error, "Profile save failed");
+    }
+});
+
+// Owner: hide a profile (bio etc. against the rules), show it again or clear its texts
+app.post("/api/users/:userId/admin/profiles/:targetId", apiLimiter, verifySignature, requireOwner, (req, res) => {
+    try {
+        const result = profiles.moderate(req.params.targetId, req.body?.action);
+        client?.log?.("PROFILES", `🛡️ Owner: ${req.body?.action} on ${req.params.targetId}'s profile`);
+        res.status(200).json({ success: true, ...result });
+    } catch (error) {
+        profileError(res, error, "Profile moderation failed");
+    }
 });
 
 // Error handling middleware

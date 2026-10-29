@@ -15,6 +15,7 @@ const CATEGORIES = {
     API: { name: "API", color: 0x2ecc71 }, // website <-> bot API
     BALLSDEX: { name: "Ballsdex", color: 0xa020f0 }, // linking, syncs
     COLLECTORS: { name: "Collectors", color: 0xe67e22 }, // collector entries added/removed
+    PROFILES: { name: "Profiles", color: 0x1abc9c }, // website profiles made public/private, moderation
     VOTES: { name: "Votes", color: 0x00c853 }, // upvotes and reminders
     CATCHES: { name: "Catches", color: 0x3498db }, // Ballsdex catch messages
     SYSTEM: { name: "System", color: 0xf39c12 }, // startup, data refresh, database, reports
