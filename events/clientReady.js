@@ -4,12 +4,16 @@ const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fet
 
 // Import shared utilities
 const { ASSETS_BASE_URL, BOT_NAMES, BOT_DATA_KEYS } = require("../utils/constants");
-const { getData, writeJsonFile, readJsonFile, getAssetsPath } = require("../utils/helpers");
+const { getData, updateData, writeJsonFile, readJsonFile, getAssetsPath } = require("../utils/helpers");
+const notifications = require("../utils/notifications");
+const { sendDueSyncReminders } = require("../utils/ballsdex");
 
 // Local constants
 const UPVOTES_PATH = getAssetsPath("upvotes.json");
 const REFRESH_INTERVAL = 60 * 60 * 1000; // 1 hour
 const DBL_POLL_INTERVAL = 180000; // 3 minutes
+const REMINDER_INTERVAL = 60 * 1000; // due "sync available" reminders
+const CHANGELOG_URL = `${ASSETS_BASE_URL.replace(/\/assets$/, "")}/changelog.json`;
 
 const HASH_URLS = Object.fromEntries(
     Object.entries(BOT_DATA_KEYS).map(([botId, key]) => [
@@ -25,6 +29,8 @@ module.exports = {
         console.log(`[STARTUP] ✅ ${client.user.tag} ready`);
         client.logDiscord(`🤖 Bot started: ${client.user.tag} | Guilds: ${client.guilds.cache.size}`);
         
+        notifications.setClient(client);
+
         // Initialize DBL client
         client.dbl = createDjsClient(process.env.DBL_TOKEN, client);
 
@@ -97,20 +103,43 @@ module.exports = {
         };
 
         client.upvoteReminder = async (users) => {
-            const data = getData();
-            
             for (const { user_id: userId } of users) {
-                if (data.users[userId]?.notifications?.reminder !== true) continue;
-                
-                try {
-                    const user = await client.users.fetch(userId);
-                    await user.send(
-                        "Your upvote expired! [Upvote](https://discordbotlist.com/bots/ballidentifier/upvote) again!"
-                    );
-                    console.log(`[DATAS] 📨 Reminder sent to ${userId}`);
-                } catch (error) {
-                    console.error(`[DATAS] ❌ Failed to send reminder to ${userId}:`, error.message);
+                const result = await notifications.notify(userId, "vote_reminder", {
+                    title: "Your upvote expired",
+                    body: "You can vote for BallIdentifier again to keep using it without a cooldown.",
+                    link: "https://discordbotlist.com/bots/ballidentifier/upvote",
+                    dmText: "Your upvote expired! [Upvote](https://discordbotlist.com/bots/ballidentifier/upvote) again!",
+                });
+                if (result.dm) console.log(`[DATAS] 📨 Reminder sent to ${userId}`);
+            }
+        };
+
+        // New changelog.json entries (committed to the website repo) -> update notifications
+        client.checkChangelog = async () => {
+            try {
+                const response = await fetch(CHANGELOG_URL);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const { changes = [] } = await response.json();
+                const entries = changes
+                    .map((entry) => ({ ...entry, time: Number(entry.timestamp) }))
+                    .filter((entry) => Number.isFinite(entry.time) && Array.isArray(entry.changes));
+                if (!entries.length) return;
+
+                const newest = Math.max(...entries.map((entry) => entry.time));
+                const seen = getData().meta?.changelogSeenAt;
+                updateData((data) => {
+                    data.meta ??= {};
+                    data.meta.changelogSeenAt = Math.max(newest, seen || 0);
+                });
+                // First run only records where we are, so old entries never spam anyone
+                if (!seen) return;
+                const fresh = entries.filter((entry) => entry.time > seen).sort((a, b) => a.time - b.time);
+                if (fresh.length) {
+                    console.log(`[DATAS] 📰 ${fresh.length} new changelog entr${fresh.length === 1 ? "y" : "ies"}`);
+                    await notifications.notifyChangelog(fresh);
                 }
+            } catch (error) {
+                console.error("[DATAS] ❌ Changelog check failed:", error.message);
             }
         };
 
@@ -139,6 +168,7 @@ module.exports = {
                 await client.fetchHashes();
                 await client.fetchUpvotes();
                 await client.postDBLStats();
+                await client.checkChangelog();
             } catch (error) {
                 console.error("[DATAS] ❌ Refresh loop error:", error.message);
             } finally {
@@ -146,6 +176,9 @@ module.exports = {
             }
         };
         refreshLoop();
+
+        // "You can sync again" reminders (12 h after a Ballsdex sync)
+        setInterval(() => sendDueSyncReminders().catch((error) => console.error("[BALLSDEX] Reminder loop:", error.message)), REMINDER_INTERVAL);
 
         // Set up DBL polling and vote handler
         client.dbl.startPolling(DBL_POLL_INTERVAL);
@@ -156,18 +189,11 @@ module.exports = {
             try {
                 const data = getData();
                 
-                // Send thanks message if enabled
-                if (data.users[vote.id]?.notifications?.thanks !== false) {
-                    try {
-                        const user = await client.users.fetch(vote.id);
-                        await user.send(
-                            "Thanks for voting!\n-# You can toggle this message in </notifications:1388927499248996473> command"
-                        );
-                        console.log(`[DATAS] 💖 Thanks sent to ${vote.id}`);
-                    } catch (error) {
-                        console.error(`[DATAS] ❌ Failed to send thanks to ${vote.id}:`, error.message);
-                    }
-                }
+                await notifications.notify(vote.id, "vote_thanks", {
+                    title: "Thanks for voting!",
+                    body: "Your upvote removes the identify cooldown while it's active.",
+                    dmText: "Thanks for voting!\n-# You can turn this message off with </notifications:1388927499248996473> or on https://ballidentifier.xyz",
+                });
 
                 // Send webhook notification
                 const webhookUrl = process.env.UPVOTE_WEBHOOK_URL;

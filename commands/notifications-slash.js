@@ -10,7 +10,7 @@ const {
 
 // Import shared utilities
 const { COLORS } = require("../utils/constants");
-const { updateData } = require("../utils/helpers");
+const { setSetting } = require("../utils/notifications");
 
 
 const getStatusEmoji = (value) => (value ? "✅" : "❌");
@@ -33,14 +33,11 @@ module.exports = {
 
         const { user } = interaction;
 
-        // Save one preference atomically and return the user's current preferences
-        const setPreference = (key, value) =>
-            updateData((data) => {
-                data.users[user.id] ??= {};
-                data.users[user.id].notifications ??= {};
-                data.users[user.id].notifications[key] = value;
-                return { ...data.users[user.id].notifications };
-            });
+        // DM switches of the shared notification settings (same ones as on the website)
+        const setPreference = (key, value) => {
+            const settings = setSetting(user.id, key === "thanks" ? "vote_thanks" : "vote_reminder", value ? { enabled: true, dm: true } : { dm: false });
+            return { thanks: settings.vote_thanks.dm, reminder: settings.vote_reminder.dm };
+        };
 
         // Initial prompt
         const embed = new EmbedBuilder()
@@ -85,14 +82,14 @@ module.exports = {
             // Handle reminder preference
             else if (customId === "reminder_yes" || customId === "reminder_no") {
                 const notifications = setPreference("reminder", customId === "reminder_yes");
-                const thanksStatus = getStatusEmoji(notifications.thanks !== false);
+                const thanksStatus = getStatusEmoji(notifications.thanks);
                 const reminderStatus = getStatusEmoji(notifications.reminder);
 
                 const finalEmbed = new EmbedBuilder()
                     .setColor(COLORS.INFO)
                     .setTitle("Notification Preferences")
                     .setDescription(`Thanks messages: ${thanksStatus}\nUpvote reminders: ${reminderStatus}`)
-                    .setFooter({ text: "Settings saved!" });
+                    .setFooter({ text: "Settings saved! More notification options: ballidentifier.xyz (bell icon)" });
 
                 await btnInteraction.editReply({ embeds: [finalEmbed], components: [] });
                 collector.stop();

@@ -9,7 +9,23 @@ const API_BASE_URL = process.env.BALLSDEX_API_URL || "https://ballsdex.com/api/v
 const ENCRYPTION_ALGORITHM = "aes-256-gcm";
 const PAGE_SIZE = 25;
 const PAGE_REQUEST_DELAY = 1000; // ~60 pages/min: the per-key limit, and kind to the shared per-IP limit
-const SYNC_COOLDOWN_MS = 5 * 60 * 1000;
+const SYNC_COOLDOWN_MS = 12 * 60 * 60 * 1000; // after a successful sync
+const SYNC_RETRY_COOLDOWN_MS = 5 * 60 * 1000; // after a failed or cancelled sync
+const TOP_ENTRIES = 5;
+
+// Raw value of one non-special ball per rarity tier (t19-t23 share 0.1). Tiers are the dex "rarity" rank.
+const RAW_TIER_VALUES = [
+    [1, 1],
+    [4, 0.8],
+    [6, 0.75],
+    [7, 0.5],
+    [10, 0.4],
+    [12, 0.25],
+    [15, 0.2],
+    [18, 0.15],
+    [19, 0.1],
+];
+const RAW_MAX_TIER = 23;
 const LINK_COOLDOWN_MS = 20 * 1000;
 const SPECIAL_WRITE_BATCH_SIZE = 500;
 
@@ -106,11 +122,19 @@ function getItems(response) {
 }
 
 // /me/balls returns at most 25 per page; walk next_cursor to the end
-async function getAllMyBalls(apiKey, onPage) {
+class SyncCancelled extends Error {
+    constructor() {
+        super("Sync cancelled.");
+        this.code = "CANCELLED";
+    }
+}
+
+async function getAllMyBalls(apiKey, onPage, shouldStop = () => false) {
     const balls = [];
     let cursor;
 
     do {
+        if (shouldStop()) throw new SyncCancelled();
         const { data, waitMs } = await ballsdexFetch(apiKey, "/me/balls", { limit: PAGE_SIZE, cursor });
         balls.push(...getItems(data));
         cursor = data.next_cursor;
@@ -229,11 +253,11 @@ function buildCollectionSummary(profile, balls, totals = null) {
     const duplicateCount = [...ballCounts.values()].reduce((total, count) => total + Math.max(0, count - 1), 0);
     const getTopEntries = (counts) => [...counts.entries()]
         .sort(([, firstCount], [, secondCount]) => secondCount - firstCount)
-        .slice(0, 3)
+        .slice(0, TOP_ENTRIES)
         .map(([name, count]) => ({ name, count }));
     const topSpecialBalls = [...specialBallCounts.values()]
         .sort((first, second) => second.count - first.count)
-        .slice(0, 3);
+        .slice(0, TOP_ENTRIES);
     const [mostActiveCatchDay, mostActiveCatchStats] = [...catchesByDay.entries()]
         .sort(([, firstStats], [, secondStats]) => secondStats.count - firstStats.count)[0] || [null, null];
 
@@ -291,7 +315,76 @@ async function replaceSpecialCollection(collection, userId, balls) {
     return specialRecords.length;
 }
 
-async function syncCollection(discordUserId, apiKey, onProgress) {
+/** Non-special instance counts per ball, for the raws list. */
+function countNonSpecial(balls) {
+    const counts = new Map();
+    for (const ball of balls) {
+        if (getSpecialId(ball) || ball.special) continue;
+        const id = ball.ball?.id ?? ball.ball_id;
+        const name = ball.ball?.country;
+        if (id === undefined && !name) continue;
+        const key = String(id ?? name);
+        const entry = counts.get(key) || { ballId: id ?? null, name: name || null, count: 0 };
+        entry.count += 1;
+        counts.set(key, entry);
+    }
+    return [...counts.values()];
+}
+
+function rawValueForTier(tier) {
+    if (!Number.isFinite(tier) || tier < 1 || tier > RAW_MAX_TIER) return 0;
+    let value = 0;
+    for (const [from, v] of RAW_TIER_VALUES) if (tier >= from) value = v;
+    return value;
+}
+
+/**
+ * Raws: every rare (t1-t23) Ballsdex ball, how many non-special copies the player has,
+ * and count x tier value. `rarityData` is Ballsdex.json ({ name: { rarity, id, ... } }).
+ */
+function computeRaws(nonSpecial = [], rarityData = {}) {
+    const byId = new Map();
+    const byName = new Map();
+    for (const entry of nonSpecial) {
+        if (entry.ballId !== null && entry.ballId !== undefined) byId.set(String(entry.ballId), entry);
+        if (entry.name) byName.set(entry.name.toLowerCase(), entry);
+    }
+
+    const rows = [];
+    for (const [name, info] of Object.entries(rarityData)) {
+        const tier = Number(info?.rarity);
+        const value = rawValueForTier(tier);
+        if (!value) continue;
+        const owned = byId.get(String(info.id)) || byName.get(name.toLowerCase());
+        const count = owned?.count || 0;
+        rows.push({ name, tier, value, count, total: Math.round(count * value * 100) / 100 });
+    }
+    rows.sort((a, b) => a.tier - b.tier || b.count - a.count || a.name.localeCompare(b.name));
+
+    const tiers = [];
+    for (const row of rows) {
+        let group = tiers[tiers.length - 1];
+        if (!group || group.tier !== row.tier) {
+            group = { tier: row.tier, value: row.value, count: 0, total: 0, balls: 0 };
+            tiers.push(group);
+        }
+        group.count += row.count;
+        group.total = Math.round((group.total + row.total) * 100) / 100;
+        group.balls += 1;
+    }
+
+    const total = Math.round(rows.reduce((sum, row) => sum + row.total, 0) * 100) / 100;
+    return {
+        total,
+        rareCount: rows.reduce((sum, row) => sum + row.count, 0),
+        ownedKinds: rows.filter((row) => row.count > 0).length,
+        kinds: rows.length,
+        tiers,
+        rows,
+    };
+}
+
+async function syncCollection(discordUserId, apiKey, onProgress, shouldStop) {
     const database = await getDatabase();
     const ballsCollection = database.collection("ballsdexBalls");
     const collectionsCollection = database.collection("ballsdexCollections");
@@ -301,7 +394,7 @@ async function syncCollection(discordUserId, apiKey, onProgress) {
     const expected = totals?.ballCount ?? null;
 
     onProgress?.({ phase: "balls", fetched: 0, total: expected });
-    const balls = await getAllMyBalls(apiKey, (fetched) => onProgress?.({ phase: "balls", fetched, total: expected }));
+    const balls = await getAllMyBalls(apiKey, (fetched) => onProgress?.({ phase: "balls", fetched, total: expected }), shouldStop);
     onProgress?.({ phase: "saving", fetched: balls.length, total: expected });
 
     const summary = buildCollectionSummary(profile, balls, totals);
@@ -314,6 +407,7 @@ async function syncCollection(discordUserId, apiKey, onProgress) {
             $set: {
                 discordUserId,
                 summary,
+                nonSpecial: countNonSpecial(balls),
                 ballCount: summary.totalBalls,
                 lastSyncedAt: syncedAt,
             },
@@ -396,12 +490,27 @@ async function linkApiKey(userId, apiKey) {
     }
 
     saveApiKey(userId, apiKey);
+    getNotifier()
+        .notify(userId, "ballsdex_account", {
+            title: "Ballsdex account linked",
+            body: "A Ballsdex API key was linked to your BallIdentifier account. Not you? Unlink it in the Ballsdex tab.",
+            link: "#/ballsdex",
+        })
+        .catch(() => {});
 }
 
 // Remove the stored key and synced data. Returns false when nothing was linked.
 async function unlinkAccount(userId) {
     const wasLinked = removeApiKey(userId);
+    cancelSync(userId);
     if (wasLinked) {
+        getNotifier()
+            .notify(userId, "ballsdex_account", {
+                title: "Ballsdex account unlinked",
+                body: "Your Ballsdex API key and synced collection data were removed.",
+                link: "#/ballsdex",
+            })
+            .catch(() => {});
         try {
             await deleteStoredCollection(userId);
         } catch (error) {
@@ -411,65 +520,203 @@ async function unlinkAccount(userId) {
     return wasLinked;
 }
 
-// Sync state shared by the bot command and the website (one sync per user at a time)
-const syncStates = new Map();
+// ---------------------------------------------------------------------------
+// Sync control, shared by /ballsdex and the website.
+// Only ONE sync runs at a time (all syncs share the bot's IP rate limit at Ballsdex). Someone who tries
+// while another sync runs is told so and gets a "sync available" notification when the slot frees up.
+// Per-user cooldown: 12 h after a successful sync, 5 min after a failed or cancelled one; persisted in
+// data.json users[id].ballsdexSync so restarts and unlink/relink don't reset it.
+// ---------------------------------------------------------------------------
+
+const syncStates = new Map(); // userId -> live state of the user's current/last sync this run
+let activeSync = null; // { userId, state }
+const slotWaiters = new Set(); // users to notify when the running sync ends
+
+function getNotifier() {
+    return require("./notifications");
+}
+
+function getSyncRecord(userId) {
+    return getData().users[userId]?.ballsdexSync || {};
+}
+
+function cooldownLeftMs(userId) {
+    const until = getSyncRecord(userId).nextSyncAt ? new Date(getSyncRecord(userId).nextSyncAt).getTime() : 0;
+    return Math.max(0, until - Date.now());
+}
 
 function getSyncState(userId) {
-    const state = syncStates.get(String(userId));
-    if (!state) return { inProgress: false };
-    const nextAllowedAt = (state.finishedAt || state.startedAt || 0) + SYNC_COOLDOWN_MS;
+    userId = String(userId);
+    const state = syncStates.get(userId);
+    const record = getSyncRecord(userId);
+    const busy = Boolean(activeSync && activeSync.userId !== userId);
     return {
-        inProgress: state.inProgress,
-        startedAt: state.startedAt ? new Date(state.startedAt).toISOString() : null,
-        finishedAt: state.finishedAt ? new Date(state.finishedAt).toISOString() : null,
-        error: state.error || null,
-        ballCount: state.ballCount ?? null,
-        progress: state.inProgress ? state.progress : null,
-        retryAfterSec: state.inProgress ? null : Math.max(0, Math.ceil((nextAllowedAt - Date.now()) / 1000)),
+        inProgress: Boolean(state?.inProgress),
+        startedAt: state?.startedAt ? new Date(state.startedAt).toISOString() : null,
+        finishedAt: state?.finishedAt ? new Date(state.finishedAt).toISOString() : record.lastFinishedAt || null,
+        error: state?.error || null,
+        cancelled: Boolean(state?.cancelled && !state?.inProgress),
+        ballCount: state?.ballCount ?? null,
+        progress: state?.inProgress ? state.progress : null,
+        cancelRequested: Boolean(state?.inProgress && state.cancelRequested),
+        retryAfterSec: state?.inProgress ? null : Math.ceil(cooldownLeftMs(userId) / 1000),
+        nextSyncAt: record.nextSyncAt || null,
+        busy,
+        waiting: busy && slotWaiters.has(userId),
     };
 }
 
-function startSync(userId, { onDone } = {}) {
+function finishSync(userId, state, outcome) {
+    const cooldown = outcome === "success" ? SYNC_COOLDOWN_MS : SYNC_RETRY_COOLDOWN_MS;
+    const nextSyncAt = new Date(Date.now() + cooldown).toISOString();
+    updateData((data) => {
+        data.users[userId] ??= {};
+        data.users[userId].ballsdexSync = {
+            lastFinishedAt: new Date().toISOString(),
+            lastOutcome: outcome,
+            nextSyncAt,
+            // remind only after a real sync; a quick retry window needs no notification
+            notifyAvailableAt: outcome === "success" ? nextSyncAt : null,
+        };
+    });
+    state.inProgress = false;
+    state.finishedAt = Date.now();
+    if (activeSync?.userId === userId) activeSync = null;
+
+    // The slot is free: tell everyone who was turned away
+    const waiters = [...slotWaiters].filter((id) => id !== userId);
+    slotWaiters.clear();
+    for (const waiterId of waiters) {
+        if (!getSavedApiKey(waiterId) || cooldownLeftMs(waiterId) > 0) continue;
+        getNotifier()
+            .notify(waiterId, "sync_available", {
+                title: "You can sync your Ballsdex collection now",
+                body: "The sync that was running has finished.",
+                link: "#/ballsdex",
+                dmText: "The Ballsdex sync slot is free, you can sync your collection now with `/ballsdex sync` or on https://ballidentifier.xyz/#/ballsdex",
+            })
+            .catch(() => {});
+    }
+}
+
+/**
+ * Start a background collection sync.
+ * @returns {{started: true} | {started: false, reason: "NOT_LINKED"|"IN_PROGRESS"|"BUSY"|"COOLDOWN", retryAfterSec?: number}}
+ */
+function startSync(userId) {
     userId = String(userId);
     const encryptedKey = getSavedApiKey(userId);
     if (!encryptedKey) return { started: false, reason: "NOT_LINKED" };
 
-    const current = syncStates.get(userId);
-    if (current?.inProgress) return { started: false, reason: "IN_PROGRESS" };
-    const lastRun = current?.finishedAt || current?.startedAt;
-    if (lastRun && Date.now() - lastRun < SYNC_COOLDOWN_MS) {
-        return {
-            started: false,
-            reason: "COOLDOWN",
-            retryAfterSec: Math.ceil((lastRun + SYNC_COOLDOWN_MS - Date.now()) / 1000),
-        };
+    if (syncStates.get(userId)?.inProgress) return { started: false, reason: "IN_PROGRESS" };
+
+    const left = cooldownLeftMs(userId);
+    if (left > 0) return { started: false, reason: "COOLDOWN", retryAfterSec: Math.ceil(left / 1000) };
+
+    if (activeSync) {
+        slotWaiters.add(userId);
+        return { started: false, reason: "BUSY" };
     }
 
-    const state = { inProgress: true, startedAt: Date.now(), finishedAt: null, error: null, ballCount: null, progress: { phase: "starting", fetched: 0, total: null } };
+    const state = {
+        inProgress: true,
+        startedAt: Date.now(),
+        finishedAt: null,
+        error: null,
+        cancelled: false,
+        cancelRequested: false,
+        ballCount: null,
+        progress: { phase: "starting", fetched: 0, total: null },
+    };
     syncStates.set(userId, state);
+    activeSync = { userId, state };
+    slotWaiters.delete(userId);
+    // a new sync replaces the pending "available" reminder
+    updateData((data) => {
+        if (data.users[userId]?.ballsdexSync) data.users[userId].ballsdexSync.notifyAvailableAt = null;
+    });
 
     void (async () => {
+        let outcome = "failed";
         try {
-            const result = await syncCollection(userId, decryptApiKey(encryptedKey), (progress) => {
-                state.progress = progress;
-            });
+            const result = await syncCollection(
+                userId,
+                decryptApiKey(encryptedKey),
+                (progress) => {
+                    state.progress = progress;
+                },
+                () => state.cancelRequested,
+            );
             state.ballCount = result.ballCount;
-            onDone?.(result, null);
+            outcome = "success";
+            getNotifier()
+                .notify(userId, "sync_finished", {
+                    title: "Ballsdex sync finished",
+                    body: `${result.ballCount.toLocaleString("en-US")} balls synced. Your stats and raws are up to date.`,
+                    link: "#/ballsdex",
+                    dmText: `Your Ballsdex collection sync is complete. ${result.ballCount.toLocaleString("en-US")} balls were updated.`,
+                })
+                .catch(() => {});
         } catch (error) {
-            console.error("[BALLSDEX] Failed to sync collection:", error);
-            state.error = error.status === 429 ? "The Ballsdex API rate limit was reached. Try again later." : error.message;
-            onDone?.(null, error);
+            if (error.code === "CANCELLED") {
+                outcome = "cancelled";
+                state.cancelled = true;
+            } else {
+                console.error("[BALLSDEX] Failed to sync collection:", error);
+                state.error = error.status === 429 ? "The Ballsdex API rate limit was reached. Try again later." : error.message;
+                getNotifier()
+                    .notify(userId, "sync_finished", {
+                        title: "Ballsdex sync failed",
+                        body: state.error,
+                        link: "#/ballsdex",
+                        dmText: `Your Ballsdex collection sync failed: ${state.error}`,
+                    })
+                    .catch(() => {});
+            }
         } finally {
-            state.inProgress = false;
-            state.finishedAt = Date.now();
+            finishSync(userId, state, outcome);
         }
     })();
 
     return { started: true };
 }
 
+/** Ask the user's running sync to stop after the current page. */
+function cancelSync(userId) {
+    const state = syncStates.get(String(userId));
+    if (!state?.inProgress) return false;
+    state.cancelRequested = true;
+    return true;
+}
+
+/** Sends due "you can sync again" reminders. Called every minute from clientReady. */
+async function sendDueSyncReminders() {
+    const now = Date.now();
+    const due = Object.entries(getData().users)
+        .filter(([, user]) => user.ballsdexSync?.notifyAvailableAt && new Date(user.ballsdexSync.notifyAvailableAt).getTime() <= now)
+        .map(([userId]) => userId);
+    if (!due.length) return;
+    updateData((data) => {
+        for (const userId of due) if (data.users[userId]?.ballsdexSync) data.users[userId].ballsdexSync.notifyAvailableAt = null;
+    });
+    for (const userId of due) {
+        if (!getSavedApiKey(userId)) continue;
+        await getNotifier()
+            .notify(userId, "sync_available", {
+                title: "Your Ballsdex sync is available again",
+                body: "12 hours have passed since your last sync.",
+                link: "#/ballsdex",
+                dmText: "You can sync your Ballsdex collection again with `/ballsdex sync` or on https://ballidentifier.xyz/#/ballsdex",
+            })
+            .catch(() => {});
+    }
+}
+
 module.exports = {
     SYNC_COOLDOWN_MS,
+    cancelSync,
+    computeRaws,
+    sendDueSyncReminders,
     decryptFromSite,
     linkApiKey,
     unlinkAccount,
@@ -485,4 +732,4 @@ module.exports = {
     removeApiKey,
     saveApiKey,
     syncCollection,
-};
+};

@@ -13,7 +13,10 @@ const {
     getStoredCollection,
     getSyncState,
     startSync,
+    cancelSync,
+    computeRaws,
 } = require("./utils/ballsdex");
+const notifications = require("./utils/notifications");
 
 const PORT = process.env.PORT || 3001;
 
@@ -510,23 +513,75 @@ app.post("/api/users/:userId/ballsdex/unlink", apiLimiter, verifySignature, asyn
     res.status(200).json({ success: true, linked: false, wasLinked });
 });
 
-// Start a background sync (shared 5 min cooldown with /ballsdex sync)
+// Start a background sync (one sync at a time for everyone; 12 h cooldown shared with /ballsdex sync)
 app.post("/api/users/:userId/ballsdex/sync", apiLimiter, verifySignature, (req, res) => {
     const { userId } = req.params;
     const result = startSync(userId);
 
     if (!result.started) {
+        const hours = Math.floor((result.retryAfterSec || 0) / 3600);
+        const minutes = Math.ceil(((result.retryAfterSec || 0) % 3600) / 60);
         const errors = {
             NOT_LINKED: [400, "Link your Ballsdex account first."],
             IN_PROGRESS: [409, "Your collection is already being synchronized."],
-            COOLDOWN: [429, "You can sync again in a few minutes."],
+            BUSY: [409, "Another collection sync is running right now. You'll get a notification when you can start yours."],
+            COOLDOWN: [429, `You can sync again in ${hours ? `${hours} h ` : ""}${minutes} min.`],
         };
         const [status, message] = errors[result.reason];
-        return res.status(status).json({ error: message, code: result.reason, retryAfterSec: result.retryAfterSec ?? null });
+        return res.status(status).json({ error: message, code: result.reason, retryAfterSec: result.retryAfterSec ?? null, sync: getSyncState(userId) });
     }
 
     client?.logAPI?.(`POST /api/users/${userId}/ballsdex/sync | Started`);
     res.status(202).json({ success: true, sync: getSyncState(userId) });
+});
+
+// Cancel the user's running sync (stops after the current page)
+app.post("/api/users/:userId/ballsdex/cancel", apiLimiter, verifySignature, (req, res) => {
+    const { userId } = req.params;
+    if (!cancelSync(userId)) return res.status(409).json({ error: "No sync is running.", code: "NOT_RUNNING" });
+    client?.logAPI?.(`POST /api/users/${userId}/ballsdex/cancel`);
+    res.status(200).json({ success: true, sync: getSyncState(userId) });
+});
+
+// Raws: rare (t1-t23) non-special balls x tier value, from the last sync
+app.get("/api/users/:userId/ballsdex/raws", apiLimiter, verifySignature, async (req, res) => {
+    const { userId } = req.params;
+    if (!getSavedApiKey(userId)) return res.status(200).json({ available: false, reason: "NOT_LINKED" });
+    try {
+        const stored = await getStoredCollection(userId);
+        if (!stored) return res.status(200).json({ available: false, reason: "NO_DATA" });
+        if (!Array.isArray(stored.nonSpecial)) return res.status(200).json({ available: false, reason: "RESYNC" });
+        const rarityData = client?.rarities?.BD;
+        if (!rarityData) return res.status(503).json({ error: "Dex data is still loading. Try again in a moment." });
+        res.status(200).json({ available: true, lastSyncedAt: stored.lastSyncedAt, raws: computeRaws(stored.nonSpecial, rarityData) });
+    } catch (error) {
+        console.error("[API] Raws failed:", error.message);
+        res.status(503).json({ error: "Collection storage is unavailable right now." });
+    }
+});
+
+// Notifications (website history + per-type settings)
+app.get("/api/users/:userId/notifications", apiLimiter, verifySignature, (req, res) => {
+    const { userId } = req.params;
+    notifications.markWebUser(userId);
+    res.status(200).json({ ...notifications.getInbox(userId), types: notifications.publicTypes() });
+});
+
+app.post("/api/users/:userId/notifications/read", apiLimiter, verifySignature, (req, res) => {
+    const { userId } = req.params;
+    const ids = req.body?.all ? null : Array.isArray(req.body?.ids) ? req.body.ids.slice(0, 100).map(String) : [];
+    const unread = notifications.markRead(userId, ids);
+    res.status(200).json({ success: true, unread });
+});
+
+app.post("/api/users/:userId/notifications/settings", apiLimiter, verifySignature, (req, res) => {
+    const { userId } = req.params;
+    const { type, enabled, dm } = req.body || {};
+    if (!notifications.TYPES[type]) return res.status(400).json({ error: "Unknown notification type" });
+    if ((enabled !== undefined && typeof enabled !== "boolean") || (dm !== undefined && typeof dm !== "boolean")) {
+        return res.status(400).json({ error: "enabled and dm must be booleans" });
+    }
+    res.status(200).json({ success: true, settings: notifications.setSetting(userId, type, { enabled, dm }) });
 });
 
 // Error handling middleware

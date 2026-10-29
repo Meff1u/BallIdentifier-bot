@@ -17,12 +17,14 @@ const {
     getSavedApiKey,
     getStoredCollection,
     startSync,
+    computeRaws,
 } = require("../utils/ballsdex");
 
 const SUBCOMMAND_COOLDOWNS = {
     link: 20 * 1000,
     unlink: 20 * 1000,
     collection: 5 * 60 * 1000,
+    raws: 30 * 1000,
 };
 const subcommandCooldowns = new Map();
 
@@ -86,7 +88,8 @@ module.exports = {
         .addSubcommand((subcommand) => subcommand.setName("link").setDescription("Link your Ballsdex API key."))
         .addSubcommand((subcommand) => subcommand.setName("unlink").setDescription("Remove your linked Ballsdex API key."))
         .addSubcommand((subcommand) => subcommand.setName("collection").setDescription("View your saved Ballsdex collection summary."))
-        .addSubcommand((subcommand) => subcommand.setName("sync").setDescription("Synchronize your Ballsdex collection to BallIdentifier.")),
+        .addSubcommand((subcommand) => subcommand.setName("sync").setDescription("Synchronize your Ballsdex collection to BallIdentifier."))
+        .addSubcommand((subcommand) => subcommand.setName("raws").setDescription("Value of your rare (T1-T23) non-special balls.")),
 
     async execute(interaction) {
         const subcommand = interaction.options.getSubcommand();
@@ -171,34 +174,90 @@ module.exports = {
         }
 
         if (subcommand === "sync") {
-            const user = interaction.user;
-            const result = startSync(user.id, {
-                onDone: async (syncResult, error) => {
-                    try {
-                        await user.send(
-                            error
-                                ? `Your Ballsdex collection sync failed: ${error.status === 429 ? "the Ballsdex API rate limit was reached." : error.message}`
-                                : `Your Ballsdex collection sync is complete. ${syncResult.ballCount.toLocaleString("en-US")} balls were updated.`,
-                        );
-                    } catch (dmError) {
-                        console.error("[BALLSDEX] Failed to send sync DM:", dmError);
-                    }
-                },
-            });
+            const result = startSync(interaction.user.id);
 
             if (!result.started) {
+                const left = result.retryAfterSec || 0;
+                const wait = `${Math.floor(left / 3600) ? `${Math.floor(left / 3600)} h ` : ""}${Math.ceil((left % 3600) / 60)} min`;
                 const messages = {
                     NOT_LINKED: "Link your Ballsdex account first with `/ballsdex link`.",
                     IN_PROGRESS: "Your Ballsdex collection is already being synchronized.",
-                    COOLDOWN: `You can sync again in ${Math.ceil((result.retryAfterSec || 0) / 60)} min.`,
+                    BUSY: "Someone else's collection is being synchronized right now (only one sync can run at a time). I'll notify you as soon as you can start yours.",
+                    COOLDOWN: `You can sync again in ${wait}. Syncs are limited to one every 12 hours.`,
                 };
                 return interaction.reply({ content: messages[result.reason], flags: MessageFlags.Ephemeral });
             }
 
+            const cancelButton = new ButtonBuilder()
+                .setCustomId("ballsdex-sync:cancel")
+                .setLabel("Cancel sync")
+                .setStyle(ButtonStyle.Secondary);
             return interaction.reply({
-                content: "Your Ballsdex collection synchronization has started. This may take a while for large collections; I will send you a DM when it finishes.",
+                content:
+                    "Your Ballsdex collection synchronization has started. Big collections take a while (about 1,500 balls a minute). " +
+                    "You'll get a notification when it finishes; follow the progress on https://ballidentifier.xyz/#/ballsdex",
+                components: [new ActionRowBuilder().addComponents(cancelButton)],
                 flags: MessageFlags.Ephemeral,
             });
+        }
+
+        if (subcommand === "raws") {
+            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+            try {
+                const stored = await getStoredCollection(interaction.user.id);
+                if (!stored || !Array.isArray(stored.nonSpecial)) {
+                    return interaction.editReply({
+                        content: stored
+                            ? "Your saved collection is from before raws existed. Run `/ballsdex sync` once to count them."
+                            : "No saved Ballsdex collection was found. Run `/ballsdex sync` to import it.",
+                    });
+                }
+                const rarityData = interaction.client.rarities?.BD;
+                if (!rarityData) return interaction.editReply({ content: "Dex data is still loading, try again in a moment." });
+
+                const raws = computeRaws(stored.nonSpecial, rarityData);
+                const fmt = (n) => n.toLocaleString("en-US", { maximumFractionDigits: 2 });
+                const syncedAt = Math.floor(new Date(stored.lastSyncedAt).getTime() / 1000);
+                const displayName = stored.summary?.displayName && stored.summary.displayName !== "Unknown" ? stored.summary.displayName : interaction.user.username;
+
+                let tierText = "";
+                for (const tier of raws.tiers) {
+                    if (!tier.count) continue;
+                    const owned = raws.rows.filter((row) => row.tier === tier.tier && row.count > 0);
+                    const line =
+                        `**T${tier.tier}** · ×${tier.value} · \`${fmt(tier.count)}\` balls = **${fmt(tier.total)}**\n` +
+                        `-# ${owned.map((row) => `${row.name} ×${row.count}`).join(", ")}\n`;
+                    if (tierText.length + line.length > 3300) {
+                        tierText += "-# …more on the website\n";
+                        break;
+                    }
+                    tierText += line;
+                }
+
+                const container = new ContainerBuilder()
+                    .setAccentColor(0xa020f0)
+                    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`# ${displayName}'s raws`))
+                    .addTextDisplayComponents(
+                        new TextDisplayBuilder().setContent(
+                            `**Total raws value: \`${fmt(raws.total)}\`**\n` +
+                                `- Rare non-special balls (T1-T23): \`${fmt(raws.rareCount)}\`\n` +
+                                `- Different rare balls owned: \`${raws.ownedKinds} / ${raws.kinds}\``,
+                        ),
+                    )
+                    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+                    .addTextDisplayComponents(new TextDisplayBuilder().setContent(tierText || "You don't have any rare non-special balls yet."))
+                    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+                    .addTextDisplayComponents(
+                        new TextDisplayBuilder().setContent(
+                            `-# Values: T1 1 · T4 0.8 · T6 0.75 · T7 0.5 · T10 0.4 · T12 0.25 · T15 0.2 · T18 0.15 · T19-T23 0.1\n` +
+                                `-# Last synced <t:${syncedAt}:R> · full list on https://ballidentifier.xyz/#/ballsdex/raws`,
+                        ),
+                    );
+                return interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+            } catch (error) {
+                console.error("[BALLSDEX] Raws failed:", error);
+                return interaction.editReply({ content: `Could not load your raws: ${error.message}` });
+            }
         }
 
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });

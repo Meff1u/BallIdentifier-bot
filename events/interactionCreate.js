@@ -18,7 +18,7 @@ const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fet
 // Import shared utilities
 const { COLORS, INACTIVITY_TIMEOUT } = require("../utils/constants");
 const { readJsonFile, writeJsonFile, getAssetsPath } = require("../utils/helpers");
-const { linkApiKey, unlinkAccount } = require("../utils/ballsdex");
+const { linkApiKey, unlinkAccount, cancelSync } = require("../utils/ballsdex");
 const {
     PAGE_SIZE,
     buildCollectorsView,
@@ -247,6 +247,16 @@ module.exports = {
 
                 modal.addComponents(new ActionRowBuilder().addComponents(apiKeyInput));
                 return interaction.showModal(modal);
+            }
+
+            if (interaction.customId === "ballsdex-sync:cancel") {
+                const cancelled = cancelSync(interaction.user.id);
+                return interaction.update({
+                    content: cancelled
+                        ? "Cancelling your Ballsdex sync. It stops after the current page; you can start a new one in 5 minutes."
+                        : "There's no Ballsdex sync running for you.",
+                    components: [],
+                });
             }
 
             if (interaction.customId.startsWith("ballsdex-unlink:")) {
