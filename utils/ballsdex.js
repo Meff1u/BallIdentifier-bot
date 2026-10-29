@@ -911,7 +911,8 @@ function finishSync(userId, state, outcome) {
                 title: "You can sync your Ballsdex collection now",
                 body: "The sync that was running has finished.",
                 link: "#/ballsdex",
-                dmText: "The Ballsdex sync slot is free, you can sync your collection now with `/ballsdex sync` or on https://ballidentifier.xyz/#/ballsdex",
+                dmText: "The Ballsdex sync slot is free: sync your collection now with `/ballsdex sync` or on the website.",
+                linkLabel: "Open the Ballsdex tab",
             })
             .catch(() => {});
     }
@@ -1145,7 +1146,8 @@ async function sendDueSyncReminders() {
                 title: "Your Ballsdex sync is available again",
                 body: "24 hours have passed since your last sync.",
                 link: "#/ballsdex",
-                dmText: "You can sync your Ballsdex collection again with `/ballsdex sync` or on https://ballidentifier.xyz/#/ballsdex",
+                dmText: "24 hours have passed: sync your collection again with `/ballsdex sync` or on the website.",
+                linkLabel: "Open the Ballsdex tab",
             })
             .catch(() => {});
     }

@@ -113,7 +113,7 @@ module.exports = {
                     title: "Your upvote expired",
                     body: "You can vote for BallIdentifier again to keep using it without a cooldown.",
                     link: "https://discordbotlist.com/bots/ballidentifier/upvote",
-                    dmText: "Your upvote expired! [Upvote](https://discordbotlist.com/bots/ballidentifier/upvote) again!",
+                    linkLabel: "Upvote again",
                 });
                 if (result.dm) client.log("VOTES", `Reminder DM sent to <@${userId}>`);
             }
@@ -215,7 +215,6 @@ module.exports = {
                 await notifications.notify(vote.id, "vote_thanks", {
                     title: "Thanks for voting!",
                     body: "Your upvote removes the identify cooldown while it's active.",
-                    dmText: "Thanks for voting!\n-# You can turn this message off on https://ballidentifier.xyz (bell icon)",
                 });
 
                 client.log("VOTES", `🗳️ New upvote: <@${vote.id}> (${vote.username})`);

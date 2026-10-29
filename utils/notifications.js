@@ -8,9 +8,34 @@
  * website at least once (users[id].web), capped at INBOX_LIMIT entries.
  */
 
+const {
+    ContainerBuilder,
+    TextDisplayBuilder,
+    SeparatorBuilder,
+    SeparatorSpacingSize,
+    SectionBuilder,
+    ThumbnailBuilder,
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle,
+    MessageFlags,
+} = require("discord.js");
 const { getData, updateData } = require("./helpers");
 
 const INBOX_LIMIT = 40;
+const SITE_URL = "https://ballidentifier.xyz";
+const MAX_DM_TEXT = 3500; // components v2 messages allow 4000 characters of text in total
+
+// Look of the DM card per notification type
+const DM_STYLE = {
+    vote_reminder: { emoji: "⏰", color: 0xfee75c },
+    vote_thanks: { emoji: "💜", color: 0x00c853 },
+    sync_finished: { emoji: "📦", color: 0xa020f0 },
+    sync_available: { emoji: "🔄", color: 0x3498db },
+    ballsdex_account: { emoji: "🔑", color: 0xa020f0 },
+    update_dex: { emoji: "🗂️", color: 0x6839a6 },
+    update_site: { emoji: "✨", color: 0x7289da },
+};
 
 const TYPES = {
     vote_reminder: {
@@ -116,11 +141,66 @@ function getInbox(userId) {
 // account (50278), or has DMs closed (50007). Those are expected, so they're remembered, not logged as errors.
 const DM_BLOCKED_CODES = new Set([50007, 50278]);
 
-/** Sends a DM; remembers whether the user can be reached so the website can explain how to fix it. */
-async function sendDm(userId, text) {
+/** Website link of a notification ("#/ballsdex" -> https://ballidentifier.xyz/ballsdex). */
+function siteUrl(link) {
+    if (!link) return null;
+    if (/^https?:\/\//.test(link)) return link;
+    const path = link.startsWith("#/") ? link.slice(1) : link.startsWith("/") ? link : `/${link}`;
+    return `${SITE_URL}${path}`;
+}
+
+const clip = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+
+/**
+ * A DM as a components v2 card: colored container, title, text, optional sections, link buttons
+ * and a small footer pointing to the notification settings.
+ * sections: [{ title, lines[], thumbnail? }]   buttons: [{ label, url, emoji? }]
+ */
+function buildDmCard({ type, title, text = "", sections = [], buttons = [] }) {
+    const style = DM_STYLE[type] || { emoji: "🔔", color: 0x6839a6 };
+    const container = new ContainerBuilder().setAccentColor(style.color);
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(clip(`## ${style.emoji} ${title}${text ? `\n${text}` : ""}`, 1500)));
+
+    let budget = MAX_DM_TEXT - 1500;
+    for (const section of sections) {
+        if (budget <= 0) break;
+        const content = clip(`### ${section.title}\n${section.lines.map((line) => `- ${line}`).join("\n")}`, Math.min(budget, 1500));
+        budget -= content.length;
+        container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+        if (section.thumbnail) {
+            container.addSectionComponents(
+                new SectionBuilder()
+                    .addTextDisplayComponents(new TextDisplayBuilder().setContent(content))
+                    .setThumbnailAccessory(new ThumbnailBuilder().setURL(section.thumbnail)),
+            );
+        } else {
+            container.addTextDisplayComponents(new TextDisplayBuilder().setContent(content));
+        }
+    }
+
+    const links = buttons.filter((button) => button?.url).slice(0, 5);
+    if (links.length) {
+        container.addActionRowComponents(
+            new ActionRowBuilder().addComponents(
+                links.map((button) => {
+                    const built = new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(button.label).setURL(button.url);
+                    if (button.emoji) built.setEmoji(button.emoji);
+                    return built;
+                }),
+            ),
+        );
+    }
+    container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(false));
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# You can change which notifications you get on [ballidentifier.xyz](${SITE_URL}) (bell icon)`));
+
+    return { components: [container], flags: MessageFlags.IsComponentsV2, allowedMentions: { parse: [] } };
+}
+
+/** Sends a DM (text or a ready message payload); remembers whether the user can be reached so the website can explain how to fix it. */
+async function sendDm(userId, message) {
     try {
         const user = await client.users.fetch(userId);
-        await user.send(text);
+        await user.send(message);
         if (getData().users[userId]?.dmBlockedAt) {
             updateData((data) => {
                 if (data.users[userId]) delete data.users[userId].dmBlockedAt;
@@ -152,10 +232,11 @@ function markRead(userId, ids) {
 }
 
 /**
- * Send one notification. `dmText` defaults to "**title**\nbody".
+ * Send one notification. The DM is a card with the title and `dmText` (default: body),
+ * a button to `link` on the website (label: `linkLabel`) and any extra `buttons` ([{ label, url }]).
  * @returns {Promise<{stored: boolean, dm: boolean}>}
  */
-async function notify(userId, type, { title, body = "", link = null, dmText } = {}) {
+async function notify(userId, type, { title, body = "", link = null, linkLabel = "Open on the website", dmText, buttons = [] } = {}) {
     userId = String(userId);
     const settings = getSettings(userId)[type];
     if (!settings?.enabled) return { stored: false, dm: false };
@@ -172,7 +253,8 @@ async function notify(userId, type, { title, body = "", link = null, dmText } = 
 
     let dm = false;
     if (settings.dm && client) {
-        dm = await sendDm(userId, dmText || `**${title}**${body ? `\n${body}` : ""}`);
+        const url = siteUrl(link);
+        dm = await sendDm(userId, buildDmCard({ type, title, text: dmText || body, buttons: [...buttons, url ? { label: linkLabel, url } : null] }));
     }
     return { stored, dm };
 }
@@ -217,7 +299,7 @@ function mergeChangelogEntries(entries) {
 async function notifyChangelog(entries) {
     entries = mergeChangelogEntries(entries);
     if (!entries.length) return;
-    const dms = new Map(); // userId -> lines, so each user gets one DM however many entries there are
+    const dms = new Map(); // userId -> { types, sections }, so each user gets one DM however many entries there are
     updateData((data) => {
         for (const entry of entries) {
             const type = entry.type === "dex" ? "update_dex" : "update_site";
@@ -232,16 +314,23 @@ async function notifyChangelog(entries) {
                     user.inbox.length = Math.min(user.inbox.length, INBOX_LIMIT);
                 }
                 if (settings.dm) {
-                    if (!dms.has(userId)) dms.set(userId, []);
-                    dms.get(userId).push(`**${title}**`, ...entry.changes.map((change) => `- ${change}`));
+                    if (!dms.has(userId)) dms.set(userId, { types: new Set(), sections: [] });
+                    const dm = dms.get(userId);
+                    dm.types.add(type);
+                    dm.sections.push({ title, lines: entry.changes, thumbnail: entry.dex ? `${SITE_URL}/assets/icons/${encodeURIComponent(entry.dex)}.png` : null });
                 }
             }
         }
     });
-    for (const [userId, lines] of dms) {
-        let text = lines.join("\n");
-        if (text.length > 1800) text = `${text.slice(0, 1800)}\n…`;
-        if (client) await sendDm(userId, `${text}\n-# Full changelog and settings: https://ballidentifier.xyz`);
+    for (const [userId, { types, sections }] of dms) {
+        const onlyDex = types.size === 1 && types.has("update_dex");
+        const card = buildDmCard({
+            type: onlyDex ? "update_dex" : "update_site",
+            title: "What's new on BallIdentifier",
+            sections,
+            buttons: [{ label: "Full changelog", url: `${SITE_URL}/?whatsnew=1`, emoji: "📰" }],
+        });
+        if (client) await sendDm(userId, card);
         await new Promise((resolve) => setTimeout(resolve, 1000));
     }
 }
