@@ -458,6 +458,8 @@ app.get("/api/users/:userId/ballsdex", apiLimiter, verifySignature, async (req, 
                     summary: stored.summary,
                     ballCount: stored.ballCount,
                     lastSyncedAt: stored.lastSyncedAt,
+                    // saved before top-5 rankings and raws existed: one new sync refreshes it
+                    needsResync: !Array.isArray(stored.nonSpecial),
                 };
             }
         } catch (error) {

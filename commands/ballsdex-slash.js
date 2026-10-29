@@ -352,7 +352,8 @@ module.exports = {
                 )
                 .addTextDisplayComponents(
                     new TextDisplayBuilder().setContent(
-                        `-# Last updated: <t:${syncedAt}:R> | Run **/ballsdex sync** to update your data.`,
+                        `-# Last updated: <t:${syncedAt}:R> | Run **/ballsdex sync** to update your data.` +
+                            (Array.isArray(storedCollection.nonSpecial) ? "" : "\n-# Saved before top 5 rankings existed: sync once to refresh them."),
                     ),
                 );
 
@@ -367,4 +368,4 @@ module.exports = {
             });
         }
     },
-};
+};
