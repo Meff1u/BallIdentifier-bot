@@ -12,6 +12,8 @@ const PAGE_SIZE = 25;
 // Every sync runs from the bot's one IP (20 000 Ballsdex requests a day in total, 25 balls per request).
 // A sync stops when the shared daily quota gets down to this reserve, so the rest of the bot keeps working.
 const IP_DAY_RESERVE = 2000;
+// A sync stopped by the quota keeps its progress and continues by itself once the quota resets
+const PAUSED_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const PAGE_REQUEST_DELAY = 1000; // ~60 pages/min: the per-key limit, and kind to the shared per-IP limit
 const SYNC_COOLDOWN_MS = 24 * 60 * 60 * 1000; // after a successful sync
 const SYNC_RETRY_COOLDOWN_MS = 5 * 60 * 1000; // after a failed or cancelled sync
@@ -161,12 +163,30 @@ function remainingToday(snapshot, name) {
 function assertQuota(apiKey) {
     const ipLeft = remainingToday(ipRateLimits, "ip_day");
     if (ipLeft !== null && ipLeft <= IP_DAY_RESERVE) {
-        throw syncError("The sync stopped: BallIdentifier has used most of today's Ballsdex API requests. Try again tomorrow.", "QUOTA");
+        const error = syncError("BallIdentifier has used most of today's Ballsdex API requests.", "QUOTA");
+        error.resumeAt = resetTime(ipRateLimits, "ip_day");
+        throw error;
     }
-    const keyLeft = remainingToday(keyRateLimits.get(hashKey(apiKey)), "day");
+    const keySnapshot = keyRateLimits.get(hashKey(apiKey));
+    const keyLeft = remainingToday(keySnapshot, "day");
     if (keyLeft !== null && keyLeft <= 0) {
-        throw syncError("The sync stopped: your Ballsdex API key has no requests left today. Try again tomorrow.", "QUOTA");
+        const error = syncError("Your Ballsdex API key has no requests left today.", "QUOTA");
+        error.resumeAt = resetTime(keySnapshot, "day");
+        throw error;
     }
+}
+
+/** When a limit resets (ms timestamp, with a minute to spare); an hour from now when unknown. */
+function resetTime(snapshot, name) {
+    const limit = viewRateLimits(snapshot)?.limits.find((entry) => entry.name === name);
+    return Date.now() + ((limit?.resetInSec ?? 3600) + 60) * 1000;
+}
+
+/** After a 429: the latest reset among the limits that ran out. */
+function exhaustedResetTime(apiKey) {
+    const limits = [viewRateLimits(ipRateLimits), viewRateLimits(keyRateLimits.get(hashKey(apiKey)))].flatMap((view) => view?.limits || []);
+    const waits = limits.filter((limit) => limit.remaining <= 0 && limit.resetInSec).map((limit) => limit.resetInSec);
+    return Date.now() + ((waits.length ? Math.max(...waits) : 3600) + 60) * 1000;
 }
 
 function viewRateLimits(snapshot) {
@@ -790,13 +810,17 @@ function getSyncState(userId) {
         cancelRequested: Boolean(state?.inProgress && state.cancelRequested),
         retryAfterSec: state?.inProgress ? null : Math.ceil(cooldownLeftMs(userId) / 1000),
         nextSyncAt: record.nextSyncAt || null,
+        // stopped by today's quota: progress kept, continues by itself at resumeAt
+        paused: Boolean(record.pausedUntil && !state?.inProgress),
+        resumeAt: record.pausedUntil && !state?.inProgress ? record.pausedUntil : null,
+        pausedFetched: record.pausedUntil ? record.pausedFetched ?? null : null,
         busy,
         waiting: busy && slotWaiters.has(userId),
     };
 }
 
 function finishSync(userId, state, outcome) {
-    const cooldown = userId === ADMIN_ID ? 0 : outcome === "success" ? SYNC_COOLDOWN_MS : SYNC_RETRY_COOLDOWN_MS;
+    const cooldown = userId === ADMIN_ID || outcome === "paused" ? 0 : outcome === "success" ? SYNC_COOLDOWN_MS : SYNC_RETRY_COOLDOWN_MS;
     const nextSyncAt = new Date(Date.now() + cooldown).toISOString();
     updateData((data) => {
         data.users[userId] ??= {};
@@ -806,6 +830,7 @@ function finishSync(userId, state, outcome) {
             nextSyncAt,
             // remind only after a real sync; a quick retry window needs no notification
             notifyAvailableAt: outcome === "success" && userId !== ADMIN_ID ? nextSyncAt : null,
+            ...(outcome === "paused" ? { pausedUntil: new Date(state.resumeAt).toISOString(), pausedFetched: state.progress?.fetched ?? null } : {}),
         };
     });
     state.inProgress = false;
@@ -874,11 +899,18 @@ function runSync(userId, encryptedKey, { resume = null } = {}) {
 
     void (async () => {
         let outcome = "failed";
+        let apiKey = null;
         try {
-            if (!resume) await createSyncJob(userId);
+            const { jobs } = await syncStorage();
+            // Starting again after a pause continues the saved progress instead of starting over
+            const paused = resume ? null : await jobs.findOne({ _id: userId, pausedUntil: { $exists: true } });
+            if (!resume && !paused) await createSyncJob(userId);
+            else await jobs.updateOne({ _id: userId }, { $unset: { pausedUntil: "" } });
+            if (paused || resume) state.resumed = true;
+            apiKey = decryptApiKey(encryptedKey);
             const result = await syncCollection(
                 userId,
-                decryptApiKey(encryptedKey),
+                apiKey,
                 (progress) => {
                     state.progress = progress;
                 },
@@ -898,6 +930,20 @@ function runSync(userId, encryptedKey, { resume = null } = {}) {
             if (error.code === "CANCELLED") {
                 outcome = "cancelled";
                 state.cancelled = true;
+            } else if (error.code === "QUOTA" || error.status === 429) {
+                // Out of today's requests: keep the progress and continue when the quota resets
+                outcome = "paused";
+                state.resumeAt = error.resumeAt || (apiKey ? exhaustedResetTime(apiKey) : Date.now() + 3600 * 1000);
+                const hours = Math.max(1, Math.round((state.resumeAt - Date.now()) / 3600000));
+                const fetched = (state.progress?.fetched || 0).toLocaleString("en-US");
+                getNotifier()
+                    .notify(userId, "sync_finished", {
+                        title: "Ballsdex sync paused",
+                        body: `${error.message} ${fetched} balls are saved; the sync continues by itself in about ${hours} h.`,
+                        link: "#/ballsdex",
+                        dmText: `Your Ballsdex sync paused after ${fetched} balls: ${error.message} It continues by itself in about ${hours} h, nothing is lost.`,
+                    })
+                    .catch(() => {});
             } else {
                 console.error("[BALLSDEX] Failed to sync collection:", error);
                 state.error = error.status === 429 ? "The Ballsdex API rate limit was reached. Try again later." : error.message;
@@ -911,7 +957,13 @@ function runSync(userId, encryptedKey, { resume = null } = {}) {
                     .catch(() => {});
             }
         } finally {
-            await deleteSyncJob(userId).catch((error) => console.error("[BALLSDEX] Couldn't clear sync checkpoint:", error.message));
+            if (outcome === "paused") {
+                await syncStorage()
+                    .then(({ jobs }) => jobs.updateOne({ _id: userId }, { $set: { pausedUntil: new Date(state.resumeAt), updatedAt: new Date() } }))
+                    .catch((error) => console.error("[BALLSDEX] Couldn't save the paused sync:", error.message));
+            } else {
+                await deleteSyncJob(userId).catch((error) => console.error("[BALLSDEX] Couldn't clear sync checkpoint:", error.message));
+            }
             finishSync(userId, state, outcome);
             resumeNext();
         }
@@ -932,8 +984,20 @@ function resumeNext() {
     }
 }
 
+function clearPaused(userId) {
+    if (!getSyncRecord(userId).pausedUntil) return;
+    updateData((data) => {
+        const record = data.users[userId]?.ballsdexSync;
+        if (record) {
+            delete record.pausedUntil;
+            delete record.pausedFetched;
+        }
+    });
+}
+
 /**
  * After a restart: continue syncs that were cut off, from their last saved page.
+ * Called every minute too, which picks up paused syncs once their quota has reset.
  * Jobs older than a day, or of users who unlinked, are dropped.
  * @returns {Promise<string[]>} user ids whose sync was resumed or queued
  */
@@ -942,10 +1006,13 @@ async function resumeInterruptedSyncs() {
     const found = await jobs.find({}).sort({ startedAt: 1 }).toArray();
     const resumed = [];
     for (const job of found) {
-        if (syncStates.get(job._id)?.inProgress) continue;
-        const fresh = Date.now() - new Date(job.updatedAt || job.startedAt).getTime() < RESUME_MAX_AGE_MS;
+        if (syncStates.get(job._id)?.inProgress || resumeQueue.some((queued) => queued._id === job._id)) continue;
+        if (job.pausedUntil && new Date(job.pausedUntil).getTime() > Date.now()) continue; // not due yet
+        const maxAge = job.pausedUntil ? PAUSED_MAX_AGE_MS : RESUME_MAX_AGE_MS;
+        const fresh = Date.now() - new Date(job.updatedAt || job.startedAt).getTime() < maxAge;
         if (!fresh || !getSavedApiKey(job._id)) {
             await deleteSyncJob(job._id);
+            clearPaused(job._id);
             continue;
         }
         resumeQueue.push(job);
@@ -962,6 +1029,9 @@ function getSyncOverview() {
         active: activeSync ? { userId: activeSync.userId, resumed: Boolean(activeSync.state.resumed), ...getSyncState(activeSync.userId) } : null,
         waiting: [...slotWaiters],
         resumeQueue: resumeQueue.map((job) => job._id),
+        paused: Object.entries(users)
+            .filter(([, user]) => user.ballsdexSync?.pausedUntil)
+            .map(([userId, user]) => ({ userId, resumeAt: user.ballsdexSync.pausedUntil, fetched: user.ballsdexSync.pausedFetched ?? null })),
         linkedAccounts: Object.values(users).filter((user) => user.ballsdex?.apiKey).length,
         syncedLast24h: Object.values(users).filter((user) => user.ballsdexSync?.lastOutcome === "success" && Date.now() - new Date(user.ballsdexSync.lastFinishedAt).getTime() < 86400000).length,
     };
@@ -977,10 +1047,21 @@ function cancelActiveSync() {
 
 /** Ask the user's running sync to stop after the current page. */
 function cancelSync(userId) {
-    const state = syncStates.get(String(userId));
-    if (!state?.inProgress) return false;
-    state.cancelRequested = true;
-    return true;
+    userId = String(userId);
+    const state = syncStates.get(userId);
+    if (state?.inProgress) {
+        state.cancelRequested = true;
+        return true;
+    }
+    // A paused sync: drop its saved progress
+    if (getSyncRecord(userId).pausedUntil) {
+        const index = resumeQueue.findIndex((job) => job._id === userId);
+        if (index >= 0) resumeQueue.splice(index, 1);
+        deleteSyncJob(userId).catch(() => {});
+        clearPaused(userId);
+        return true;
+    }
+    return false;
 }
 
 /** Sends due "you can sync again" reminders. Called every minute from clientReady. */

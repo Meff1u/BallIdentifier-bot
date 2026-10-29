@@ -189,6 +189,14 @@ module.exports = {
             .catch((error) => console.error("[BALLSDEX] Couldn't resume interrupted syncs:", error.message));
 
         setInterval(() => sendDueSyncReminders().catch((error) => console.error("[BALLSDEX] Reminder loop:", error.message)), REMINDER_INTERVAL);
+        // Paused syncs (out of today's Ballsdex quota) continue once it resets
+        setInterval(
+            () =>
+                resumeInterruptedSyncs()
+                    .then((ids) => ids.length && client.log("BALLSDEX", `Continued ${ids.length} paused sync(s): ${ids.join(", ")}`))
+                    .catch((error) => console.error("[BALLSDEX] Couldn't continue paused syncs:", error.message)),
+            REMINDER_INTERVAL,
+        );
 
         // Set up DBL polling and vote handler
         client.dbl.startPolling(DBL_POLL_INTERVAL);

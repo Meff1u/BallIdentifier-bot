@@ -637,7 +637,7 @@ async function describeUser(userId) {
 
 app.get("/api/users/:userId/admin/overview", apiLimiter, verifySignature, requireOwner, async (req, res) => {
     const sync = getSyncOverview();
-    const ids = [...new Set([sync.active?.userId, ...sync.waiting, ...sync.resumeQueue].filter(Boolean))];
+    const ids = [...new Set([sync.active?.userId, ...sync.waiting, ...sync.resumeQueue, ...sync.paused.map((entry) => entry.userId)].filter(Boolean))];
     const people = Object.fromEntries(await Promise.all(ids.map(async (id) => [id, await describeUser(id)])));
 
     let database = "ok";
