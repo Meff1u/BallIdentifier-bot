@@ -31,6 +31,20 @@ const batchTimers = new Map();
 const threadIds = new Map(); // category -> thread id
 const threadLookups = new Map(); // category -> pending Promise<thread>
 let warnedChannel = false;
+// Last lines of every category, kept in memory for the owner's Moderation page on the website
+const RECENT_LIMIT = 50;
+const recentLogs = new Map(Object.keys(CATEGORIES).map((category) => [category, []]));
+
+function remember(category, text) {
+    const list = recentLogs.get(category);
+    list.unshift({ at: new Date().toISOString(), text: String(text).slice(0, 600) });
+    list.length = Math.min(list.length, RECENT_LIMIT);
+}
+
+/** { category: [{ at, text }] } newest first, for the given categories (all by default). */
+function getRecentLogs(categories = Object.keys(CATEGORIES)) {
+    return Object.fromEntries(categories.filter((category) => recentLogs.has(category)).map((category) => [category, recentLogs.get(category)]));
+}
 
 function getTimestamp() {
     return new Date().toLocaleString("pl-PL", {
@@ -97,6 +111,7 @@ async function getThread(client, category) {
 /** Add a text log line; it's sent with the next batch of its category. */
 function addLog(category, message, client) {
     category = resolveCategory(category);
+    remember(category, message);
     const batch = logBatches.get(category);
     batch.push(`[${getTimestamp()}] ${message}`);
 
@@ -168,6 +183,7 @@ async function logEmbed(category, embed, client) {
 async function logError(title, detail, client) {
     const text = detail instanceof Error ? detail.stack || detail.message : String(detail ?? "");
     console.error(`[ERROR] ${title}${text ? `: ${text.split("\n")[0]}` : ""}`);
+    remember("ERRORS", `${title}${text ? `: ${text.split("\n")[0]}` : ""}`);
     const embed = new EmbedBuilder()
         .setTitle(String(title).slice(0, 256))
         .setDescription(text ? `\`\`\`\n${text.replace(/```/g, "ˋˋˋ").slice(0, 3900)}\n\`\`\`` : null)
@@ -193,6 +209,7 @@ function getBatchSizes() {
 module.exports = {
     CATEGORIES,
     addLog,
+    getRecentLogs,
     logEmbed,
     logError,
     sendBatch,

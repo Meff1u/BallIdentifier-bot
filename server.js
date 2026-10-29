@@ -4,7 +4,9 @@ const crypto = require("crypto");
 
 // Import helpers
 const { getData, updateData } = require("./utils/helpers");
-const { SUPPORTED_BOT_IDS } = require("./utils/constants");
+const { SUPPORTED_BOT_IDS, ADMIN_ID } = require("./utils/constants");
+const { getDatabase } = require("./utils/database");
+const { getRecentLogs } = require("./utils/logger");
 const {
     decryptFromSite,
     linkApiKey,
@@ -16,6 +18,8 @@ const {
     startSync,
     cancelSync,
     computeRaws,
+    getSyncOverview,
+    cancelActiveSync,
 } = require("./utils/ballsdex");
 const notifications = require("./utils/notifications");
 const collectorStore = require("./utils/collector-store");
@@ -613,6 +617,78 @@ app.post("/api/users/:userId/collectors", apiLimiter, verifySignature, async (re
         if (error.status) return res.status(error.status).json({ error: error.message, code: error.code });
         console.error("[API] Collectors update failed:", error.message);
         res.status(503).json({ error: "Collector storage is unavailable right now. Try again later." });
+    }
+});
+
+// ---------------------------------------------------------------------------
+// Owner moderation (website: profile menu -> Moderation). Only ADMIN_ID, checked here and on the website.
+// ---------------------------------------------------------------------------
+
+const requireOwner = (req, res, next) => (req.params.userId === ADMIN_ID ? next() : res.status(403).json({ error: "Owner only" }));
+
+async function describeUser(userId) {
+    try {
+        const user = await client.users.fetch(userId);
+        return { id: userId, name: user.globalName || user.username, username: user.username, avatarUrl: user.displayAvatarURL({ extension: "png", size: 64 }) };
+    } catch {
+        return { id: userId, name: null, username: null, avatarUrl: null };
+    }
+}
+
+app.get("/api/users/:userId/admin/overview", apiLimiter, verifySignature, requireOwner, async (req, res) => {
+    const sync = getSyncOverview();
+    const ids = [...new Set([sync.active?.userId, ...sync.waiting, ...sync.resumeQueue].filter(Boolean))];
+    const people = Object.fromEntries(await Promise.all(ids.map(async (id) => [id, await describeUser(id)])));
+
+    let database = "ok";
+    try {
+        await (await getDatabase()).command({ ping: 1 });
+    } catch {
+        database = "unavailable";
+    }
+
+    res.status(200).json({
+        sync,
+        people,
+        bot: {
+            uptimeMs: client.uptime,
+            pingMs: client.ws.ping,
+            guilds: client.guilds.cache.size,
+            memoryMb: Math.round(process.memoryUsage().rss / 1048576),
+            node: process.version,
+            database,
+            upvoters: client.upvotes?.upvotes?.length ?? 0,
+            lastDataRefresh: client.lastDataRefresh || null,
+            dexes: Object.fromEntries(Object.entries(client.rarities || {}).map(([key, data]) => [key, Object.keys(data || {}).length])),
+        },
+        logs: getRecentLogs(["ERRORS", "BALLSDEX", "COLLECTORS", "API", "VOTES", "SYSTEM"]),
+    });
+});
+
+// Stop whichever sync is running (the user is told it was the owner)
+app.post("/api/users/:userId/admin/sync/cancel", apiLimiter, verifySignature, requireOwner, (req, res) => {
+    const target = cancelActiveSync();
+    if (!target) return res.status(409).json({ error: "No sync is running." });
+    client?.log?.("BALLSDEX", `Owner cancelled the running sync of ${target}`);
+    notifications
+        .notify(target, "sync_finished", {
+            title: "Ballsdex sync cancelled",
+            body: "Your sync was stopped by the BallIdentifier owner. You can start a new one in 5 minutes.",
+            link: "#/ballsdex",
+        })
+        .catch(() => {});
+    res.status(200).json({ success: true, userId: target });
+});
+
+// Reload dex data (arts, hashes, details) now instead of waiting for the hourly refresh
+app.post("/api/users/:userId/admin/refresh-data", apiLimiter, verifySignature, requireOwner, async (req, res) => {
+    try {
+        await client.fetchHashes();
+        client?.logGeneral?.("Dex data refreshed from the website (owner)");
+        res.status(200).json({ success: true, lastDataRefresh: client.lastDataRefresh || null });
+    } catch (error) {
+        client?.logError?.("Manual dex data refresh failed", error);
+        res.status(502).json({ error: "Couldn't refresh the dex data. Check the Errors log." });
     }
 });
 

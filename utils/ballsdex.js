@@ -907,6 +907,26 @@ async function resumeInterruptedSyncs() {
     return resumed;
 }
 
+/** Owner view: the running sync, who's waiting for the slot, and interrupted syncs queued to resume. */
+function getSyncOverview() {
+    const users = getData().users;
+    return {
+        active: activeSync ? { userId: activeSync.userId, resumed: Boolean(activeSync.state.resumed), ...getSyncState(activeSync.userId) } : null,
+        waiting: [...slotWaiters],
+        resumeQueue: resumeQueue.map((job) => job._id),
+        linkedAccounts: Object.values(users).filter((user) => user.ballsdex?.apiKey).length,
+        syncedLast24h: Object.values(users).filter((user) => user.ballsdexSync?.lastOutcome === "success" && Date.now() - new Date(user.ballsdexSync.lastFinishedAt).getTime() < 86400000).length,
+    };
+}
+
+/** Owner: stop whichever sync is running. Returns the user id, or null when nothing runs. */
+function cancelActiveSync() {
+    if (!activeSync) return null;
+    const { userId } = activeSync;
+    cancelSync(userId);
+    return userId;
+}
+
 /** Ask the user's running sync to stop after the current page. */
 function cancelSync(userId) {
     const state = syncStates.get(String(userId));
@@ -948,6 +968,8 @@ module.exports = {
     linkApiKey,
     unlinkAccount,
     getSyncState,
+    getSyncOverview,
+    cancelActiveSync,
     getRateLimits,
     startSync,
     ballsdexRequest,

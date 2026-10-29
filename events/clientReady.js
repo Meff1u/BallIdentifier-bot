@@ -68,6 +68,7 @@ module.exports = {
             
             await Promise.all(fetchPromises);
             client.hashes = hashes;
+            client.lastDataRefresh = new Date().toISOString();
             client.rarities = rarities;
             collectorStore.applyOverlay(); // self-added collectors from the website
         };
