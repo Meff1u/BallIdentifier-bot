@@ -145,12 +145,14 @@ async function getAllMyBalls(apiKey, onPage, shouldStop = () => false) {
     return balls;
 }
 
-// Ball/special totals as Ballsdex itself counts them. Null when the profile is private.
+// Ball total as Ballsdex itself counts it. Null when the profile is private.
+// special_count is NOT the number of special balls (it's far lower, e.g. 44 vs 2,825 owned),
+// so specials are always counted from the synced balls.
 async function getPlayerTotals(apiKey, discordUserId) {
     try {
         const player = await ballsdexRequest(apiKey, `/players/${discordUserId}`);
         if (!Number.isFinite(player?.ball_count)) return null;
-        return { ballCount: player.ball_count, specialCount: Number.isFinite(player.special_count) ? player.special_count : null };
+        return { ballCount: player.ball_count };
     } catch (error) {
         if (error.status === 404 || error.status === 403) return null;
         throw error;
@@ -267,7 +269,8 @@ function buildCollectionSummary(profile, balls, totals = null) {
         listedBalls: balls.length,
         uniqueBalls: ballCounts.size,
         duplicateCount,
-        specialCount: totals?.specialCount ?? specialCount,
+        specialCount,
+        specialKinds: specialCounts.size,
         selfCaughtCount,
         favoriteCount,
         frameCount,
@@ -422,7 +425,14 @@ async function syncCollection(discordUserId, apiKey, onProgress, shouldStop) {
 
 async function getStoredCollection(discordUserId) {
     const database = await getDatabase();
-    return database.collection("ballsdexCollections").findOne({ discordUserId });
+    const stored = await database.collection("ballsdexCollections").findOne({ discordUserId });
+    // Summaries saved before specialKinds existed took specialCount from the API's special_count,
+    // which isn't the number of special balls; recount from the saved specials instead.
+    if (stored?.summary && stored.summary.specialKinds === undefined) {
+        const specialCount = await database.collection("ballsdexSpecials").countDocuments({ user_id: String(discordUserId) });
+        stored.summary = { ...stored.summary, specialCount };
+    }
+    return stored;
 }
 
 async function deleteStoredCollection(discordUserId) {
@@ -732,4 +742,4 @@ module.exports = {
     removeApiKey,
     saveApiKey,
     syncCollection,
-};
+};

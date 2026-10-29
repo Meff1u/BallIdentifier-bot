@@ -298,7 +298,8 @@ module.exports = {
                         `- Total balls: \`${summary.totalBalls.toLocaleString("en-US")}\`\n` +
                         `- Unique balls: \`${summary.uniqueBalls.toLocaleString("en-US")}\`\n` +
                         `- Duplicates: \`${summary.duplicateCount.toLocaleString("en-US")}\`\n` +
-                        `- Special variants: \`${summary.specialCount.toLocaleString("en-US")}\`\n` +
+                        `- Specials: \`${summary.specialCount.toLocaleString("en-US")}\`` +
+                            (Number.isFinite(summary.specialKinds) && summary.specialKinds > 0 ? ` (${summary.specialKinds} different)\n` : "\n") +
                         `- Self-caught: \`${summary.selfCaughtCount.toLocaleString("en-US")}\`\n` +
                         `- Favorites: \`${summary.favoriteCount.toLocaleString("en-US")}\`\n` +
                         `- Frames: \`${summary.frameCount.toLocaleString("en-US")}\``,
