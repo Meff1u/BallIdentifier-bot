@@ -169,6 +169,7 @@ module.exports = {
                 const messages = {
                     NOT_LINKED: "Link your Ballsdex account first with `/ballsdex link`.",
                     RECONNECT: "Ballsdex replaced API keys with Sign in with Ballsdex. Reconnect your account with `/ballsdex link` first.",
+                    DISABLED: "Syncing is temporarily disabled by the administrators. Try again later.",
                     IN_PROGRESS: "Your Ballsdex collection is already being synchronized.",
                     BUSY: "Someone else's collection is being synchronized right now (only one sync can run at a time). I'll notify you as soon as you can start yours.",
                     COOLDOWN: `You can sync again in ${wait}. Syncs are limited to one every 24 hours.`,

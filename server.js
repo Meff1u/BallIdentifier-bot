@@ -16,6 +16,7 @@ const {
     getSyncState,
     getRateLimits,
     getSharedRateLimits,
+    setSyncSwitches,
     startSync,
     cancelSync,
     computeRaws,
@@ -546,6 +547,7 @@ app.post("/api/users/:userId/ballsdex/sync", apiLimiter, verifySignature, (req, 
         const errors = {
             NOT_LINKED: [400, "Link your Ballsdex account first."],
             RECONNECT: [400, "Sign in with Ballsdex again first: Ballsdex replaced API keys with a new sign-in."],
+            DISABLED: [403, "Syncing is temporarily disabled by the administrators. Try again later."],
             IN_PROGRESS: [409, "Your collection is already being synchronized."],
             BUSY: [409, "Another collection sync is running right now. You'll get a notification when you can start yours."],
             COOLDOWN: [429, `You can sync again in ${hours ? `${hours} h ` : ""}${minutes} min.`],
@@ -659,6 +661,17 @@ async function describeUser(userId) {
         return { id: userId, name: null, username: null, avatarUrl: null };
     }
 }
+
+// Owner: turn syncing (and Fast Sync) off or on for everyone else
+app.post("/api/users/:userId/admin/sync/switches", apiLimiter, verifySignature, requireOwner, (req, res) => {
+    const { syncDisabled, fastSyncDisabled } = req.body || {};
+    if ((syncDisabled !== undefined && typeof syncDisabled !== "boolean") || (fastSyncDisabled !== undefined && typeof fastSyncDisabled !== "boolean")) {
+        return res.status(400).json({ error: "Invalid switches" });
+    }
+    const switches = setSyncSwitches({ syncDisabled, fastSyncDisabled });
+    client?.log?.("BALLSDEX", `🛡️ Owner: sync ${switches.syncDisabled ? "OFF" : "on"}, Fast Sync ${switches.fastSyncDisabled ? "OFF" : "on"}`);
+    res.status(200).json({ success: true, switches });
+});
 
 app.get("/api/users/:userId/admin/overview", apiLimiter, verifySignature, requireOwner, async (req, res) => {
     const sync = getSyncOverview();

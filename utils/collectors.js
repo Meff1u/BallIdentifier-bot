@@ -8,10 +8,13 @@ const {
     SeparatorBuilder,
     SeparatorSpacingSize,
     SectionBuilder,
+    ThumbnailBuilder,
 } = require("discord.js");
 const { randomUUID } = require("crypto");
 
-const { SUPPORTED_BOT_IDS, BOT_NAMES, BOT_DATA_KEYS, COLORS } = require("./constants");
+const { SUPPORTED_BOT_IDS, BOT_NAMES, BOT_DATA_KEYS, COLORS, ASSETS_BASE_URL } = require("./constants");
+
+const DEX_OF_KEY = Object.fromEntries(Object.entries(BOT_DATA_KEYS).map(([botId, key]) => [key, BOT_NAMES[botId]]));
 
 const PAGE_SIZE = 25;
 const COLLECTOR_SESSION_TTL = 15 * 60 * 1000;
@@ -129,15 +132,25 @@ function buildCollectorsView(client, dataKey, selectedBallName, page = 0, sessio
         ? collectors.map((c) => `- <@${c}>\n > ${c}`).join("\n")
         : "No collectors yet.";
 
-    const container = new ContainerBuilder()
-        .setAccentColor(COLORS.PRIMARY)
-        .addSectionComponents(
+    // A section needs something next to the text (newer discord.js rejects it otherwise): the ball's art
+    const dex = DEX_OF_KEY[dataKey];
+    const header = [
+        new TextDisplayBuilder().setContent(`**Collectors of ${selectedBall.name}**`),
+        new TextDisplayBuilder().setContent(collectorsList.slice(0, 3800)),
+    ];
+    const container = new ContainerBuilder().setAccentColor(COLORS.PRIMARY);
+    if (dex) {
+        container.addSectionComponents(
             new SectionBuilder()
-                .addTextDisplayComponents(
-                    new TextDisplayBuilder().setContent(`**Collectors of ${selectedBall.name}**`),
-                    new TextDisplayBuilder().setContent(collectorsList),
+                .addTextDisplayComponents(...header)
+                .setThumbnailAccessory(
+                    new ThumbnailBuilder().setURL(`${ASSETS_BASE_URL}/dexes/${encodeURIComponent(dex)}/compressed/${encodeURIComponent(selectedBall.name)}.webp`).setDescription(selectedBall.name),
                 ),
-        )
+        );
+    } else {
+        container.addTextDisplayComponents(...header);
+    }
+    container
         .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
 
     const selectMenu = new StringSelectMenuBuilder()
@@ -187,7 +200,7 @@ function buildCollectorsView(client, dataKey, selectedBallName, page = 0, sessio
 
     container.addTextDisplayComponents(
         new TextDisplayBuilder().setContent(
-            "-# Collect one of these? Add yourself on https://ballidentifier.xyz/#/collectors",
+            "-# Collect one of these? Add yourself on https://ballidentifier.xyz/collectors",
         ),
     );
 

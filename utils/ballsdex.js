@@ -1119,6 +1119,28 @@ function getNotifier() {
     return require("./notifications");
 }
 
+/* ----- Owner switches (website Moderation): syncing on/off for everyone but the owner ----- */
+
+function getSyncSwitches() {
+    const settings = getData().settings || {};
+    return { syncDisabled: Boolean(settings.syncDisabled), fastSyncDisabled: Boolean(settings.fastSyncDisabled) };
+}
+
+function setSyncSwitches({ syncDisabled, fastSyncDisabled } = {}) {
+    updateData((data) => {
+        data.settings ??= {};
+        if (typeof syncDisabled === "boolean") data.settings.syncDisabled = syncDisabled;
+        if (typeof fastSyncDisabled === "boolean") data.settings.fastSyncDisabled = fastSyncDisabled;
+    });
+    const switches = getSyncSwitches();
+    // Turned back on: paused and interrupted syncs continue, and whoever waited can sync again
+    if (!switches.syncDisabled) resumeInterruptedSyncs().catch(() => {});
+    return switches;
+}
+
+const syncBlocked = (userId) => String(userId) !== ADMIN_ID && getSyncSwitches().syncDisabled;
+const fastSyncBlocked = (userId) => String(userId) !== ADMIN_ID && getSyncSwitches().fastSyncDisabled;
+
 function getSyncRecord(userId) {
     return getData().users[userId]?.ballsdexSync || {};
 }
@@ -1153,6 +1175,9 @@ function getSyncState(userId) {
         waiting: busy && slotWaiters.has(userId),
         source: state?.source || "api",
         fastRetryAfterSec: Math.ceil(fastCooldownLeftMs(userId) / 1000),
+        // turned off by the owner in Moderation
+        disabled: syncBlocked(userId),
+        fastDisabled: fastSyncBlocked(userId),
     };
 }
 
@@ -1183,7 +1208,7 @@ function finishSync(userId, state, outcome) {
     const waiters = [...slotWaiters].filter((id) => id !== userId);
     slotWaiters.clear();
     for (const waiterId of waiters) {
-        if (!getSavedApiKey(waiterId) || cooldownLeftMs(waiterId) > 0) continue;
+        if (!getSavedApiKey(waiterId) || cooldownLeftMs(waiterId) > 0 || syncBlocked(waiterId)) continue;
         getNotifier()
             .notify(waiterId, "sync_available", {
                 title: "You can sync your Ballsdex collection now",
@@ -1198,11 +1223,12 @@ function finishSync(userId, state, outcome) {
 
 /**
  * Start a background collection sync.
- * @returns {{started: true} | {started: false, reason: "NOT_LINKED"|"RECONNECT"|"IN_PROGRESS"|"BUSY"|"COOLDOWN", retryAfterSec?: number}}
+ * @returns {{started: true} | {started: false, reason: "NOT_LINKED"|"RECONNECT"|"DISABLED"|"IN_PROGRESS"|"BUSY"|"COOLDOWN", retryAfterSec?: number}}
  */
 function startSync(userId) {
     userId = String(userId);
     if (!getGrant(userId)) return { started: false, reason: needsReconnect(userId) ? "RECONNECT" : "NOT_LINKED" };
+    if (syncBlocked(userId)) return { started: false, reason: "DISABLED" };
 
     if (syncStates.get(userId)?.inProgress) return { started: false, reason: "IN_PROGRESS" };
 
@@ -1324,6 +1350,7 @@ function resumeNext() {
             deleteSyncJob(job._id).catch(() => {});
             continue;
         }
+        if (syncBlocked(job._id)) continue; // stays saved: picked up again once syncing is back on
         runSync(job._id, { resume: job });
     }
 }
@@ -1359,6 +1386,7 @@ async function resumeInterruptedSyncs() {
             clearPaused(job._id);
             continue;
         }
+        if (syncBlocked(job._id)) continue; // syncing is off: keep the progress for later
         resumeQueue.push(job);
         resumed.push(job._id);
     }
@@ -1377,6 +1405,7 @@ function getSyncOverview() {
             .filter(([, user]) => user.ballsdexSync?.pausedUntil)
             .map(([userId, user]) => ({ userId, resumeAt: user.ballsdexSync.pausedUntil, fetched: user.ballsdexSync.pausedFetched ?? null })),
         linkedAccounts: Object.values(users).filter((user) => user.ballsdex?.oauth?.refresh).length,
+        switches: getSyncSwitches(),
         syncedLast24h: Object.values(users).filter((user) => user.ballsdexSync?.lastOutcome === "success" && Date.now() - new Date(user.ballsdexSync.lastFinishedAt).getTime() < 86400000).length,
     };
 }
@@ -1410,6 +1439,7 @@ function cancelSync(userId) {
 
 /** Sends due "you can sync again" reminders. Called every minute from clientReady. */
 async function sendDueSyncReminders() {
+    if (getSyncSwitches().syncDisabled) return; // "you can sync again" would be wrong now; sent once syncing is back on
     const now = Date.now();
     const due = Object.entries(getData().users)
         .filter(([, user]) => user.ballsdexSync?.notifyAvailableAt && new Date(user.ballsdexSync.notifyAvailableAt).getTime() <= now)
@@ -1623,6 +1653,7 @@ function startFastSync(userId, { url } = {}) {
             ? fastError("Sign in with Ballsdex again first: Fast Sync checks the file against your account.", 400, "RECONNECT")
             : fastError("Link your Ballsdex account first: Fast Sync checks the file against it.", 400, "NOT_LINKED");
     }
+    if (fastSyncBlocked(userId)) throw fastError("Fast Sync is temporarily disabled by the administrators.", 403, "DISABLED");
     if (syncStates.get(userId)?.inProgress) throw fastError("Your collection is already being synchronized.", 409, "IN_PROGRESS");
     const left = fastCooldownLeftMs(userId);
     if (left > 0) throw Object.assign(fastError(`You can use Fast Sync again in ${Math.ceil(left / 60000)} min.`, 429, "COOLDOWN"), { retryAfterSec: Math.ceil(left / 1000) });
@@ -1782,6 +1813,8 @@ module.exports = {
     cancelActiveSync,
     getRateLimits,
     getSharedRateLimits,
+    getSyncSwitches,
+    setSyncSwitches,
     startSync,
     ballsdexRequest,
     INTERACTIVE,
