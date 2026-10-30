@@ -139,6 +139,13 @@ function parseCatch(message) {
     return { userId, ball, spawnId };
 }
 
+const noted = new Set();
+function noteOnce(key, log) {
+    if (noted.has(key)) return;
+    noted.add(key);
+    log();
+}
+
 /** Catch stats activity in the Catches log channel (helps checking the catch phrases). */
 function trace(message, text) {
     client?.log?.("CATCHES", `⏱️ [${message.guild?.name || message.guildId}] ${text}`);
@@ -166,16 +173,19 @@ async function isSpawnOf(message, spawnId) {
 async function observe(message) {
     try {
         if (!message.guildId || !rulesFor(message.author?.id)) return;
-        if (!guildConfig(message.guildId).enabled) return;
-        if (getSpawnMessageData(message).isSpawn) return rememberSpawn(message);
+        const enabled = guildConfig(message.guildId).enabled;
+        if (getSpawnMessageData(message).isSpawn) return enabled ? rememberSpawn(message) : undefined;
 
         const found = parseCatch(message);
-        if (!found || handled.has(message.id)) return;
+        if (!found) return;
+        // Once per server and run: says why nothing happens there (helps when it "doesn't work")
+        if (!enabled) return noteOnce(`off:${message.guildId}`, () => trace(message, "A catch was seen, but Catch stats are off on this server (no data saved)"));
+        if (handled.has(message.id)) return;
         handled.add(message.id);
         if (handled.size > 5000) handled.delete(handled.values().next().value);
         if (found.skip) return trace(message, `Catch not counted: ${found.skip}`);
 
-        if (!userSettings(found.userId).tracking) return;
+        if (!userSettings(found.userId).tracking) return noteOnce(`user:${found.userId}`, () => trace(message, `Catch of <@${found.userId}> not counted: they turned tracking off`));
         if (!(await isSpawnOf(message, found.spawnId))) return trace(message, `Catch of ${found.ball} not counted: the message it answers isn't a ${BOT_NAMES[message.author.id] || "dex"} spawn`);
 
         // Both times come from Discord's message IDs: spawn sent -> catch answered
@@ -411,7 +421,11 @@ function guildConfigs(guildIds) {
 }
 
 module.exports = {
-    setClient: (discordClient) => (client = discordClient),
+    setClient: (discordClient) => {
+        client = discordClient;
+        const on = Object.entries(getData().guilds || {}).filter(([, guild]) => guild?.catchStats?.enabled);
+        client?.log?.("CATCHES", `⏱️ Catch stats ready: on in ${on.length} server(s)${on.length ? ` (${on.map(([id]) => client.guilds?.cache.get(id)?.name || id).join(", ")})` : ""}`);
+    },
     observe,
     record,
     parseCatch,

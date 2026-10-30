@@ -710,7 +710,7 @@ app.get("/api/users/:userId/admin/overview", apiLimiter, verifySignature, requir
             lastDataRefresh: client.lastDataRefresh || null,
             dexes: Object.fromEntries(Object.entries(client.rarities || {}).map(([key, data]) => [key, Object.keys(data || {}).length])),
         },
-        logs: getRecentLogs(["ERRORS", "BALLSDEX", "COLLECTORS", "API", "VOTES", "SYSTEM"]),
+        logs: getRecentLogs(["ERRORS", "BALLSDEX", "CATCHES", "COLLECTORS", "API", "VOTES", "SYSTEM"]),
     });
 });
 
