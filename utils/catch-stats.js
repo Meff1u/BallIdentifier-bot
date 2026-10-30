@@ -201,19 +201,16 @@ async function observe(message) {
             if (CATCH_STATS_BOTS.includes(message.author?.id)) noteOnce(`rules:${message.author.id}`, () => trace(message, `No catch rules for ${BOT_NAMES[message.author.id]} (dex list)`));
             return;
         }
-        const enabled = guildConfig(message.guildId).enabled;
-        if (getSpawnMessageData(message).isSpawn) return enabled ? rememberSpawn(message) : undefined;
+        if (!guildConfig(message.guildId).enabled) return;
+        if (getSpawnMessageData(message).isSpawn) return rememberSpawn(message);
 
         const found = parseCatch(message);
-        const empty = !messageText(message).trim();
         if (!found) {
             // An empty answer to a spawn: Ballsdex is still "thinking", its text comes later
-            if (enabled && empty && message.interactionMetadata && spawnIdOf(message) && !handled.has(message.id)) scheduleRecheck(message);
+            if (!messageText(message).trim() && message.interactionMetadata && spawnIdOf(message) && !handled.has(message.id)) scheduleRecheck(message);
             return;
         }
         rechecks.delete(message.id);
-        // Once per server and run: says why nothing happens there (helps when it "doesn't work")
-        if (!enabled) return noteOnce(`off:${message.guildId}`, () => trace(message, "A catch was seen, but Catch stats are off on this server (no data saved)"));
         if (handled.has(message.id)) return;
         handled.add(message.id);
         if (handled.size > 5000) handled.delete(handled.values().next().value);
