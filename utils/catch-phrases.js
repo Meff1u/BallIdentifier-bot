@@ -26,8 +26,6 @@ const DEFAULT = {
 module.exports = {
     // Ballsdex
     "999736048596816014": { ...DEFAULT },
-    // FoodDex
-    "1433922711561699393": { ...DEFAULT },
     // HistoryDex
     "1120942938126553190": { ...DEFAULT },
     // JoJoDex

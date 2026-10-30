@@ -5,7 +5,6 @@
 // Supported bot IDs for identification
 const SUPPORTED_BOT_IDS = [
     "999736048596816014",    // Ballsdex
-    "1433922711561699393",   // FoodDex
     "1120942938126553190",   // HistoryDex
     "1425109627636285511",   // JoJoDex
     "1500173453880197162",   // Empireballs Reboot
@@ -16,7 +15,6 @@ const SUPPORTED_BOT_IDS = [
 // Bot ID to name mapping
 const BOT_NAMES = {
     "999736048596816014": "Ballsdex",
-    "1433922711561699393": "FoodDex",
     "1120942938126553190": "HistoryDex",
     "1425109627636285511": "JoJoDex",
     "1500173453880197162": "Empireballs Reboot",
@@ -27,7 +25,6 @@ const BOT_NAMES = {
 // Bot ID to data key mapping
 const BOT_DATA_KEYS = {
     "999736048596816014": "BD",
-    "1433922711561699393": "FOD",
     "1120942938126553190": "HD",
     "1425109627636285511": "JD",
     "1500173453880197162": "EB",
