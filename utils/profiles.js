@@ -8,13 +8,13 @@
 const { getData, updateData } = require("./helpers");
 const { DEX_KEY_BY_NAME, DEX_NAME_BY_KEY } = require("./constants");
 const collectorStore = require("./collector-store");
-const { isLinked, getStoredCollection } = require("./ballsdex");
+const { isLinked, getStoredCollection, getRecentCatches, getCompletion } = require("./ballsdex");
 const catchStats = require("./catch-stats");
 
 const DEX_TO_KEY = DEX_KEY_BY_NAME;
 const KEY_TO_DEX = DEX_NAME_BY_KEY;
 const LIMITS = { bio: 300, pronouns: 24, showcase: 6, search: 60 };
-const DEFAULTS = { public: false, bio: "", pronouns: "", favoriteDex: null, showcase: [], showBallsdex: false, showCollections: true };
+const DEFAULTS = { public: false, bio: "", pronouns: "", favoriteDex: null, showcase: [], showBallsdex: false, showCollections: true, showLastCatches: true };
 
 let client = null;
 const setClient = (discordClient) => (client = discordClient);
@@ -66,6 +66,7 @@ function validate(input) {
     if ("public" in input) settings.public = input.public === true;
     if ("showBallsdex" in input) settings.showBallsdex = input.showBallsdex === true;
     if ("showCollections" in input) settings.showCollections = input.showCollections === true;
+    if ("showLastCatches" in input) settings.showLastCatches = input.showLastCatches === true;
     if ("bio" in input) settings.bio = cleanText(input.bio, LIMITS.bio);
     if ("pronouns" in input) settings.pronouns = cleanText(input.pronouns, LIMITS.pronouns).replace(/\n/g, " ");
     if ("favoriteDex" in input) {
@@ -115,6 +116,8 @@ async function ballsdexOf(userId) {
     if (!s) return null;
     const dexSize = Object.keys(client?.rarities?.BD || {}).filter((name) => name !== "hashes").length || null;
     const record = (value) => (value ? { ballName: value.ballName, durationMs: value.durationMs } : null);
+    // Official completion (cached; loaded in the background when missing or old)
+    const completion = await getCompletion(userId, { wait: false }).catch(() => null);
     return {
         lastSyncedAt: stored.lastSyncedAt || null,
         source: s.source || "api",
@@ -131,6 +134,7 @@ async function ballsdexOf(userId) {
         mostActiveCatchCount: s.mostActiveCatchCount || 0,
         topCountries: (s.topCountries || []).slice(0, 5),
         topSpecials: (s.topSpecials || []).slice(0, 5),
+        completion: completion ? { percent: completion.percent, owned: completion.ownedCount, total: completion.total } : null,
     };
 }
 
@@ -145,6 +149,8 @@ async function getPublicProfile(userId, { self = false } = {}) {
     const user = getData().users[userId] || {};
     const showcase = settings.showcase.map((item) => findBall(item.dex, item.name)).filter(Boolean);
     const ballsdex = settings.showBallsdex ? await ballsdexOf(userId) : null;
+    // Newest Ballsdex catches (one API request per 15 min at most, only while the profile is viewed)
+    const lastCatches = settings.showLastCatches && isLinked(userId) ? await getRecentCatches(userId).catch(() => null) : null;
     // Catch stats have their own switch: shown to everyone only when public, always to the owner
     const catchSettings = catchStats.userSettings(userId);
     let catches = null;
@@ -166,6 +172,7 @@ async function getPublicProfile(userId, { self = false } = {}) {
         updatedAt: settings.updatedAt || null,
         collections: settings.showCollections ? collectionsOf(userId) : null,
         ballsdex,
+        lastCatches,
         catches,
     };
 }
@@ -182,6 +189,7 @@ function getSettings(userId) {
             showcase: settings.showcase,
             showBallsdex: settings.showBallsdex,
             showCollections: settings.showCollections,
+            showLastCatches: settings.showLastCatches,
         },
         blocked: Boolean(settings.blocked),
         ballsdexLinked: isLinked(userId),

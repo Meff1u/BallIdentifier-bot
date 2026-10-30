@@ -110,6 +110,8 @@ async function getSpecials() {
             credits: special.credits || null,
             startDate: special.start_date || null,
             endDate: special.end_date || null,
+            // How many balls can have it (every ball that existed while the event ran)
+            availableCount: Array.isArray(special.available_balls) ? special.available_balls.length : null,
             official: true,
         });
     }
@@ -139,6 +141,30 @@ async function getSpecials() {
         officialError: official.specials.length ? null : official.error,
         marketWindowDays: official.windowDays,
         marketAllWindowDays: official.allWindowDays,
+    };
+}
+
+/** ball id -> special ids that ball can have, rebuilt when the official list changes */
+let ballIndex = { at: 0, map: new Map() };
+
+/** Specials one Ballsdex ball can have (from available_balls), newest first, with names and emoji. */
+async function specialsForBall(ballId) {
+    const { specials } = await getSpecials();
+    if (ballIndex.at !== official.at) {
+        const map = new Map();
+        for (const special of official.specials) {
+            for (const id of special.available_balls || []) {
+                if (!map.has(id)) map.set(id, []);
+                map.get(id).push(special.id);
+            }
+        }
+        ballIndex = { at: official.at, map };
+    }
+    const ids = new Set(ballIndex.map.get(Number(ballId)) || []);
+    return {
+        ballId: Number(ballId),
+        loaded: official.specials.length > 0,
+        specials: specials.filter((special) => ids.has(special.id)).map((special) => ({ id: special.id, name: special.alias || special.name || `Special #${special.id}`, emoji: special.emoji || null, officialEmoji: special.officialEmoji || null })),
     };
 }
 
@@ -235,4 +261,4 @@ async function updateSpecial(actorId, id, patch) {
     return fields;
 }
 
-module.exports = { getSpecials, getSpecialMarket, updateSpecial, refreshOfficial, EDITABLE };
+module.exports = { getSpecials, getSpecialMarket, specialsForBall, updateSpecial, refreshOfficial, EDITABLE };

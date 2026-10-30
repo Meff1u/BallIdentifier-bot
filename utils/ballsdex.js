@@ -13,7 +13,12 @@ const API_BASE_URL = process.env.BALLSDEX_API_URL || "https://ballsdex.com/api/v
 const OAUTH_URL = process.env.BALLSDEX_OAUTH_URL || "https://ballsdex.com/api/oauth";
 const ACCESS_REFRESH_MARGIN_MS = 2 * 60 * 1000; // refresh an access token this long before it expires
 const ENCRYPTION_ALGORITHM = "aes-256-gcm";
-const PAGE_SIZE = 50; // the most /me/balls, /me/trades and /players/{id}/balls return per page
+const PAGE_SIZE = 50; // items per page on /me/balls, /me/trades, /players/{id}/balls until /me says otherwise
+let collectionPageSize = PAGE_SIZE;
+function notePageSize(profile) {
+    const size = Number(profile?.collection_page_size);
+    if (Number.isInteger(size) && size >= 1 && size <= 100) collectionPageSize = size;
+}
 // Every request from the bot's one IP counts toward a shared per-IP limit (2000 a day and 30 a minute when
 // v2 launched; read from the headers, never hardcoded). A sync stops when the shared daily quota gets down to
 // this share of it, so the rest of the bot keeps working.
@@ -142,6 +147,9 @@ function apiError(status, { detail = null, retryAfterSec = null, cred = null, ty
     } else if (status === 404) {
         code = "NOT_FOUND";
         reason = detail || "Not found on Ballsdex.";
+    } else if (status === 503 && type === "scope_disabled") {
+        code = "UNAVAILABLE";
+        reason = "Ballsdex has temporarily switched off this part of its API.";
     } else if (status >= 500) {
         code = "UNAVAILABLE";
         reason = "The Ballsdex API isn't responding right now.";
@@ -168,8 +176,9 @@ async function readError(response, cred = null) {
     try {
         const body = await response.json();
         detail = typeof (body.detail || body.title) === "string" ? String(body.detail || body.title).slice(0, 200) : null;
-        // problem+json "type" is a stable id, sometimes given as a URL ending in it
-        type = typeof body.type === "string" ? body.type.split("/").pop() : null;
+        // A stable error id: "code", or problem+json "type" (a link to the error reference, e.g. …/errors/#app_not_approved)
+        const id = typeof body.code === "string" ? body.code : typeof body.type === "string" ? body.type : null;
+        type = id ? id.split(/[/#]/).filter(Boolean).pop() || null : null;
     } catch (error) {}
     let retryAfterSec = null;
     if (response.status === 429) {
@@ -355,26 +364,45 @@ function lockedFor(cred, path) {
 }
 
 /** Locks every limit the response shows as used up, until it resets; on a 429 at least for Retry-After. */
-function noteLockouts(cred, response) {
+function noteLockouts(cred, path, response) {
+    // Only real limits count (a policy with a quota); unlimited tiers may report others at 0
+    const policies = parseRateLimitList(response.headers.get("ratelimit-policy"));
     const states = parseRateLimitList(response.headers.get("ratelimit"));
+    const used = [...states].filter(([name, state]) => state.r === 0 && policies.get(name)?.q > 0);
     let locked = false;
-    for (const [name, state] of states) {
-        if (state.r === 0 && state.t > 0) {
-            lockScope(lockScopeOf(cred, name), state.t * 1000 + 250);
+    for (const [name, state] of used) {
+        if (state.t > 0) {
+            lockScope(lockScopeOf(cred, name), Math.min(state.t, policies.get(name).w || state.t) * 1000 + 250);
             locked = true;
         }
     }
     const remaining = response.headers.get("x-ratelimit-remaining");
+    const limit = Number(response.headers.get("x-ratelimit-limit")) || 0;
     const resetAfter = Number(response.headers.get("x-ratelimit-reset-after")) || 0;
-    if (!locked && remaining === "0" && resetAfter > 0) {
-        lockScope(hashKey(cred), resetAfter * 1000 + 250);
-        locked = true;
-    }
+    if (!locked && remaining === "0" && limit > 0 && resetAfter > 0) lockScope(hashKey(cred), resetAfter * 1000 + 250);
     if (response.status !== 429) return;
-    const retryAfterMs = (Number(response.headers.get("retry-after")) || 2) * 1000 + 250;
-    const exhausted = [...states].filter(([, state]) => state.r === 0).map(([name]) => lockScopeOf(cred, name));
-    for (const scope of exhausted.length ? exhausted : [hashKey(cred)]) lockScope(scope, retryAfterMs);
-    console.warn(`[BALLSDEX] 429: ${(exhausted.length ? exhausted : [hashKey(cred)]).join(", ")} locked for ${Math.ceil(retryAfterMs / 1000)} s`);
+
+    const retryAfterSec = Number(response.headers.get("retry-after")) || 2;
+    const scopes = used.length ? [...new Set(used.map(([name]) => lockScopeOf(cred, name)))] : [hashKey(cred)];
+    for (const scope of scopes) lockScope(scope, retryAfterSec * 1000 + 250);
+    // What Ballsdex said, for the logs (once a minute per scope)
+    const key = `429:${scopes.join(",")}`;
+    if (Date.now() - (lastLogged.get(key) || 0) > 60 * 1000) {
+        lastLogged.set(key, Date.now());
+        const headers = ["ratelimit-policy", "ratelimit", "x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset-after"]
+            .map((name) => (response.headers.get(name) ? `${name}: ${response.headers.get(name)}` : null))
+            .filter(Boolean)
+            .join(" | ");
+        log(`⛔ 429 on ${path} (${scopes.join(", ")}), Retry-After ${retryAfterSec} s${headers ? ` — ${headers}` : " — no rate-limit headers"}`);
+    }
+}
+
+// Logs to the bot's Ballsdex log thread (console when the client isn't set yet)
+let logClient = null;
+const lastLogged = new Map();
+function log(message) {
+    if (logClient?.log) logClient.log("BALLSDEX", message);
+    else console.warn(`[BALLSDEX] ${message}`);
 }
 
 // One API call that follows the documented rate-limit headers (https://ballsdex.com/api/docs/):
@@ -391,7 +419,14 @@ async function ballsdexFetch(cred, path, query = {}, { retry = true, maxWaitMs =
         // A used-up or locked limit: wait for it (background work) or give up without asking Ballsdex
         const lockedMs = lockedFor(cred, path);
         if (lockedMs > 0) {
-            if (!retry || lockedMs > maxWaitMs || attempt > retries) throw apiError(429, { retryAfterSec: lockedMs / 1000, cred });
+            if (!retry || lockedMs > maxWaitMs || attempt > retries) {
+                const key = `skip:${hashKey(cred)}`;
+                if (Date.now() - (lastLogged.get(key) || 0) > 60 * 1000) {
+                    lastLogged.set(key, Date.now());
+                    log(`⏸️ Not sent (limit locked for ${Math.ceil(lockedMs / 1000)} s): ${path} for ${hashKey(cred)}`);
+                }
+                throw apiError(429, { retryAfterSec: lockedMs / 1000, cred });
+            }
             await sleep(lockedMs);
         }
         const token = cred.token || (await accessToken(cred.userId, { force: refreshed }));
@@ -403,7 +438,7 @@ async function ballsdexFetch(cred, path, query = {}, { retry = true, maxWaitMs =
             throw apiError(503, { detail: error.name === "TimeoutError" || error.name === "AbortError" ? "timeout" : error.message });
         }
         recordRateLimits(cred, response.headers);
-        noteLockouts(cred, response);
+        noteLockouts(cred, path, response);
 
         // The access token was revoked or expired early: get a new one once, then give up
         if (response.status === 401 && !cred.token && !refreshed) {
@@ -471,7 +506,7 @@ function getItems(response) {
     return response.items || response.results || response.data || [];
 }
 
-// /me/balls returns at most PAGE_SIZE per page; walk next_cursor to the end
+// /me/balls returns at most collectionPageSize per page; walk next_cursor to the end
 class SyncCancelled extends Error {
     constructor() {
         super("Sync cancelled.");
@@ -485,7 +520,7 @@ async function getAllMyBalls(cred, onPage, shouldStop = () => false) {
 
     do {
         if (shouldStop()) throw new SyncCancelled();
-        const { data, waitMs } = await ballsdexFetch(cred, "/me/balls", { limit: PAGE_SIZE, cursor });
+        const { data, waitMs } = await ballsdexFetch(cred, "/me/balls", { limit: collectionPageSize, cursor });
         noteSyncRequest();
         balls.push(...getItems(data));
         cursor = data.next_cursor;
@@ -496,19 +531,34 @@ async function getAllMyBalls(cred, onPage, shouldStop = () => false) {
     return balls;
 }
 
-// Ball total as Ballsdex itself counts it. Null when the profile is private.
+// Ball totals as Ballsdex itself counts them (own account: /me/summary, falls back to /players/{id}).
+// ballCount counts Bronze/Silver/Gold compressed cards at their full value; instanceCount counts every card
+// once, like the /me/balls list (null on older answers). Null when unavailable (e.g. private profile).
 // special_count is NOT the number of special balls (it's far lower, e.g. 44 vs 2,825 owned),
 // so specials are always counted from the synced balls.
 async function getPlayerTotals(cred, discordUserId) {
+    const read = (player) =>
+        Number.isFinite(player?.ball_count)
+            ? { ballCount: player.ball_count, instanceCount: Number.isFinite(player.instance_count) ? player.instance_count : null, compressedCount: Number.isFinite(player.compressed_count) ? player.compressed_count : null }
+            : null;
     try {
-        const player = await ballsdexRequest(cred, `/players/${discordUserId}`);
-        if (!Number.isFinite(player?.ball_count)) return null;
-        return { ballCount: player.ball_count };
+        return read(await ballsdexRequest(cred, "/me/summary"));
+    } catch (error) {
+        if (error.status !== 404) {
+            if (error.status === 403) return null;
+            throw error;
+        }
+    }
+    try {
+        return read(await ballsdexRequest(cred, `/players/${discordUserId}`));
     } catch (error) {
         if (error.status === 404 || error.status === 403) return null;
         throw error;
     }
 }
+
+/** How many entries the /me/balls list will have (compressed cards count once there). */
+const listedTotal = (totals) => totals?.instanceCount ?? totals?.ballCount ?? null;
 
 function getBallId(ball) {
     return ball.ball?.id || ball.ball_id || ball.id;
@@ -821,7 +871,7 @@ async function fetchBallsResumable(userId, cred, onPage, shouldStop) {
         assertQuota(cred);
         let response;
         try {
-            response = await ballsdexFetch(cred, "/me/balls", { limit: PAGE_SIZE, cursor });
+            response = await ballsdexFetch(cred, "/me/balls", { limit: collectionPageSize, cursor });
             noteSyncRequest();
         } catch (error) {
             await saving.catch(() => {});
@@ -860,8 +910,9 @@ async function fetchBallsResumable(userId, cred, onPage, shouldStop) {
 
 async function syncCollection(discordUserId, cred, onProgress, shouldStop) {
     const profile = await ballsdexRequest(cred, "/me");
+    notePageSize(profile);
     const totals = await getPlayerTotals(cred, discordUserId);
-    const expected = totals?.ballCount ?? null;
+    const expected = listedTotal(totals);
 
 
     onProgress?.({ phase: "balls", fetched: 0, total: expected });
@@ -970,6 +1021,128 @@ function credentialFor(userId) {
 }
 
 const OAUTH_CRED = { userId: "oauth" }; // token/revoke calls: only the IP limits apply to them
+
+/*
+ * Last catches (public profile tile): the newest balls of a player, one /me/balls request with reverse=true.
+ * Refreshed at most every RECENT_TTL_MS and only when the profile is viewed; an older list is shown
+ * while a newer one loads, so a profile never waits on Ballsdex except the very first time.
+ */
+const RECENT_TTL_MS = 15 * 60 * 1000;
+const RECENT_LIMIT = 8;
+const recentCatches = new Map(); // user id -> { at, items }
+const recentLoading = new Map(); // user id -> Promise
+let reverseIsNewest = true; // what reverse=true gives (checked on the first answer)
+
+function ballNameById(ballId) {
+    const rarities = logClient?.rarities?.BD || {};
+    for (const [name, data] of Object.entries(rarities)) if (data?.id === ballId) return name;
+    return null;
+}
+
+async function loadRecentCatches(userId) {
+    const cred = credentialFor(userId);
+    const fetchPage = async (reverse) => (await ballsdexFetch(cred, "/me/balls", reverse ? { limit: RECENT_LIMIT, reverse: "true" } : { limit: RECENT_LIMIT }, { ...INTERACTIVE, retry: false })).data;
+    let items = getItems(await fetchPage(reverseIsNewest));
+    const times = items.map((item) => Date.parse(item.caught_at || "") || 0);
+    // Oldest first means the API's default order is newest first: use it without reverse from now on
+    if (times.length > 1 && times[0] < times[times.length - 1]) {
+        reverseIsNewest = !reverseIsNewest;
+        items = getItems(await fetchPage(reverseIsNewest));
+    }
+    const list = items
+        .map((item) => {
+            const ballId = item.ball?.id ?? item.ball_id ?? null;
+            return {
+                name: item.ball?.country || ballNameById(ballId) || null,
+                special: item.special?.name || null,
+                caughtAt: item.caught_at || null,
+                selfCaught: Boolean(item.self_caught),
+            };
+        })
+        .filter((item) => item.name)
+        .sort((a, b) => (Date.parse(b.caughtAt || "") || 0) - (Date.parse(a.caughtAt || "") || 0));
+    recentCatches.set(userId, { at: Date.now(), items: list });
+    return list;
+}
+
+/** A player's newest catches for their profile, or null when unavailable. */
+async function getRecentCatches(userId) {
+    userId = String(userId);
+    if (!getGrant(userId)) return null;
+    const cached = recentCatches.get(userId);
+    const stale = !cached || Date.now() - cached.at > RECENT_TTL_MS;
+    if (stale && !recentLoading.has(userId)) {
+        const loading = loadRecentCatches(userId)
+            .catch((error) => {
+                // keep the old list (if any); try again in 5 min, or once the limit is over
+                recentCatches.set(userId, { items: cached?.items ?? null, at: Date.now() - RECENT_TTL_MS + Math.max(60, error.retryAfterSec || 300) * 1000 });
+                return null;
+            })
+            .finally(() => recentLoading.delete(userId));
+        recentLoading.set(userId, loading);
+    }
+    if (cached) return cached.items ? { items: cached.items, updatedAt: new Date(cached.at).toISOString() } : null;
+    const items = await recentLoading.get(userId);
+    return items ? { items, updatedAt: new Date().toISOString() } : null;
+}
+
+/*
+ * Completion (Ballsdex tab + profile): which enabled balls a player owns and which are missing, straight
+ * from /me/completion (one request). Cached per player and special for COMPLETION_TTL_MS.
+ */
+const COMPLETION_TTL_MS = 15 * 60 * 1000;
+const COMPLETION_MIN_REFRESH_MS = 60 * 1000;
+const completionCache = new Map(); // "userId:specialId" -> { at, data }
+const completionLoading = new Map();
+
+function readCompletion(body) {
+    const list = (items) => (Array.isArray(items) ? items.filter((ball) => ball && ball.country).map((ball) => ({ id: ball.id, name: ball.country })) : []);
+    return {
+        total: Number(body?.total) || 0,
+        ownedCount: Number(body?.owned_count) || 0,
+        missingCount: Number(body?.missing_count) || 0,
+        percent: Number.isFinite(Number(body?.percent)) ? Number(body.percent) : null,
+        owned: list(body?.owned),
+        missing: list(body?.missing),
+    };
+}
+
+/**
+ * Completion of a player (optionally for one special). wait: false returns only what's cached (and refreshes
+ * it in the background), for the public profile. refresh: true reloads unless it's under a minute old.
+ */
+async function getCompletion(userId, { specialId = null, wait = true, refresh = false } = {}) {
+    userId = String(userId);
+    if (!getGrant(userId)) return null;
+    const key = `${userId}:${specialId || ""}`;
+    const cached = completionCache.get(key);
+    const age = cached ? Date.now() - cached.at : Infinity;
+    const stale = age > COMPLETION_TTL_MS || (refresh && age > COMPLETION_MIN_REFRESH_MS);
+    if (stale && !completionLoading.has(key)) {
+        const cred = credentialFor(userId);
+        const loading = ballsdexRequest(cred, "/me/completion", specialId ? { special_id: specialId } : {}, INTERACTIVE)
+            .then((body) => {
+                const data = { ...readCompletion(body), specialId: specialId || null, updatedAt: new Date().toISOString() };
+                completionCache.set(key, { at: Date.now(), data });
+                if (completionCache.size > 2000) completionCache.delete(completionCache.keys().next().value);
+                return data;
+            })
+            .finally(() => completionLoading.delete(key));
+        completionLoading.set(key, loading);
+    }
+    if (cached && (!stale || !wait || !refresh)) {
+        completionLoading.get(key)?.catch(() => {}); // a background refresh failing keeps the old numbers
+        return cached.data;
+    }
+    if (!wait) {
+        completionLoading.get(key)?.catch(() => {});
+        return null;
+    }
+    return completionLoading.get(key);
+}
+
+/** Forget a player's cached last catches (unlinked, or they turned the tile off). */
+const forgetRecentCatches = (userId) => recentCatches.delete(String(userId));
 
 function oauthClient() {
     const id = process.env.BALLSDEX_CLIENT_ID;
@@ -1118,6 +1291,7 @@ async function connectOAuth(userId, { code, codeVerifier, redirectUri }) {
     let profile;
     try {
         profile = await ballsdexRequest({ userId, token: tokens.access_token }, "/me", {}, INTERACTIVE);
+        notePageSize(profile);
     } catch (error) {
         linkCooldowns.delete(userId);
         await revokeGrant(refreshOnly);
@@ -1742,12 +1916,15 @@ function startFastSync(userId, { url } = {}) {
             // Does the file belong to this account and match it now?
             const cred = credentialFor(userId);
             const profile = await ballsdexRequest(cred, "/me");
+            notePageSize(profile);
             if (profile?.discord_id && String(profile.discord_id) !== userId) throw fastError("Your linked Ballsdex key belongs to another account.", 403);
             const totals = await getPlayerTotals(cred, userId);
             if (totals) {
-                const drift = Math.abs(totals.ballCount - rows.length);
+                // The export lists every card once, like /me/balls (compressed cards are one row)
+                const accountTotal = listedTotal(totals);
+                const drift = Math.abs(accountTotal - rows.length);
                 if (drift > Math.max(25, rows.length * 0.01)) {
-                    throw fastError(`The export has ${rows.length.toLocaleString("en-US")} balls but your account has ${totals.ballCount.toLocaleString("en-US")}. Export a fresh one and paste its link right away.`);
+                    throw fastError(`The export has ${rows.length.toLocaleString("en-US")} balls but your account has ${accountTotal.toLocaleString("en-US")}. Export a fresh one and paste its link right away.`);
                 }
             }
             const samples = [...new Set(Array.from({ length: Math.min(FAST_SYNC_SAMPLES, rows.length) }, () => rows[crypto.randomInt(rows.length)]))];
@@ -1855,6 +2032,7 @@ async function verifyFileBall(userId, ballId) {
 }
 
 module.exports = {
+    setClient: (client) => (logClient = client),
     SYNC_COOLDOWN_MS,
     verifyFileBall,
     startFastSync,
@@ -1864,6 +2042,9 @@ module.exports = {
     resumeInterruptedSyncs,
     connectOAuth,
     credentialFor,
+    getRecentCatches,
+    forgetRecentCatches,
+    getCompletion,
     isLinked,
     needsReconnect,
     unlinkAccount,

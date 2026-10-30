@@ -15,6 +15,7 @@ const {
     getStoredCollection,
     getSyncState,
     getRateLimits,
+    getCompletion,
     getSharedRateLimits,
     setSyncSwitches,
     startSync,
@@ -78,6 +79,7 @@ const initializeServer = (c) => {
     dexEditor.setClient(c);
     profiles.setClient(c);
     catchStats.setClient(c);
+    require("./utils/ballsdex").setClient(c);
 };
 
 // Rate limit middleware (each limiter has its own store, so public and API limits don't share a budget)
@@ -609,6 +611,21 @@ app.get("/api/users/:userId/ballsdex/raws", apiLimiter, verifySignature, async (
     }
 });
 
+// Completion: owned and missing Ballsdex balls (all, or for one special), from /me/completion
+app.get("/api/users/:userId/ballsdex/completion", apiLimiter, verifySignature, async (req, res) => {
+    const { userId } = req.params;
+    if (!isLinked(userId)) return res.status(200).json({ available: false, reason: "NOT_LINKED" });
+    if (needsReconnect(userId)) return res.status(200).json({ available: false, reason: "RECONNECT" });
+    const specialId = /^\d{1,6}$/.test(String(req.query.specialId || "")) ? Number(req.query.specialId) : null;
+    try {
+        const completion = await getCompletion(userId, { specialId, refresh: req.query.refresh === "1" });
+        res.status(200).json({ available: true, ...completion });
+    } catch (error) {
+        if (!error.ballsdexApi) console.error("[API] Completion failed:", error.message);
+        res.status(503).json({ error: error.ballsdexApi || error.code === "RECONNECT" ? error.message : "Couldn't reach the Ballsdex API.", code: error.code || "UNAVAILABLE" });
+    }
+});
+
 // The bot's shared Ballsdex limits (public: the Limits tab shows them to everyone)
 app.get("/api/ballsdex/limits", generalLimiter, verifySignature, (req, res) => {
     res.status(200).json(getSharedRateLimits());
@@ -832,6 +849,17 @@ app.post("/api/users/:userId/admin/dexes/delete", apiLimiter, verifySignature, r
 });
 
 // Ballsdex specials (public list; the owner can edit aliases, prices and event details)
+// Specials one Ballsdex ball can have (Spawn Arts ball popup)
+app.get("/api/specials/ball/:ballId", generalLimiter, verifySignature, async (req, res) => {
+    const ballId = Number(req.params.ballId);
+    if (!Number.isInteger(ballId) || ballId < 1 || ballId > 1000000) return res.status(400).json({ error: "Invalid ball" });
+    try {
+        res.status(200).json(await specials.specialsForBall(ballId));
+    } catch (error) {
+        if (!error.ballsdexApi) client?.logError?.("Specials for a ball failed", error);
+        res.status(503).json({ error: "Couldn't load the specials." });
+    }
+});
 app.get("/api/specials", generalLimiter, verifySignature, async (req, res) => {
     try {
         res.status(200).json(await specials.getSpecials());
