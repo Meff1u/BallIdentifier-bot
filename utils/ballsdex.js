@@ -13,7 +13,7 @@ const API_BASE_URL = process.env.BALLSDEX_API_URL || "https://ballsdex.com/api/v
 const OAUTH_URL = process.env.BALLSDEX_OAUTH_URL || "https://ballsdex.com/api/oauth";
 const ACCESS_REFRESH_MARGIN_MS = 2 * 60 * 1000; // refresh an access token this long before it expires
 const ENCRYPTION_ALGORITHM = "aes-256-gcm";
-const PAGE_SIZE = 25;
+const PAGE_SIZE = 50; // the most /me/balls, /me/trades and /players/{id}/balls return per page
 // Every request from the bot's one IP counts toward a shared per-IP limit (2000 a day and 30 a minute when
 // v2 launched; read from the headers, never hardcoded). A sync stops when the shared daily quota gets down to
 // this share of it, so the rest of the bot keeps working.
@@ -322,6 +322,61 @@ function getSharedRateLimits() {
     };
 }
 
+/*
+ * Lockouts (https://ballsdex.com/api/docs/): going over a limit returns 429 and locks that limit, longer each
+ * time (2 s, 4 s, 8 s… up to 1 h), and requests sent during a lockout still count toward the shared IP limit.
+ * So nothing is sent while a limit we know of is used up or locked:
+ *   "ip"                   the bot's shared IP limits (blocks every user)
+ *   "user:<id>"            one player's limits with our app (minute, day)
+ *   "user:<id>:player"     their player lookups (player_minute, /players/... only)
+ * Locks come from the RateLimit headers of every response (a limit at 0 until it resets: no 429 at all)
+ * and from Retry-After on a 429.
+ */
+const lockouts = new Map(); // scope -> until (ms timestamp)
+
+const lockScopeOf = (cred, limitName) => (limitName.startsWith("ip_") ? "ip" : limitName === "player_minute" ? `${hashKey(cred)}:player` : hashKey(cred));
+
+function lockScope(scope, ms) {
+    const until = Date.now() + ms;
+    if (until > (lockouts.get(scope) || 0)) lockouts.set(scope, until);
+}
+
+/** How long (ms) a request for this path has to wait before it may be sent; 0 when it can go now. */
+function lockedFor(cred, path) {
+    const now = Date.now();
+    const scopes = ["ip", hashKey(cred), ...(path.startsWith("/players") ? [`${hashKey(cred)}:player`] : [])];
+    let wait = 0;
+    for (const scope of scopes) {
+        const until = lockouts.get(scope) || 0;
+        if (until <= now) lockouts.delete(scope);
+        else wait = Math.max(wait, until - now);
+    }
+    return wait;
+}
+
+/** Locks every limit the response shows as used up, until it resets; on a 429 at least for Retry-After. */
+function noteLockouts(cred, response) {
+    const states = parseRateLimitList(response.headers.get("ratelimit"));
+    let locked = false;
+    for (const [name, state] of states) {
+        if (state.r === 0 && state.t > 0) {
+            lockScope(lockScopeOf(cred, name), state.t * 1000 + 250);
+            locked = true;
+        }
+    }
+    const remaining = response.headers.get("x-ratelimit-remaining");
+    const resetAfter = Number(response.headers.get("x-ratelimit-reset-after")) || 0;
+    if (!locked && remaining === "0" && resetAfter > 0) {
+        lockScope(hashKey(cred), resetAfter * 1000 + 250);
+        locked = true;
+    }
+    if (response.status !== 429) return;
+    const retryAfterMs = (Number(response.headers.get("retry-after")) || 2) * 1000 + 250;
+    const exhausted = [...states].filter(([, state]) => state.r === 0).map(([name]) => lockScopeOf(cred, name));
+    for (const scope of exhausted.length ? exhausted : [hashKey(cred)]) lockScope(scope, retryAfterMs);
+    console.warn(`[BALLSDEX] 429: ${(exhausted.length ? exhausted : [hashKey(cred)]).join(", ")} locked for ${Math.ceil(retryAfterMs / 1000)} s`);
+}
+
 // One API call that follows the documented rate-limit headers (https://ballsdex.com/api/docs/):
 // waits out a short 429 using Retry-After, and returns how long to pause before the next call.
 // Background work (syncs) waits up to 2 min per 429; INTERACTIVE calls give up after a few seconds.
@@ -333,6 +388,12 @@ async function ballsdexFetch(cred, path, query = {}, { retry = true, maxWaitMs =
 
     let refreshed = false;
     for (let attempt = 0; ; attempt++) {
+        // A used-up or locked limit: wait for it (background work) or give up without asking Ballsdex
+        const lockedMs = lockedFor(cred, path);
+        if (lockedMs > 0) {
+            if (!retry || lockedMs > maxWaitMs || attempt > retries) throw apiError(429, { retryAfterSec: lockedMs / 1000, cred });
+            await sleep(lockedMs);
+        }
         const token = cred.token || (await accessToken(cred.userId, { force: refreshed }));
         let response;
         try {
@@ -342,6 +403,7 @@ async function ballsdexFetch(cred, path, query = {}, { retry = true, maxWaitMs =
             throw apiError(503, { detail: error.name === "TimeoutError" || error.name === "AbortError" ? "timeout" : error.message });
         }
         recordRateLimits(cred, response.headers);
+        noteLockouts(cred, response);
 
         // The access token was revoked or expired early: get a new one once, then give up
         if (response.status === 401 && !cred.token && !refreshed) {
@@ -350,11 +412,8 @@ async function ballsdexFetch(cred, path, query = {}, { retry = true, maxWaitMs =
             continue;
         }
         if (response.status === 429) {
-            const waitMs = (Number(response.headers.get("retry-after")) || 2) * 1000;
-            if (retry && attempt < retries && waitMs <= maxWaitMs) {
-                await sleep(waitMs + 250);
-                continue;
-            }
+            // noteLockouts() locked the limit: the check at the top of the loop waits it out (or gives up)
+            if (retry && attempt < retries && lockedFor(cred, path) <= maxWaitMs) continue;
             throw await readError(response, cred);
         }
         if (!response.ok) throw await readError(response, cred);
@@ -412,7 +471,7 @@ function getItems(response) {
     return response.items || response.results || response.data || [];
 }
 
-// /me/balls returns at most 25 per page; walk next_cursor to the end
+// /me/balls returns at most PAGE_SIZE per page; walk next_cursor to the end
 class SyncCancelled extends Error {
     constructor() {
         super("Sync cancelled.");
