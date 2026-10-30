@@ -139,21 +139,6 @@ function parseCatch(message) {
     return { userId, ball, spawnId };
 }
 
-// Detailed trace of the first messages after a start (how the bot sees dex messages on enabled servers)
-let debugLeft = 40;
-function debug(message, verdict) {
-    if (debugLeft <= 0) return;
-    debugLeft--;
-    const text = messageText(message).replace(/\s+/g, " ").trim();
-    const meta = message.interactionMetadata;
-    trace(
-        message,
-        `debug ${message.author?.username || message.author?.id} msg ${message.id}: type ${message.type}, ${text.length} chars "${text.slice(0, 80)}", ` +
-            `reply to ${message.reference?.messageId || "-"}, interaction ${meta ? meta.triggeringInteractionMetadata?.interactedMessageId || meta.interactedMessageId || "yes" : "-"}, ` +
-            `${message.components?.length || 0} components, edited ${message.editedTimestamp ? "yes" : "no"} -> ${verdict}`,
-    );
-}
-
 const noted = new Set();
 function noteOnce(key, log) {
     if (noted.has(key)) return;
@@ -184,6 +169,30 @@ async function isSpawnOf(message, spawnId) {
     }
 }
 
+/*
+ * Ballsdex answers a catch after "thinking": the message is created empty (a loading reply) and gets its
+ * text by an edit. The edit normally comes as a messageUpdate; in case it doesn't, the message is read
+ * again a few seconds later (at most twice).
+ */
+const RECHECK_DELAYS_MS = [3000, 10000];
+const rechecks = new Map(); // message id -> tries so far
+
+function scheduleRecheck(message) {
+    const tries = rechecks.get(message.id) || 0;
+    if (tries >= RECHECK_DELAYS_MS.length) return rechecks.delete(message.id);
+    rechecks.set(message.id, tries + 1);
+    if (rechecks.size > 500) rechecks.delete(rechecks.keys().next().value);
+    setTimeout(async () => {
+        if (handled.has(message.id)) return rechecks.delete(message.id);
+        try {
+            const fresh = await message.channel.messages.fetch({ message: message.id, force: true });
+            observe(fresh);
+        } catch {
+            rechecks.delete(message.id); // deleted, or no access
+        }
+    }, RECHECK_DELAYS_MS[tries]);
+}
+
 /** Called for every new or edited message of a dex bot. */
 async function observe(message) {
     try {
@@ -193,14 +202,16 @@ async function observe(message) {
             return;
         }
         const enabled = guildConfig(message.guildId).enabled;
-        if (getSpawnMessageData(message).isSpawn) {
-            if (enabled) debug(message, "spawn seen");
-            return enabled ? rememberSpawn(message) : undefined;
-        }
+        if (getSpawnMessageData(message).isSpawn) return enabled ? rememberSpawn(message) : undefined;
 
         const found = parseCatch(message);
-        if (enabled) debug(message, found ? (found.skip ? `skip: ${found.skip}` : `catch of ${found.ball} by <@${found.userId}>`) : "not a catch");
-        if (!found) return;
+        const empty = !messageText(message).trim();
+        if (!found) {
+            // An empty answer to a spawn: Ballsdex is still "thinking", its text comes later
+            if (enabled && empty && message.interactionMetadata && spawnIdOf(message) && !handled.has(message.id)) scheduleRecheck(message);
+            return;
+        }
+        rechecks.delete(message.id);
         // Once per server and run: says why nothing happens there (helps when it "doesn't work")
         if (!enabled) return noteOnce(`off:${message.guildId}`, () => trace(message, "A catch was seen, but Catch stats are off on this server (no data saved)"));
         if (handled.has(message.id)) return;
