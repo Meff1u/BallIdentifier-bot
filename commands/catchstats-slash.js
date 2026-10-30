@@ -178,7 +178,7 @@ module.exports = {
         if (action === "optout-yes") {
             await interaction.deferUpdate();
             await catchStats.setUserSettings(interaction.user.id, { tracking: false });
-            interaction.client.log?.("CATCHES", `🔕 <@${interaction.user.id}> opted out of Catch stats`);
+            interaction.client.log?.("CATCH_STATS", `🔕 <@${interaction.user.id}> opted out of Catch stats`);
             await interaction.editReply({ content: "Done: your catch data was deleted and you're not tracked anymore. Changed your mind? `/catchstats settings tracking:True`", components: [] });
             return true;
         }

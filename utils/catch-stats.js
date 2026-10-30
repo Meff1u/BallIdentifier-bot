@@ -161,9 +161,9 @@ function noteOnce(key, log) {
     log();
 }
 
-/** Catch stats activity in the Catches log channel (helps checking the catch phrases). */
+/** Catch stats activity in the Catches log channel (own log thread, separate from Catches). */
 function trace(message, text) {
-    client?.log?.("CATCHES", `⏱️ [${message.guild?.name || message.guildId}] ${text}`);
+    client?.log?.("CATCH_STATS", `⏱️ [${message.guild?.name || message.guildId}] ${text}`);
 }
 
 function rememberSpawn(message) {
@@ -447,7 +447,7 @@ module.exports = {
     setClient: (discordClient) => {
         client = discordClient;
         const on = Object.entries(getData().guilds || {}).filter(([, guild]) => guild?.catchStats?.enabled);
-        client?.log?.("CATCHES", `⏱️ Catch stats ready: on in ${on.length} server(s)${on.length ? ` (${on.map(([id]) => client.guilds?.cache.get(id)?.name || id).join(", ")})` : ""}`);
+        client?.log?.("CATCH_STATS", `⏱️ Catch stats ready: on in ${on.length} server(s)${on.length ? ` (${on.map(([id]) => client.guilds?.cache.get(id)?.name || id).join(", ")})` : ""}`);
     },
     observe,
     record,

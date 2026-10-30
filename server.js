@@ -710,7 +710,7 @@ app.get("/api/users/:userId/admin/overview", apiLimiter, verifySignature, requir
             lastDataRefresh: client.lastDataRefresh || null,
             dexes: Object.fromEntries(Object.entries(client.rarities || {}).map(([key, data]) => [key, Object.keys(data || {}).length])),
         },
-        logs: getRecentLogs(["ERRORS", "BALLSDEX", "CATCHES", "COLLECTORS", "API", "VOTES", "SYSTEM"]),
+        logs: getRecentLogs(["ERRORS", "BALLSDEX", "CATCH_STATS", "COLLECTORS", "API", "VOTES", "SYSTEM"]),
     });
 });
 
@@ -944,7 +944,7 @@ app.post("/api/users/:userId/profile", apiLimiter, verifySignature, async (req, 
         if (catchInput && typeof catchInput === "object") {
             const before = catchStats.userSettings(userId);
             await catchStats.setUserSettings(userId, { public: catchInput.public, tracking: catchInput.tracking });
-            if (before.tracking && catchInput.tracking === false) client?.log?.("CATCHES", `🔕 <@${userId}> opted out of Catch stats (website)`);
+            if (before.tracking && catchInput.tracking === false) client?.log?.("CATCH_STATS", `🔕 <@${userId}> opted out of Catch stats (website)`);
         }
         if (wasPublic !== profiles.isPublic(userId)) client?.log?.("PROFILES", `${profiles.isPublic(userId) ? "🌐" : "🔒"} ${userId} made their profile ${profiles.isPublic(userId) ? "public" : "private"}`);
         res.status(200).json({ ...result, catchStats: catchStats.userSettings(userId), profile: await profiles.getPublicProfile(userId, { self: true }) });
@@ -1004,7 +1004,7 @@ app.post("/api/guilds/:guildId/catch-stats", apiLimiter, verifySignature, (req, 
         const { enabled, mode, lines, setupBy } = req.body || {};
         const before = catchStats.guildConfig(guildId).enabled;
         const config = catchStats.setGuildConfig(guildId, { enabled, mode, lines }, typeof setupBy === "string" ? setupBy.slice(0, 40) : null);
-        if (before !== config.enabled) client?.log?.("CATCHES", `${config.enabled ? "▶️" : "⏹️"} Catch stats ${config.enabled ? "on" : "off"} in ${guild.name} (${guildId}) by ${setupBy || "?"}`);
+        if (before !== config.enabled) client?.log?.("CATCH_STATS", `${config.enabled ? "▶️" : "⏹️"} Catch stats ${config.enabled ? "on" : "off"} in ${guild.name} (${guildId}) by ${setupBy || "?"}`);
         res.status(200).json({ success: true, config });
     } catch (error) {
         catchError(res, error, "Catch stats config failed");

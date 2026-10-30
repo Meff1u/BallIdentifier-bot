@@ -18,6 +18,7 @@ const CATEGORIES = {
     PROFILES: { name: "Profiles", color: 0x1abc9c }, // website profiles made public/private, moderation
     VOTES: { name: "Votes", color: 0x00c853 }, // upvotes and reminders
     CATCHES: { name: "Catches", color: 0x3498db }, // Ballsdex catch messages
+    CATCH_STATS: { name: "Catch stats", color: 0x00bcd4 }, // Catch stats: timed catches, servers turning it on/off, opt-outs
     SYSTEM: { name: "System", color: 0xf39c12 }, // startup, data refresh, database, reports
     ERRORS: { name: "Errors", color: 0xff0000 }, // errors and crashes
 };
