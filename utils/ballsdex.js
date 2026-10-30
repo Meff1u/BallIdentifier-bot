@@ -178,7 +178,8 @@ async function readError(response, cred = null) {
     return apiError(response.status, { detail, retryAfterSec, cred, type });
 }
 
-const RATE_PROBE_MAX_AGE_MS = 30 * 1000;
+// Checking a user's limits costs a request from them and from the shared IP: at most every 5 minutes
+const RATE_PROBE_MAX_AGE_MS = 5 * 60 * 1000;
 const RATE_LIMIT_LABELS = {
     minute: "Per minute",
     day: "Per day",
@@ -310,6 +311,15 @@ async function getRateLimits(userId) {
         }
     }
     return { key: viewRateLimits(keyRateLimits.get(hash)), ip: viewRateLimits(ipRateLimits) };
+}
+
+/** The bot's shared per-IP limits as last seen (no request is made; every API call refreshes them). */
+function getSharedRateLimits() {
+    return {
+        ip: viewRateLimits(ipRateLimits),
+        reserveShare: IP_DAY_RESERVE_SHARE,
+        syncRunning: Boolean(activeSync),
+    };
 }
 
 // One API call that follows the documented rate-limit headers (https://ballsdex.com/api/docs/):
@@ -1771,6 +1781,7 @@ module.exports = {
     getSyncOverview,
     cancelActiveSync,
     getRateLimits,
+    getSharedRateLimits,
     startSync,
     ballsdexRequest,
     INTERACTIVE,

@@ -15,6 +15,7 @@ const {
     getStoredCollection,
     getSyncState,
     getRateLimits,
+    getSharedRateLimits,
     startSync,
     cancelSync,
     computeRaws,
@@ -593,6 +594,11 @@ app.get("/api/users/:userId/ballsdex/raws", apiLimiter, verifySignature, async (
         console.error("[API] Raws failed:", error.message);
         res.status(503).json({ error: "Collection storage is unavailable right now." });
     }
+});
+
+// The bot's shared Ballsdex limits (public: the Limits tab shows them to everyone)
+app.get("/api/ballsdex/limits", generalLimiter, verifySignature, (req, res) => {
+    res.status(200).json(getSharedRateLimits());
 });
 
 // Ballsdex API rate-limit usage: the user's key and the bot's shared IP
