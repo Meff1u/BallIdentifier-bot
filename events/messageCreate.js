@@ -4,6 +4,7 @@ const path = require("path");
 
 // Import shared utilities
 const { SUPPORTED_BOT_IDS, BOT_DATA_KEYS, BOT_NAMES, COLORS, ADMIN_ID } = require("../utils/constants");
+const catchStats = require("../utils/catch-stats");
 const {
     getData,
     updateData,
@@ -53,6 +54,8 @@ module.exports = {
     async execute(m, client) {
         // Handle bot spawn messages for notifier
         if (m.author.bot && SUPPORTED_BOT_IDS.includes(m.author.id)) {
+            // Catch stats: remembers spawns and times catches on servers that turned it on (runs on its own)
+            catchStats.observe(m);
             // Cheap checks first: most guilds have no notifier configured
             const guildData = getData().guilds[m.guildId];
             const guildConfig = guildData?.notifier;

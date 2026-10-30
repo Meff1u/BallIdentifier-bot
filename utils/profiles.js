@@ -9,6 +9,7 @@ const { getData, updateData } = require("./helpers");
 const { BOT_NAMES, BOT_DATA_KEYS } = require("./constants");
 const collectorStore = require("./collector-store");
 const { isLinked, getStoredCollection } = require("./ballsdex");
+const catchStats = require("./catch-stats");
 
 const DEX_TO_KEY = Object.fromEntries(Object.entries(BOT_DATA_KEYS).map(([botId, key]) => [BOT_NAMES[botId], key]));
 const KEY_TO_DEX = Object.fromEntries(Object.entries(DEX_TO_KEY).map(([dex, key]) => [key, dex]));
@@ -144,6 +145,13 @@ async function getPublicProfile(userId, { self = false } = {}) {
     const user = getData().users[userId] || {};
     const showcase = settings.showcase.map((item) => findBall(item.dex, item.name)).filter(Boolean);
     const ballsdex = settings.showBallsdex ? await ballsdexOf(userId) : null;
+    // Catch stats have their own switch: shown to everyone only when public, always to the owner
+    const catchSettings = catchStats.userSettings(userId);
+    let catches = null;
+    if (catchSettings.tracking && (catchSettings.public || self)) {
+        const result = await catchStats.getUserStats(userId).catch(() => null);
+        catches = result?.all ? { public: catchSettings.public, all: result.all, last30: result.last30, last7: result.last7 } : { public: catchSettings.public, all: null };
+    }
     return {
         id: userId,
         ...discordOf(userId, stored),
@@ -158,6 +166,7 @@ async function getPublicProfile(userId, { self = false } = {}) {
         updatedAt: settings.updatedAt || null,
         collections: settings.showCollections ? collectionsOf(userId) : null,
         ballsdex,
+        catches,
     };
 }
 

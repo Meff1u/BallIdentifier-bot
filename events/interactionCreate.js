@@ -27,6 +27,7 @@ const {
 } = require("../utils/collectors");
 
 const { handleDexEdit } = require("../utils/dex-report-actions");
+const catchStatsCommand = require("../commands/catchstats-slash");
 
 const DATA_PATH = getAssetsPath("data.json");
 
@@ -40,6 +41,18 @@ module.exports = {
             } catch (error) {
                 client.logError?.("Dex edit interaction failed", error);
                 const reply = { content: `❌ ${error.message}`, flags: MessageFlags.Ephemeral };
+                await (interaction.deferred || interaction.replied ? interaction.followUp(reply) : interaction.reply(reply)).catch(() => {});
+            }
+            return;
+        }
+
+        // Buttons under Catch stats replies ("My stats", "Don't track me")
+        if (interaction.isButton() && interaction.customId.startsWith("catchstats:")) {
+            try {
+                await catchStatsCommand.handleButton(interaction);
+            } catch (error) {
+                client.logError?.("Catch stats button failed", error);
+                const reply = { content: "Catch stats are unavailable right now. Try again later.", flags: MessageFlags.Ephemeral };
                 await (interaction.deferred || interaction.replied ? interaction.followUp(reply) : interaction.reply(reply)).catch(() => {});
             }
             return;

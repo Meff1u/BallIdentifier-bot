@@ -29,6 +29,7 @@ const collectorStore = require("./utils/collector-store");
 const specials = require("./utils/specials");
 const dexEditor = require("./utils/dex-editor");
 const profiles = require("./utils/profiles");
+const catchStats = require("./utils/catch-stats");
 
 const PORT = process.env.PORT || 3001;
 
@@ -67,6 +68,7 @@ const initializeServer = (c) => {
     client = c;
     dexEditor.setClient(c);
     profiles.setClient(c);
+    catchStats.setClient(c);
 };
 
 // Rate limit middleware (each limiter has its own store, so public and API limits don't share a budget)
@@ -863,7 +865,7 @@ app.get("/api/profiles/:userId", profileLimiter, verifySignature, async (req, re
 app.get("/api/users/:userId/profile", apiLimiter, verifySignature, async (req, res) => {
     try {
         const { userId } = req.params;
-        res.status(200).json({ ...profiles.getSettings(userId), profile: await profiles.getPublicProfile(userId, { self: true }) });
+        res.status(200).json({ ...profiles.getSettings(userId), catchStats: catchStats.userSettings(userId), profile: await profiles.getPublicProfile(userId, { self: true }) });
     } catch (error) {
         profileError(res, error, "Profile settings read failed");
     }
@@ -872,12 +874,18 @@ app.get("/api/users/:userId/profile", apiLimiter, verifySignature, async (req, r
 app.post("/api/users/:userId/profile", apiLimiter, verifySignature, async (req, res) => {
     try {
         const { userId } = req.params;
-        const { settings, discord } = req.body || {};
+        const { settings, discord, catchStats: catchInput } = req.body || {};
         if (!settings || typeof settings !== "object" || Array.isArray(settings)) return res.status(400).json({ error: "Invalid settings" });
         const wasPublic = profiles.isPublic(userId);
         const result = profiles.saveSettings(userId, settings, discord);
+        // Catch stats privacy (public / tracking) is saved with the profile; tracking off deletes the data
+        if (catchInput && typeof catchInput === "object") {
+            const before = catchStats.userSettings(userId);
+            await catchStats.setUserSettings(userId, { public: catchInput.public, tracking: catchInput.tracking });
+            if (before.tracking && catchInput.tracking === false) client?.log?.("CATCHES", `🔕 <@${userId}> opted out of Catch stats (website)`);
+        }
         if (wasPublic !== profiles.isPublic(userId)) client?.log?.("PROFILES", `${profiles.isPublic(userId) ? "🌐" : "🔒"} ${userId} made their profile ${profiles.isPublic(userId) ? "public" : "private"}`);
-        res.status(200).json({ ...result, profile: await profiles.getPublicProfile(userId, { self: true }) });
+        res.status(200).json({ ...result, catchStats: catchStats.userSettings(userId), profile: await profiles.getPublicProfile(userId, { self: true }) });
     } catch (error) {
         profileError(res, error, "Profile save failed");
     }
@@ -891,6 +899,70 @@ app.post("/api/users/:userId/admin/profiles/:targetId", apiLimiter, verifySignat
         res.status(200).json({ success: true, ...result });
     } catch (error) {
         profileError(res, error, "Profile moderation failed");
+    }
+});
+
+// ---------------------------------------------------------------------------
+// Catch stats (website: Bot -> Catch stats). Rankings list only users with public catch stats.
+// ---------------------------------------------------------------------------
+
+const catchError = (res, error, what) => {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    client?.logError?.(what, error);
+    res.status(503).json({ error: "Catch stats are unavailable right now. Try again later." });
+};
+
+app.get("/api/catch-stats/leaderboard", profileLimiter, verifySignature, async (req, res) => {
+    try {
+        const period = Object.hasOwn(catchStats.PERIODS, req.query.period) ? req.query.period : "all";
+        const guildId = /^\d{17,20}$/.test(String(req.query.guildId || "")) ? String(req.query.guildId) : null;
+        res.status(200).json(await catchStats.leaderboard({ period, guildId, limit: 15 }));
+    } catch (error) {
+        catchError(res, error, "Catch leaderboard failed");
+    }
+});
+
+// Catch stats settings of several servers (the website's server list); ids=1,2,3
+app.get("/api/catch-stats/guilds", apiLimiter, verifySignature, (req, res) => {
+    const ids = String(req.query.ids || "")
+        .split(",")
+        .filter((id) => /^\d{17,20}$/.test(id))
+        .slice(0, 200);
+    const configs = catchStats.guildConfigs(ids);
+    for (const id of ids) configs[id].botPresent = Boolean(client?.guilds.cache.has(id));
+    res.status(200).json({ configs });
+});
+
+// Admin check happens on the website (Discord says who administers the server)
+app.post("/api/guilds/:guildId/catch-stats", apiLimiter, verifySignature, (req, res) => {
+    const { guildId } = req.params;
+    const guild = client?.guilds.cache.get(guildId);
+    if (!guild) return res.status(404).json({ error: "BallIdentifier isn't on this server." });
+    try {
+        const { enabled, mode, lines, setupBy } = req.body || {};
+        const before = catchStats.guildConfig(guildId).enabled;
+        const config = catchStats.setGuildConfig(guildId, { enabled, mode, lines }, typeof setupBy === "string" ? setupBy.slice(0, 40) : null);
+        if (before !== config.enabled) client?.log?.("CATCHES", `${config.enabled ? "▶️" : "⏹️"} Catch stats ${config.enabled ? "on" : "off"} in ${guild.name} (${guildId}) by ${setupBy || "?"}`);
+        res.status(200).json({ success: true, config });
+    } catch (error) {
+        catchError(res, error, "Catch stats config failed");
+    }
+});
+
+app.get("/api/users/:userId/catch-stats", apiLimiter, verifySignature, async (req, res) => {
+    try {
+        res.status(200).json(await catchStats.getUserStats(req.params.userId));
+    } catch (error) {
+        catchError(res, error, "Catch stats read failed");
+    }
+});
+
+app.post("/api/users/:userId/catch-stats/settings", apiLimiter, verifySignature, async (req, res) => {
+    try {
+        const { public: isPublic, tracking } = req.body || {};
+        res.status(200).json({ success: true, settings: await catchStats.setUserSettings(req.params.userId, { public: isPublic, tracking }) });
+    } catch (error) {
+        catchError(res, error, "Catch stats settings failed");
     }
 });
 
