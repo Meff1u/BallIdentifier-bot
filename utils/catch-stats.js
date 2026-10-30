@@ -1,6 +1,6 @@
 /**
- * Catch stats: on servers where an admin turned it on (website: Bot -> Catch stats), every catch of a
- * dex bot's spawn is timed (spawn message -> catch message) and saved for the catcher. The bot answers
+ * Catch stats (Ballsdex only): on servers where an admin turned it on (website: Bot -> Catch stats), every catch of a
+ * Ballsdex spawn is timed (spawn message -> catch message) and saved for the catcher. The bot answers
  * with the time, averages and records (what it says is set per server).
  *
  * Privacy: everyone on an enabled server is tracked unless they opt out ("Don't track me" button,
@@ -17,7 +17,7 @@ const { ActionRowBuilder, ButtonBuilder, ButtonStyle, SnowflakeUtil } = require(
 const { getData, updateData, getSpawnMessageData } = require("./helpers");
 const { getDatabase } = require("./database");
 const { BOT_DATA_KEYS, BOT_NAMES, DEX_NAME_BY_KEY, SUPPORTED_BOT_IDS } = require("./constants");
-const { rulesFor } = require("./catch-phrases");
+const { rulesFor, CATCH_STATS_BOTS } = require("./catch-phrases");
 
 const MAX_CATCH_MS = 60 * 60 * 1000; // slower than an hour isn't a reaction time (the spawn sat there)
 const EVENT_TTL_SEC = 35 * 24 * 60 * 60;
@@ -189,7 +189,7 @@ async function observe(message) {
     try {
         if (!message.guildId) return;
         if (!rulesFor(message.author?.id)) {
-            if (SUPPORTED_BOT_IDS.includes(message.author?.id)) noteOnce(`rules:${message.author.id}`, () => trace(message, `No catch rules for ${BOT_NAMES[message.author.id]} (dex list)`));
+            if (CATCH_STATS_BOTS.includes(message.author?.id)) noteOnce(`rules:${message.author.id}`, () => trace(message, `No catch rules for ${BOT_NAMES[message.author.id]} (dex list)`));
             return;
         }
         const enabled = guildConfig(message.guildId).enabled;

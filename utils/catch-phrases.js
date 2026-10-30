@@ -1,5 +1,5 @@
 /**
- * How Catch stats recognizes a catch message of each dex bot.
+ * How Catch stats recognizes a catch message. Catch stats work with Ballsdex only (CATCH_STATS_BOTS).
  *
  * The phrases are set per dex on the website (Moderation -> Dexes -> Catch phrases) and saved in
  * assets/jsons/dexes.json; dexes without their own list use DEFAULT_CATCH below.
@@ -23,8 +23,12 @@ const DEFAULT_CATCH = {
     ignore: ["Wrong name", "already been caught", "not the right"],
 };
 
-/** Rules for one dex bot, or null when it isn't an enabled dex. */
+// Dex bots Catch stats work with
+const CATCH_STATS_BOTS = ["999736048596816014"]; // Ballsdex
+
+/** Rules for one dex bot, or null when Catch stats don't cover it (or it isn't an enabled dex). */
 function rulesFor(botId) {
+    if (!CATCH_STATS_BOTS.includes(botId)) return null;
     const dex = DEX_REGISTRY.find((entry) => entry.botId === botId && entry.enabled);
     if (!dex) return null;
     return {
@@ -35,4 +39,4 @@ function rulesFor(botId) {
     };
 }
 
-module.exports = { DEFAULT_CATCH, rulesFor };
+module.exports = { DEFAULT_CATCH, CATCH_STATS_BOTS, rulesFor };

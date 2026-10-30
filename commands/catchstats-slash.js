@@ -78,7 +78,7 @@ const v2 = (box, ephemeral = true) => ({ components: [box], flags: ephemeral ? [
 module.exports = {
     data: new SlashCommandBuilder()
         .setName("catchstats")
-        .setDescription("Your catch times on servers with Catch stats turned on.")
+        .setDescription("Your Ballsdex catch times on servers with Catch stats turned on.")
         .setContexts(InteractionContextType.Guild, InteractionContextType.BotDM, InteractionContextType.PrivateChannel)
         .addSubcommand((sub) =>
             sub
