@@ -150,7 +150,16 @@ function apiError(status, { detail = null, retryAfterSec = null, cred = null, ty
         reason = detail ? `The Ballsdex API said: ${detail}` : `The Ballsdex API returned an error (HTTP ${status}).`;
     }
     const retry = code === "RATE_LIMITED" ? (retryAfterSec ? ` Try again in ${formatWait(retryAfterSec)}.` : " Try again later.") : code === "UNAVAILABLE" ? " Try again in a few minutes." : "";
-    return Object.assign(new Error(reason + retry), { status, code, reason, detail, type, retryAfterSec: retryAfterSec ? Math.ceil(retryAfterSec) : null, ballsdexApi: true });
+    return Object.assign(new Error(reason + retry), {
+        status,
+        code,
+        reason,
+        detail,
+        type,
+        scope: status === 429 && cred ? exhaustedScope(cred) : null,
+        retryAfterSec: retryAfterSec ? Math.ceil(retryAfterSec) : null,
+        ballsdexApi: true,
+    });
 }
 
 async function readError(response, cred = null) {
@@ -891,6 +900,8 @@ function credentialFor(userId) {
     return { userId: String(userId) };
 }
 
+const OAUTH_CRED = { userId: "oauth" }; // token/revoke calls: only the IP limits apply to them
+
 function oauthClient() {
     const id = process.env.BALLSDEX_CLIENT_ID;
     if (!id) throw Object.assign(new Error("Sign in with Ballsdex isn't set up on the bot yet."), { status: 503, code: "NOT_CONFIGURED" });
@@ -911,9 +922,11 @@ async function oauthPost(path, params) {
     } catch (error) {
         throw apiError(503, { detail: error.message });
     }
+    // The shared per-IP limits count here too: keep them up to date
+    recordRateLimits(OAUTH_CRED, response.headers);
     const data = await response.json().catch(() => ({}));
     if (response.ok) return data;
-    if (response.status === 429) throw apiError(429, { retryAfterSec: Number(response.headers.get("retry-after")) || null });
+    if (response.status === 429) throw await readError(response, OAUTH_CRED);
     if (response.status >= 500) throw apiError(response.status);
     const error = new Error(typeof data.error_description === "string" ? data.error_description.slice(0, 200) : "Ballsdex refused the sign-in.");
     error.status = response.status;

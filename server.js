@@ -515,7 +515,10 @@ app.post("/api/users/:userId/ballsdex/oauth", apiLimiter, verifySignature, async
         res.status(200).json({ success: true, linked: true, reconnected: result.reconnected });
     } catch (error) {
         if (error.code === "COOLDOWN") return res.status(429).json({ error: error.message, code: "COOLDOWN", retryAfterSec: error.retryAfterSec });
-        if (error.code === "RATE_LIMITED") return res.status(429).json({ error: error.message, code: "RATE_LIMITED", retryAfterSec: error.retryAfterSec });
+        if (error.code === "RATE_LIMITED") {
+            client?.log?.("BALLSDEX", `<@${userId}> couldn't connect: Ballsdex rate limit (${error.scope || "unknown"} limit, retry in ${error.retryAfterSec ?? "?"} s)`);
+            return res.status(429).json({ error: error.message, code: "RATE_LIMITED", scope: error.scope, retryAfterSec: error.retryAfterSec });
+        }
         if (error.status && error.status < 500) return res.status(error.status).json({ error: error.message, code: error.code || "OAUTH_FAILED" });
         if (error.code === "NOT_CONFIGURED") client?.logError?.("Sign in with Ballsdex: BALLSDEX_CLIENT_ID is missing in the bot's environment (.env on the hosting server), restart after adding it", error);
         else if (!error.ballsdexApi) console.error("[API] Ballsdex sign-in failed:", error);

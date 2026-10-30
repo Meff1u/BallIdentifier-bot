@@ -12,9 +12,8 @@ const { isLinked, getStoredCollection } = require("./ballsdex");
 
 const DEX_TO_KEY = Object.fromEntries(Object.entries(BOT_DATA_KEYS).map(([botId, key]) => [BOT_NAMES[botId], key]));
 const KEY_TO_DEX = Object.fromEntries(Object.entries(DEX_TO_KEY).map(([dex, key]) => [key, dex]));
-const ACCENTS = ["violet", "blue", "cyan", "green", "yellow", "orange", "red", "pink"];
 const LIMITS = { bio: 300, pronouns: 24, showcase: 6, search: 60 };
-const DEFAULTS = { public: false, bio: "", pronouns: "", accent: "violet", favoriteDex: null, showcase: [], showBallsdex: false, showCollections: true };
+const DEFAULTS = { public: false, bio: "", pronouns: "", favoriteDex: null, showcase: [], showBallsdex: false, showCollections: true };
 
 let client = null;
 const setClient = (discordClient) => (client = discordClient);
@@ -68,10 +67,6 @@ function validate(input) {
     if ("showCollections" in input) settings.showCollections = input.showCollections === true;
     if ("bio" in input) settings.bio = cleanText(input.bio, LIMITS.bio);
     if ("pronouns" in input) settings.pronouns = cleanText(input.pronouns, LIMITS.pronouns).replace(/\n/g, " ");
-    if ("accent" in input) {
-        if (!ACCENTS.includes(input.accent)) throw httpError(400, "Unknown accent color.");
-        settings.accent = input.accent;
-    }
     if ("favoriteDex" in input) {
         if (input.favoriteDex !== null && !DEX_TO_KEY[input.favoriteDex]) throw httpError(400, "Unknown dex.");
         settings.favoriteDex = input.favoriteDex;
@@ -156,7 +151,6 @@ async function getPublicProfile(userId, { self = false } = {}) {
         blocked: Boolean(settings.blocked),
         bio: settings.bio,
         pronouns: settings.pronouns,
-        accent: settings.accent,
         favoriteDex: settings.favoriteDex,
         showcase,
         identifyAmount: user.identifyAmount || 0,
@@ -175,7 +169,6 @@ function getSettings(userId) {
             public: settings.public,
             bio: settings.bio,
             pronouns: settings.pronouns,
-            accent: settings.accent,
             favoriteDex: settings.favoriteDex,
             showcase: settings.showcase,
             showBallsdex: settings.showBallsdex,
@@ -184,7 +177,6 @@ function getSettings(userId) {
         blocked: Boolean(settings.blocked),
         ballsdexLinked: isLinked(userId),
         limits: LIMITS,
-        accents: ACCENTS,
     };
 }
 
@@ -244,7 +236,6 @@ function searchProfiles(query = "") {
             ...discord,
             pronouns: profile.pronouns || "",
             bio: (profile.bio || "").split("\n")[0].slice(0, 140),
-            accent: profile.accent || "violet",
             favoriteDex: profile.favoriteDex || null,
             collections: counts.get(userId) || 0,
             updatedAt: profile.updatedAt || null,
@@ -259,4 +250,4 @@ const isPublic = (userId) => {
     return Boolean(profile?.public && !profile.blocked);
 };
 
-module.exports = { setClient, getPublicProfile, getSettings, saveSettings, moderate, searchProfiles, isPublic, ACCENTS };
+module.exports = { setClient, getPublicProfile, getSettings, saveSettings, moderate, searchProfiles, isPublic };
