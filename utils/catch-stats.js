@@ -16,7 +16,7 @@
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle, SnowflakeUtil } = require("discord.js");
 const { getData, updateData, getSpawnMessageData } = require("./helpers");
 const { getDatabase } = require("./database");
-const { BOT_DATA_KEYS, BOT_NAMES, DEX_NAME_BY_KEY } = require("./constants");
+const { BOT_DATA_KEYS, BOT_NAMES, DEX_NAME_BY_KEY, SUPPORTED_BOT_IDS } = require("./constants");
 const { rulesFor } = require("./catch-phrases");
 
 const MAX_CATCH_MS = 60 * 60 * 1000; // slower than an hour isn't a reaction time (the spawn sat there)
@@ -139,6 +139,21 @@ function parseCatch(message) {
     return { userId, ball, spawnId };
 }
 
+// Detailed trace of the first messages after a start (how the bot sees dex messages on enabled servers)
+let debugLeft = 40;
+function debug(message, verdict) {
+    if (debugLeft <= 0) return;
+    debugLeft--;
+    const text = messageText(message).replace(/\s+/g, " ").trim();
+    const meta = message.interactionMetadata;
+    trace(
+        message,
+        `debug ${message.author?.username || message.author?.id} msg ${message.id}: type ${message.type}, ${text.length} chars "${text.slice(0, 80)}", ` +
+            `reply to ${message.reference?.messageId || "-"}, interaction ${meta ? meta.triggeringInteractionMetadata?.interactedMessageId || meta.interactedMessageId || "yes" : "-"}, ` +
+            `${message.components?.length || 0} components, edited ${message.editedTimestamp ? "yes" : "no"} -> ${verdict}`,
+    );
+}
+
 const noted = new Set();
 function noteOnce(key, log) {
     if (noted.has(key)) return;
@@ -172,11 +187,19 @@ async function isSpawnOf(message, spawnId) {
 /** Called for every new or edited message of a dex bot. */
 async function observe(message) {
     try {
-        if (!message.guildId || !rulesFor(message.author?.id)) return;
+        if (!message.guildId) return;
+        if (!rulesFor(message.author?.id)) {
+            if (SUPPORTED_BOT_IDS.includes(message.author?.id)) noteOnce(`rules:${message.author.id}`, () => trace(message, `No catch rules for ${BOT_NAMES[message.author.id]} (dex list)`));
+            return;
+        }
         const enabled = guildConfig(message.guildId).enabled;
-        if (getSpawnMessageData(message).isSpawn) return enabled ? rememberSpawn(message) : undefined;
+        if (getSpawnMessageData(message).isSpawn) {
+            if (enabled) debug(message, "spawn seen");
+            return enabled ? rememberSpawn(message) : undefined;
+        }
 
         const found = parseCatch(message);
+        if (enabled) debug(message, found ? (found.skip ? `skip: ${found.skip}` : `catch of ${found.ball} by <@${found.userId}>`) : "not a catch");
         if (!found) return;
         // Once per server and run: says why nothing happens there (helps when it "doesn't work")
         if (!enabled) return noteOnce(`off:${message.guildId}`, () => trace(message, "A catch was seen, but Catch stats are off on this server (no data saved)"));
