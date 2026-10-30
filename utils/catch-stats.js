@@ -13,7 +13,7 @@
  * How catch messages are recognized: utils/catch-phrases.js
  */
 
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageType, SnowflakeUtil } = require("discord.js");
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, SnowflakeUtil } = require("discord.js");
 const { getData, updateData, getSpawnMessageData } = require("./helpers");
 const { getDatabase } = require("./database");
 const { BOT_DATA_KEYS, BOT_NAMES } = require("./constants");
@@ -31,6 +31,7 @@ const DEFAULT_USER = { public: false, tracking: true };
 let client = null;
 const spawns = new Map(); // spawn message id -> { at, botId } (spawns seen on enabled servers)
 const handled = new Set(); // catch message ids already counted (create + edit events)
+const replyErrors = new Set(); // channel:error already reported (one log per channel and error)
 
 /* ----- Settings ----- */
 
@@ -113,17 +114,34 @@ function messageText(message) {
         .join("\n");
 }
 
+/**
+ * The spawn a catch answers. A catch is the dex bot's answer to the "Catch me!" button (via its name modal),
+ * so Discord links it to the spawn as a reply and/or in its interaction data.
+ */
+function spawnIdOf(message) {
+    const meta = message.interactionMetadata;
+    return message.reference?.messageId || meta?.interactedMessageId || meta?.triggeringInteractionMetadata?.interactedMessageId || null;
+}
+
+/** null: not a catch message. { skip }: looks like a catch but can't be used. Otherwise the catch. */
 function parseCatch(message) {
     const rules = PHRASES[message.author?.id];
-    if (!rules || message.type !== MessageType.Reply || !message.reference?.messageId) return null;
+    if (!rules) return null;
     const text = messageText(message);
     const lower = text.toLowerCase();
     if (!rules.phrases.some((phrase) => lower.includes(phrase.toLowerCase()))) return null;
     if ((rules.ignore || []).some((phrase) => lower.includes(phrase.toLowerCase()))) return null;
-    const userId = rules.user.exec(text)?.[1];
+    const userId = rules.user.exec(text)?.[1] || message.interactionMetadata?.user?.id;
     const ball = rules.ball.exec(text)?.[1]?.replace(/[!?.]+$/, "").trim();
-    if (!userId || !ball) return null;
-    return { userId, ball, spawnId: message.reference.messageId };
+    if (!userId || !ball) return { skip: `couldn't read the ${userId ? "ball" : "catcher"} (check utils/catch-phrases.js)` };
+    const spawnId = spawnIdOf(message);
+    if (!spawnId) return message.interactionMetadata ? { skip: `no link to the spawn message (type ${message.type})` } : null;
+    return { userId, ball, spawnId };
+}
+
+/** Catch stats activity in the Catches log channel (helps checking the catch phrases). */
+function trace(message, text) {
+    client?.log?.("CATCHES", `⏱️ [${message.guild?.name || message.guildId}] ${text}`);
 }
 
 function rememberSpawn(message) {
@@ -155,16 +173,18 @@ async function observe(message) {
         if (!found || handled.has(message.id)) return;
         handled.add(message.id);
         if (handled.size > 5000) handled.delete(handled.values().next().value);
+        if (found.skip) return trace(message, `Catch not counted: ${found.skip}`);
 
         if (!userSettings(found.userId).tracking) return;
-        if (!(await isSpawnOf(message, found.spawnId))) return;
+        if (!(await isSpawnOf(message, found.spawnId))) return trace(message, `Catch of ${found.ball} not counted: the message it answers isn't a ${BOT_NAMES[message.author.id] || "dex"} spawn`);
 
         // Both times come from Discord's message IDs: spawn sent -> catch answered
         const ms = Number(SnowflakeUtil.timestampFrom(message.id) - SnowflakeUtil.timestampFrom(found.spawnId));
-        if (!(ms > 0 && ms <= MAX_CATCH_MS)) return;
+        if (!(ms > 0 && ms <= MAX_CATCH_MS)) return trace(message, `Catch of ${found.ball} not counted: ${formatMs(ms)} is out of range`);
 
         const dexKey = BOT_DATA_KEYS[message.author.id];
         const result = await record({ userId: found.userId, guildId: message.guildId, dexKey, ball: found.ball, ms });
+        trace(message, `<@${found.userId}> caught ${found.ball} in ${formatMs(ms)} (${result.count} tracked)`);
         await reply(message, found, result);
     } catch (error) {
         client?.logError?.("Catch stats failed", error);
@@ -284,9 +304,13 @@ async function reply(message, found, result) {
     if (stats.length) lines.push(`-# ${stats.join(" · ")}`);
     if (result.firstCatch) lines.push("-# First catch tracked here. Stats are private unless you make them public: /catchstats settings");
 
-    await message
-        .reply({ content: lines.join("\n").slice(0, 1900), components: [buttons()], allowedMentions: { parse: [] } })
-        .catch(() => {}); // no permission to talk there: stats are still saved
+    // Stats are saved even when the bot can't answer there (missing Send Messages / Read Message History)
+    await message.reply({ content: lines.join("\n").slice(0, 1900), components: [buttons()], allowedMentions: { parse: [] } }).catch((error) => {
+        const key = `${message.channelId}:${error.code}`;
+        if (replyErrors.has(key)) return;
+        replyErrors.add(key);
+        client?.logError?.("Catch stats reply failed", `${message.guild?.name || message.guildId} <#${message.channelId}>: ${error.message}`);
+    });
 }
 
 /* ----- Reading ----- */
