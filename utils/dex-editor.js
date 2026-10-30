@@ -1,13 +1,13 @@
 const sharp = require("sharp");
 const { hashImageBuffer } = require("./helpers");
-const { BOT_NAMES, BOT_DATA_KEYS } = require("./constants");
+const { DEX_KEY_BY_NAME_ALL } = require("./constants");
 
 const API = "https://api.github.com";
 const PREVIEW_WIDTH = 200;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
-const DEX_KEYS = Object.fromEntries(Object.entries(BOT_NAMES).map(([botId, name]) => [name, BOT_DATA_KEYS[botId]]));
-const DEXES = Object.keys(DEX_KEYS);
+// Every dex on the list, turned-off ones too, so a new dex can be filled before it goes live (utils/dexes.js)
+const DEX_KEYS = DEX_KEY_BY_NAME_ALL;
 
 // Editable fields (collectors are managed on the Collectors tab and kept as they are)
 const FIELDS = { rarity: "number", artist: "string", wave: "number", id: "integer", common_value: "string", demand: "string", cc: "string" };
@@ -192,7 +192,7 @@ function cleanDetails(input = {}, existing = {}) {
 }
 
 function checkDex(dex) {
-    if (!DEXES.includes(dex)) throw userError("Unknown dex.");
+    if (!(typeof dex === "string" && dex in DEX_KEYS)) throw userError("Unknown dex.");
     return dex;
 }
 
@@ -416,4 +416,20 @@ function deleteEntry({ dex, name, actor = "owner" }) {
     });
 }
 
-module.exports = { untilDate, DEXES, DEX_KEYS, FIELDS, setClient, saveEntry, deleteEntry, cleanDetails };
+module.exports = {
+    untilDate,
+    DEX_KEYS,
+    FIELDS,
+    setClient,
+    saveEntry,
+    deleteEntry,
+    cleanDetails,
+    // GitHub helpers (also used by utils/dexes.js)
+    gh,
+    getBase,
+    readText,
+    commitFiles,
+    runExclusive,
+    githubConfig,
+    userError,
+};

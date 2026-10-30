@@ -6,13 +6,13 @@
  */
 
 const { getData, updateData } = require("./helpers");
-const { BOT_NAMES, BOT_DATA_KEYS } = require("./constants");
+const { DEX_KEY_BY_NAME, DEX_NAME_BY_KEY } = require("./constants");
 const collectorStore = require("./collector-store");
 const { isLinked, getStoredCollection } = require("./ballsdex");
 const catchStats = require("./catch-stats");
 
-const DEX_TO_KEY = Object.fromEntries(Object.entries(BOT_DATA_KEYS).map(([botId, key]) => [BOT_NAMES[botId], key]));
-const KEY_TO_DEX = Object.fromEntries(Object.entries(DEX_TO_KEY).map(([dex, key]) => [key, dex]));
+const DEX_TO_KEY = DEX_KEY_BY_NAME;
+const KEY_TO_DEX = DEX_NAME_BY_KEY;
 const LIMITS = { bio: 300, pronouns: 24, showcase: 6, search: 60 };
 const DEFAULTS = { public: false, bio: "", pronouns: "", favoriteDex: null, showcase: [], showBallsdex: false, showCollections: true };
 

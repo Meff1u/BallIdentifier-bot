@@ -23,30 +23,36 @@ const toSubcommandName = (name) =>
 const getBotIdFromSubcommand = (subcommandName) =>
     SUPPORTED_BOT_IDS.find((id) => toSubcommandName(BOT_NAMES[id]) === subcommandName);
 
-const slashBuilder = new SlashCommandBuilder()
-    .setName("info")
-    .setDescription("Get information about a countryball.")
-    .setContexts(InteractionContextType.BotDM, InteractionContextType.Guild, InteractionContextType.PrivateChannel);
+// Built on every use: the subcommands follow the dex list (it can change while the bot runs)
+function buildCommand() {
+    const slashBuilder = new SlashCommandBuilder()
+        .setName("info")
+        .setDescription("Get information about a countryball.")
+        .setContexts(InteractionContextType.BotDM, InteractionContextType.Guild, InteractionContextType.PrivateChannel);
 
-SUPPORTED_BOT_IDS.forEach((botId) => {
-    const botName = BOT_NAMES[botId];
+    SUPPORTED_BOT_IDS.forEach((botId) => {
+        const botName = BOT_NAMES[botId];
 
-    slashBuilder.addSubcommand((subcommand) =>
-        subcommand
-            .setName(toSubcommandName(botName))
-            .setDescription(`Get information about a ${botName} entry.`)
-            .addStringOption((option) =>
-                option
-                    .setName("name")
-                    .setDescription("Name or ID of entry to get info about.")
-                    .setRequired(true)
-                    .setAutocomplete(true),
-            ),
-    );
-});
+        slashBuilder.addSubcommand((subcommand) =>
+            subcommand
+                .setName(toSubcommandName(botName))
+                .setDescription(`Get information about a ${botName} entry.`)
+                .addStringOption((option) =>
+                    option
+                        .setName("name")
+                        .setDescription("Name or ID of entry to get info about.")
+                        .setRequired(true)
+                        .setAutocomplete(true),
+                ),
+        );
+    });
+    return slashBuilder;
+}
 
 module.exports = {
-    data: slashBuilder,
+    get data() {
+        return buildCommand();
+    },
     async execute(interaction) {
         const { client, options } = interaction;
         const subcommand = options.getSubcommand();

@@ -1,39 +1,38 @@
 /**
- * How Catch stats recognizes a catch message of each dex bot. EDIT THIS FILE to match each bot's real messages.
+ * How Catch stats recognizes a catch message of each dex bot.
  *
- * A catch message must be a reply to the spawn message (the bot answers the "Catch me!" button).
- * For every dex bot:
+ * The phrases are set per dex on the website (Moderation -> Dexes -> Catch phrases) and saved in
+ * assets/jsons/dexes.json; dexes without their own list use DEFAULT_CATCH below.
+ *
+ * A catch message answers the spawn message (the dex bot's reply to the "Catch me!" button).
  *   phrases  - the message counts as a catch when its text contains ANY of these (case-insensitive)
  *   ignore   - ...unless it also contains any of these (e.g. "wrong name" answers)
  *   user     - pattern whose first group is the catcher's Discord ID (usually their mention)
- *   ball     - pattern whose first group is the ball's name (usually the first **bold** text)
- *
- * Lines starting with ">" (quotes) are ignored before matching.
- * Tip: copy a real catch message from Discord (with "Copy Text") and check the patterns against it.
+ *   ball     - pattern whose first group is the ball's name (the first **bold** text)
+ * Lines starting with ">" (quotes, e.g. custom catch phrases of players) are ignored before matching.
  */
+
+const { DEX_REGISTRY } = require("./constants");
 
 const MENTION = /<@!?(\d{17,20})>/;
 const FIRST_BOLD = /\*\*(.+?)\*\*/;
 
-// Ballsdex wording (checked); the other dexes start from the same template, change them if they write it differently
-const DEFAULT = {
+// Ballsdex wording (checked)
+const DEFAULT_CATCH = {
     phrases: ["You caught", "secured!", "almost slipped away but", "has joined your collection!"],
-    ignore: ["Wrong name", "wrong name", "already been caught", "not the right"],
-    user: MENTION,
-    ball: FIRST_BOLD,
+    ignore: ["Wrong name", "already been caught", "not the right"],
 };
 
-module.exports = {
-    // Ballsdex
-    "999736048596816014": { ...DEFAULT },
-    // HistoryDex
-    "1120942938126553190": { ...DEFAULT },
-    // JoJoDex
-    "1425109627636285511": { ...DEFAULT },
-    // Empireballs Reboot
-    "1500173453880197162": { ...DEFAULT },
-    // MapsDex
-    "1406796704807915630": { ...DEFAULT },
-    // FlagsDex
-    "1485343094064021625": { ...DEFAULT },
-};
+/** Rules for one dex bot, or null when it isn't an enabled dex. */
+function rulesFor(botId) {
+    const dex = DEX_REGISTRY.find((entry) => entry.botId === botId && entry.enabled);
+    if (!dex) return null;
+    return {
+        phrases: dex.catchPhrases?.length ? dex.catchPhrases : DEFAULT_CATCH.phrases,
+        ignore: dex.catchIgnore ?? DEFAULT_CATCH.ignore,
+        user: MENTION,
+        ball: FIRST_BOLD,
+    };
+}
+
+module.exports = { DEFAULT_CATCH, rulesFor };

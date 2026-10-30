@@ -30,8 +30,6 @@ const {
 } = require("../utils/helpers");
 
 
-// Bot config with dex names
-const BOT_CONFIG = Object.fromEntries(SUPPORTED_BOT_IDS.map((id) => [id, { dex: BOT_NAMES[id], dKey: BOT_DATA_KEYS[id] }]));
 
 module.exports = {
     data: new ContextMenuCommandBuilder().setName("Identify").setType(ApplicationCommandType.Message).setContexts(InteractionContextType.Guild),
@@ -63,7 +61,7 @@ module.exports = {
             });
         }
 
-        const config = BOT_CONFIG[message.author.id];
+        const config = { dex: BOT_NAMES[message.author.id], dKey: BOT_DATA_KEYS[message.author.id] };
         const hashes = client.hashes?.[config.dKey];
         if (!hashes) {
             return interaction.reply({

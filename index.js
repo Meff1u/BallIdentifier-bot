@@ -8,6 +8,7 @@ const { closeDatabase, initializeDatabase } = require("./utils/database");
 
 const TOKEN = process.env.TOKEN;
 const { PRIVATE_GUILD_ID } = require("./utils/constants");
+const dexes = require("./utils/dexes");
 const PRIVATE_COMMANDS = ["refresh", "msg", "bdcompare"];
 
 const client = new Client({
@@ -41,14 +42,12 @@ const commandFiles = fs.readdirSync(commandsPath).filter((file) =>
     file.endsWith("-slash.js") || file.endsWith("-context.js")
 );
 
-const slashCommandsArray = commandFiles.reduce((acc, file) => {
+for (const file of commandFiles) {
     const command = require(path.join(commandsPath, file));
-    if (command.data && command.execute) {
-        client.slashCommands.set(command.data.name, command);
-        acc.push(command.data.toJSON());
-    }
-    return acc;
-}, []);
+    if (command.data && command.execute) client.slashCommands.set(command.data.name, command);
+}
+// Built when registering: /info has a subcommand per dex, and the dex list can change while the bot runs
+const commandJson = () => [...client.slashCommands.values()].map((command) => command.data.toJSON());
 
 // Load events
 const eventsPath = path.join(__dirname, "events");
@@ -66,15 +65,10 @@ client.on("shardDisconnect", async () => {
     await flushAllBatches(client);
 });
 
-client.once("clientReady", async () => {
+async function registerCommands() {
     const rest = new REST({ version: "10" }).setToken(TOKEN);
     const appId = client.user.id;
-
-    try {
-        await initializeDatabase();
-    } catch (error) {
-        client.logError("MongoDB unavailable", error.message);
-    }
+    const slashCommandsArray = commandJson();
 
     // Separate global and private commands
     const globalCommands = slashCommandsArray.filter((cmd) => !PRIVATE_COMMANDS.includes(cmd.name));
@@ -96,6 +90,23 @@ client.once("clientReady", async () => {
     }
 
     await Promise.allSettled(registrations);
+}
+
+client.once("clientReady", async () => {
+    try {
+        await initializeDatabase();
+    } catch (error) {
+        client.logError("MongoDB unavailable", error.message);
+    }
+
+    await dexes.ready();
+    await registerCommands();
+    // A dex turned on, off or added: /info gets its subcommands again
+    let pending = null;
+    dexes.onChange(() => {
+        clearTimeout(pending);
+        pending = setTimeout(() => registerCommands().catch((error) => client.logError("Re-registering commands failed", error)), 2000);
+    });
 
     // Initialize and start Express server
     initializeServer(client);

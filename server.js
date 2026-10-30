@@ -28,6 +28,7 @@ const notifications = require("./utils/notifications");
 const collectorStore = require("./utils/collector-store");
 const specials = require("./utils/specials");
 const dexEditor = require("./utils/dex-editor");
+const dexes = require("./utils/dexes");
 const profiles = require("./utils/profiles");
 const catchStats = require("./utils/catch-stats");
 
@@ -55,12 +56,20 @@ const jsonBody = (limit) =>
         },
     });
 const smallJson = jsonBody("1kb");
-// Routes with their own, bigger body limit: dex art uploads
-const BIG_BODY_PATH = /^\/api\/users\/\d{17,20}\/dex\/save$/;
+// Routes with their own, bigger body limit: dex art uploads, new dex icons
+const BIG_BODY_PATH = /^\/api\/users\/\d{17,20}\/(dex\/save|admin\/dexes\/add)$/;
 // Profile settings (bio, showcase) don't fit in 1 KB
 const PROFILE_BODY_PATH = /^\/api\/users\/\d{17,20}\/profile$/;
 const profileJson = jsonBody("8kb");
-app.use((req, res, next) => (BIG_BODY_PATH.test(req.path) ? next() : PROFILE_BODY_PATH.test(req.path) ? profileJson(req, res, next) : smallJson(req, res, next)));
+// Dex settings (catch phrase lists)
+const DEX_SETTINGS_PATH = /^\/api\/users\/\d{17,20}\/admin\/dexes\/(update|delete)$/;
+const dexSettingsJson = jsonBody("16kb");
+app.use((req, res, next) => {
+    if (BIG_BODY_PATH.test(req.path)) return next();
+    if (PROFILE_BODY_PATH.test(req.path)) return profileJson(req, res, next);
+    if (DEX_SETTINGS_PATH.test(req.path)) return dexSettingsJson(req, res, next);
+    return smallJson(req, res, next);
+});
 
 let client;
 
@@ -766,6 +775,59 @@ app.post("/api/users/:userId/admin/refresh-data", apiLimiter, verifySignature, r
     } catch (error) {
         client?.logError?.("Manual dex data refresh failed", error);
         res.status(502).json({ error: "Couldn't refresh the dex data. Check the Errors log." });
+    }
+});
+
+// Supported dexes (owner, Moderation -> Dexes): list, add, turn on/off, settings, delete; committed to the website repo
+const dexListError = (res, error, what) => {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    client?.logError?.(what, error);
+    return res.status(502).json({ error: error.message.startsWith("GitHub") ? error.message : `${what}. Check the Errors log.` });
+};
+
+app.get("/api/users/:userId/admin/dexes", apiLimiter, verifySignature, requireOwner, (req, res) => {
+    res.status(200).json(dexes.overview(client));
+});
+
+app.post("/api/users/:userId/admin/dexes/add", apiLimiter, jsonBody("4mb"), verifySignature, requireOwner, async (req, res) => {
+    try {
+        const { name, botId, key, waves, enabled, icon, announce } = req.body || {};
+        if (icon !== undefined && icon !== null && typeof icon !== "string") return res.status(400).json({ error: "Invalid icon" });
+        await dexes.addDex({ name, botId, key, waves: waves === true, enabled: enabled === true, icon: icon ? Buffer.from(icon, "base64") : null, announce: announce !== false });
+        client?.log?.("SYSTEM", `🧩 Owner added the dex ${name} (${enabled === true ? "on" : "off"})`);
+        res.status(200).json({ success: true, ...dexes.overview(client) });
+    } catch (error) {
+        dexListError(res, error, "Couldn't add the dex");
+    }
+});
+
+app.post("/api/users/:userId/admin/dexes/update", apiLimiter, verifySignature, requireOwner, async (req, res) => {
+    try {
+        const { name, enabled, waves, incomplete, catchPhrases, catchIgnore, announce } = req.body || {};
+        if (typeof name !== "string") return res.status(400).json({ error: "Invalid dex" });
+        const input = { announce: announce !== false };
+        if (typeof enabled === "boolean") input.enabled = enabled;
+        if (typeof waves === "boolean") input.waves = waves;
+        if (typeof incomplete === "boolean") input.incomplete = incomplete;
+        if (Array.isArray(catchPhrases)) input.catchPhrases = catchPhrases;
+        if (Array.isArray(catchIgnore)) input.catchIgnore = catchIgnore;
+        await dexes.updateDex(name, input);
+        if (input.enabled !== undefined) client?.log?.("SYSTEM", `🧩 Owner turned the dex ${name} ${input.enabled ? "on" : "off"}`);
+        res.status(200).json({ success: true, ...dexes.overview(client) });
+    } catch (error) {
+        dexListError(res, error, "Couldn't save the dex");
+    }
+});
+
+app.post("/api/users/:userId/admin/dexes/delete", apiLimiter, verifySignature, requireOwner, async (req, res) => {
+    try {
+        const { name, confirm, announce } = req.body || {};
+        if (typeof name !== "string" || confirm !== name) return res.status(400).json({ error: "Type the dex name to confirm." });
+        const result = await dexes.deleteDex(name, { announce: announce !== false });
+        client?.log?.("SYSTEM", `🗑️ Owner deleted the dex ${name} (${result.removedFiles} files)`);
+        res.status(200).json({ success: true, removedFiles: result.removedFiles, ...dexes.overview(client) });
+    } catch (error) {
+        dexListError(res, error, "Couldn't delete the dex");
     }
 });
 

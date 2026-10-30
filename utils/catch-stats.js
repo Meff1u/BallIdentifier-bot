@@ -10,14 +10,14 @@
  * Storage (MongoDB): catchEvents (one per catch, kept 35 days, for 7/30-day numbers),
  * catchStats (per-user all-time totals), catchGuilds (server records). Settings live in data.json:
  * users[id].catchStats = { public, tracking }, guilds[id].catchStats = { enabled, mode, lines, ... }.
- * How catch messages are recognized: utils/catch-phrases.js
+ * How catch messages are recognized: utils/catch-phrases.js (phrases are set per dex on the website)
  */
 
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle, SnowflakeUtil } = require("discord.js");
 const { getData, updateData, getSpawnMessageData } = require("./helpers");
 const { getDatabase } = require("./database");
-const { BOT_DATA_KEYS, BOT_NAMES } = require("./constants");
-const PHRASES = require("./catch-phrases");
+const { BOT_DATA_KEYS, BOT_NAMES, DEX_NAME_BY_KEY } = require("./constants");
+const { rulesFor } = require("./catch-phrases");
 
 const MAX_CATCH_MS = 60 * 60 * 1000; // slower than an hour isn't a reaction time (the spawn sat there)
 const EVENT_TTL_SEC = 35 * 24 * 60 * 60;
@@ -94,7 +94,7 @@ const decodeBallKey = (key) => {
     const [dexKey, ...rest] = key.split(":");
     return { dexKey, ball: decodeURIComponent(rest.join(":")) };
 };
-const DEX_NAMES = Object.fromEntries(Object.entries(BOT_DATA_KEYS).map(([botId, key]) => [key, BOT_NAMES[botId]]));
+const DEX_NAMES = DEX_NAME_BY_KEY;
 
 function messageText(message) {
     const parts = [message.content || ""];
@@ -125,7 +125,7 @@ function spawnIdOf(message) {
 
 /** null: not a catch message. { skip }: looks like a catch but can't be used. Otherwise the catch. */
 function parseCatch(message) {
-    const rules = PHRASES[message.author?.id];
+    const rules = rulesFor(message.author?.id);
     if (!rules) return null;
     const text = messageText(message);
     const lower = text.toLowerCase();
@@ -165,7 +165,7 @@ async function isSpawnOf(message, spawnId) {
 /** Called for every new or edited message of a dex bot. */
 async function observe(message) {
     try {
-        if (!message.guildId || !PHRASES[message.author?.id]) return;
+        if (!message.guildId || !rulesFor(message.author?.id)) return;
         if (!guildConfig(message.guildId).enabled) return;
         if (getSpawnMessageData(message).isSpawn) return rememberSpawn(message);
 

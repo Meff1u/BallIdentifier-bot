@@ -8,7 +8,8 @@ const MISSING_PROFILE_TTL_MS = 24 * 60 * 60 * 1000;
 const PROFILE_FETCH_GAP_MS = 250;
 const DAILY_ADD_LIMIT = 20; // adds per user per 24 h
 const MAX_SELF_ENTRIES = 300; // self entries per user, all dexes
-const DEX_KEYS = new Set(Object.values(BOT_DATA_KEYS));
+// Enabled dexes only (the list can change while the bot runs)
+const DEX_KEYS = { has: (key) => Object.values(BOT_DATA_KEYS).includes(key) };
 
 let client = null;
 let ready = false;

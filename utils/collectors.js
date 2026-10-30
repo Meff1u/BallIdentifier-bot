@@ -14,7 +14,7 @@ const { randomUUID } = require("crypto");
 
 const { SUPPORTED_BOT_IDS, BOT_NAMES, BOT_DATA_KEYS, COLORS, ASSETS_BASE_URL } = require("./constants");
 
-const DEX_OF_KEY = Object.fromEntries(Object.entries(BOT_DATA_KEYS).map(([botId, key]) => [key, BOT_NAMES[botId]]));
+const { DEX_NAME_BY_KEY: DEX_OF_KEY } = require("./constants");
 
 const PAGE_SIZE = 25;
 const COLLECTOR_SESSION_TTL = 15 * 60 * 1000;

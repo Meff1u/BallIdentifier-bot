@@ -12,7 +12,7 @@ const { ADMIN_ID } = require("./constants");
 const { downloadBuffer } = require("./helpers");
 const dexEditor = require("./dex-editor");
 
-const KEY_TO_DEX = Object.fromEntries(Object.entries(dexEditor.DEX_KEYS).map(([dex, key]) => [key, dex]));
+const { DEX_NAME_BY_KEY: KEY_TO_DEX } = require("./constants");
 const EXTRA_FIELDS = ["wave", "common_value", "demand", "cc"];
 const PENDING_TTL_MS = 15 * 60 * 1000;
 const pending = new Map(); // token -> { at, ...save options, messageId, channelId }

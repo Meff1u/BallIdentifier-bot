@@ -2,35 +2,47 @@
  * Shared constants used across the application
  */
 
-// Supported bot IDs for identification
-const SUPPORTED_BOT_IDS = [
-    "999736048596816014",    // Ballsdex
-    "1120942938126553190",   // HistoryDex
-    "1425109627636285511",   // JoJoDex
-    "1500173453880197162",   // Empireballs Reboot
-    "1406796704807915630",   // MapsDex
-    "1485343094064021625"    // FlagsDex
+/*
+ * Supported dexes. The list lives in the website repo (assets/jsons/dexes.json, edited on the website:
+ * Moderation -> Dexes) and is loaded by utils/dexes.js, which updates these objects in place.
+ * The values below are only the fallback until it loads. Only enabled dexes are in the three maps.
+ */
+const DEX_REGISTRY = [
+    { name: "Ballsdex", botId: "999736048596816014", key: "BD", enabled: true, waves: true, previousArts: true },
+    { name: "HistoryDex", botId: "1120942938126553190", key: "HD", enabled: true },
+    { name: "JoJoDex", botId: "1425109627636285511", key: "JD", enabled: true },
+    { name: "Empireballs Reboot", botId: "1500173453880197162", key: "EB", enabled: true },
+    { name: "MapsDex", botId: "1406796704807915630", key: "MD", enabled: true },
+    { name: "FlagsDex", botId: "1485343094064021625", key: "FD", enabled: true },
 ];
 
+// Supported bot IDs for identification
+const SUPPORTED_BOT_IDS = DEX_REGISTRY.map((dex) => dex.botId);
 // Bot ID to name mapping
-const BOT_NAMES = {
-    "999736048596816014": "Ballsdex",
-    "1120942938126553190": "HistoryDex",
-    "1425109627636285511": "JoJoDex",
-    "1500173453880197162": "Empireballs Reboot",
-    "1406796704807915630": "MapsDex",
-    "1485343094064021625": "FlagsDex"
-};
-
+const BOT_NAMES = Object.fromEntries(DEX_REGISTRY.map((dex) => [dex.botId, dex.name]));
 // Bot ID to data key mapping
-const BOT_DATA_KEYS = {
-    "999736048596816014": "BD",
-    "1120942938126553190": "HD",
-    "1425109627636285511": "JD",
-    "1500173453880197162": "EB",
-    "1406796704807915630": "MD",
-    "1485343094064021625": "FD"
-};
+const BOT_DATA_KEYS = Object.fromEntries(DEX_REGISTRY.map((dex) => [dex.botId, dex.key]));
+
+/** Read-only map that is rebuilt on every access (stays right when the dex list changes). */
+const liveMap = (build) =>
+    new Proxy(
+        {},
+        {
+            get: (_, key) => (typeof key === "string" ? build()[key] : undefined),
+            has: (_, key) => key in build(),
+            ownKeys: () => Reflect.ownKeys(build()),
+            getOwnPropertyDescriptor: (_, key) => {
+                const map = build();
+                return key in map ? { value: map[key], enumerable: true, configurable: true, writable: false } : undefined;
+            },
+        },
+    );
+// Enabled dexes: name -> data key
+const DEX_KEY_BY_NAME = liveMap(() => Object.fromEntries(Object.entries(BOT_DATA_KEYS).map(([botId, key]) => [BOT_NAMES[botId], key])));
+// Every dex on the list, turned-off ones too (the owner can fill a dex before turning it on): name -> data key
+const DEX_KEY_BY_NAME_ALL = liveMap(() => Object.fromEntries(DEX_REGISTRY.map((dex) => [dex.name, dex.key])));
+// Every known dex (disabled ones too, for old data): data key -> name
+const DEX_NAME_BY_KEY = liveMap(() => Object.fromEntries(DEX_REGISTRY.map((dex) => [dex.key, dex.name])));
 
 // URLs
 const ASSETS_BASE_URL = "https://raw.githubusercontent.com/Meff1u/BallIdentifier/refs/heads/main/assets";
@@ -72,6 +84,10 @@ const MATCH_THRESHOLD_OVERRIDES = {
 };
 
 module.exports = {
+    DEX_REGISTRY,
+    DEX_KEY_BY_NAME,
+    DEX_KEY_BY_NAME_ALL,
+    DEX_NAME_BY_KEY,
     SUPPORTED_BOT_IDS,
     BOT_NAMES,
     BOT_DATA_KEYS,

@@ -8,6 +8,7 @@ const { getData, updateData, writeJsonFile, readJsonFile, getAssetsPath } = requ
 const notifications = require("../utils/notifications");
 const collectorStore = require("../utils/collector-store");
 const { sendDueSyncReminders, resumeInterruptedSyncs } = require("../utils/ballsdex");
+const dexes = require("../utils/dexes");
 
 // Local constants
 const UPVOTES_PATH = getAssetsPath("upvotes.json");
@@ -16,12 +17,8 @@ const DBL_POLL_INTERVAL = 180000; // 3 minutes
 const REMINDER_INTERVAL = 60 * 1000; // due "sync available" reminders
 const CHANGELOG_URL = `${ASSETS_BASE_URL.replace(/\/assets$/, "")}/changelog.json`;
 
-const HASH_URLS = Object.fromEntries(
-    Object.entries(BOT_DATA_KEYS).map(([botId, key]) => [
-        key,
-        `${ASSETS_BASE_URL}/jsons/${BOT_NAMES[botId]}`,
-    ])
-);
+// Enabled dexes only (the list can change while the bot runs: utils/dexes.js)
+const hashUrls = () => Object.fromEntries(Object.entries(BOT_DATA_KEYS).map(([botId, key]) => [key, `${ASSETS_BASE_URL}/jsons/${BOT_NAMES[botId]}`]));
 
 module.exports = {
     name: "clientReady",
@@ -32,6 +29,7 @@ module.exports = {
         
         notifications.setClient(client);
         collectorStore.init(client);
+        await dexes.ready(); // supported dexes (from the website repo) before anything uses them
 
         // Initialize DBL client
         client.dbl = createDjsClient(process.env.DBL_TOKEN, client);
@@ -46,7 +44,7 @@ module.exports = {
             const hashes = { ...client.hashes };
             const rarities = { ...client.rarities };
 
-            const fetchPromises = Object.entries(HASH_URLS).map(async ([key, url]) => {
+            const fetchPromises = Object.entries(hashUrls()).map(async ([key, url]) => {
                 try {
                     const [raritiesRes, hashesRes] = await Promise.all([
                         fetch(`${url}.json`),
@@ -173,8 +171,11 @@ module.exports = {
         };
 
         // Start refresh loop
+        // A dex turned on, off or added: load its data right away
+        dexes.onChange(() => client.fetchHashes().catch((error) => console.error("[DATAS] ❌ Reload after a dex change failed:", error.message)));
         const refreshLoop = async () => {
             try {
+                await dexes.load();
                 await client.fetchHashes();
                 await client.fetchUpvotes();
                 await client.postDBLStats();
