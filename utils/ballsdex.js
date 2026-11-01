@@ -201,6 +201,10 @@ let ipRateLimits = null; // { at, limits }
 
 const hashKey = (cred) => `user:${cred.userId}`;
 
+// Keys whose last successful response had no rate limit headers (an unlimited key that bypasses the shared IP
+// limit): their syncs don't wait, don't stop for the IP quota and ignore IP lockouts.
+const unlimitedKeys = new Set();
+
 function parseRateLimitList(value) {
     const out = new Map();
     for (const part of String(value || "").split(",")) {
@@ -266,7 +270,7 @@ function remainingToday(snapshot, name) {
  * IP_DAY_RESERVE requests for everyone else, and the user's own key must have a request left.
  */
 function assertQuota(cred) {
-    const ipDay = viewRateLimits(ipRateLimits)?.limits.find((entry) => entry.name === "ip_day");
+    const ipDay = unlimitedKeys.has(hashKey(cred)) ? null : viewRateLimits(ipRateLimits)?.limits.find((entry) => entry.name === "ip_day");
     const ipLeft = ipDay ? ipDay.remaining : null;
     if (ipLeft !== null && ipLeft <= Math.ceil(ipDay.limit * IP_DAY_RESERVE_SHARE)) {
         const error = syncError("BallIdentifier has used most of today's Ballsdex API requests.", "QUOTA");
@@ -362,7 +366,8 @@ function lockScope(scope, ms) {
 /** How long (ms) a request for this path has to wait before it may be sent; 0 when it can go now. */
 function lockedFor(cred, path) {
     const now = Date.now();
-    const scopes = ["ip", hashKey(cred), ...(path.startsWith("/players") ? [`${hashKey(cred)}:player`] : [])];
+    // A key without limits doesn't count toward the shared IP limit, so the IP's lockouts don't concern it
+    const scopes = [...(unlimitedKeys.has(hashKey(cred)) ? [] : ["ip"]), hashKey(cred), ...(path.startsWith("/players") ? [`${hashKey(cred)}:player`] : [])];
     let wait = 0;
     for (const scope of scopes) {
         const until = lockouts.get(scope) || 0;
@@ -448,6 +453,10 @@ async function ballsdexFetch(cred, path, query = {}, { retry = true, maxWaitMs =
         }
         recordRateLimits(cred, response.headers);
         noteLockouts(cred, path, response);
+        if (response.ok) {
+            if (hasNoRateLimits(response.headers)) unlimitedKeys.add(hashKey(cred));
+            else unlimitedKeys.delete(hashKey(cred));
+        }
 
         // The access token was revoked or expired early: get a new one once, then give up
         if (response.status === 401 && !cred.token && !refreshed) {
