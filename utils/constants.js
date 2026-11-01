@@ -95,6 +95,7 @@ const SPECIAL_ONLY_BALLS = new Map([
     [36, [443]], // Event PLC
     [37, [152, 443]], // Ballsdex Games Souvenir
     [44, [152]], // Event Djibouti
+    [48, [5, 231, 115, 13, 24, 11, 50, 45, 44, 6, 71, 57, 34, 33, 344, 8, 20, 41]], // World Cup 2026
 ]);
 
 module.exports = {
