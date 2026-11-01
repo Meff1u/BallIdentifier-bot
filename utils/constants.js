@@ -91,6 +91,7 @@ const MATCH_THRESHOLD_OVERRIDES = {
 const SPECIAL_ONLY_BALLS = new Map([
     [5, [153]], // Event Reichtangle
     [12, [255]], // Event BE
+    [28, [156]], // Event RE
     [36, [443]], // Event PLC
     [37, [152, 443]], // Ballsdex Games Souvenir
     [44, [152]], // Event Djibouti

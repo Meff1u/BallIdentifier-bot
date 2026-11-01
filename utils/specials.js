@@ -15,6 +15,10 @@ const seed = require("./specials-seed");
 const OFFICIAL_TTL_MS = 6 * 60 * 60 * 1000;
 const MARKET_TTL_MS = 60 * 60 * 1000;
 const ALL_TIME_WINDOW = 3650; // clamped by Ballsdex to the longest history it keeps
+// Market fetches run inside a background refresh, so they can wait out a short rate limit instead of failing
+const MARKET_FETCH = { maxWaitMs: 60 * 1000, retries: 3, timeoutMs: 15000 };
+// With no market data at all, the next refresh comes this soon instead of after OFFICIAL_TTL_MS
+const MARKET_RETRY_MS = 15 * 60 * 1000;
 const EDITABLE = {
     alias: 60,
     emoji: 40,
@@ -29,6 +33,12 @@ let official = { at: 0, specials: [], market: [], windowDays: null, marketAll: [
 const marketCache = new Map(); // id -> { at, data } or { at, promise }
 let refreshing = null;
 let edits = null; // Map id -> fields
+let client = null;
+
+function log(message) {
+    if (client?.log) client.log("SPECIALS", message);
+    else console.log(`[SPECIALS] ${message}`);
+}
 
 function ballsdex() {
     return require("./ballsdex"); // lazy: ballsdex.js loads a lot
@@ -52,22 +62,32 @@ async function fetchOfficial() {
         cursor = page.next_cursor || undefined;
     } while (cursor);
 
-    // Market data is optional
-    const recent = await ballsdexRequest(owner, "/market/specials", { window: 30 }, INTERACTIVE).catch(() => null);
-    const all = await ballsdexRequest(owner, "/market/specials", { window: ALL_TIME_WINDOW }, INTERACTIVE).catch(() => null);
+    // Market data is optional: a failed fetch keeps the previous numbers instead of hiding every Market button
+    let marketError = null;
+    const onMarketError = (error) => {
+        marketError ??= error;
+        return null;
+    };
+    const recent = await ballsdexRequest(owner, "/market/specials", { window: 30 }, MARKET_FETCH).catch(onMarketError);
+    const all = await ballsdexRequest(owner, "/market/specials", { window: ALL_TIME_WINDOW }, MARKET_FETCH).catch(onMarketError);
+    if (marketError) log(`⚠️ Specials market data not refreshed (keeping the previous numbers): ${marketError.message}`);
     return {
         specials,
-        market: recent?.items || [],
-        windowDays: recent?.window_days ?? null,
-        marketAll: all?.items || [],
-        allWindowDays: all?.window_days ?? null,
+        market: recent ? recent.items || [] : official.market,
+        windowDays: recent ? (recent.window_days ?? null) : official.windowDays,
+        marketAll: all ? all.items || [] : official.marketAll,
+        allWindowDays: all ? (all.window_days ?? null) : official.allWindowDays,
     };
 }
 
 async function refreshOfficial(force = false) {
     if (!force && Date.now() - official.at < OFFICIAL_TTL_MS) return official;
     refreshing ??= fetchOfficial()
-        .then((result) => (official = { at: Date.now(), ...result, error: null }))
+        .then((result) => {
+            official = { at: Date.now(), ...result, error: null };
+            // No market data at all (nothing older to show either): try again soon instead of in 6 hours
+            if (!official.market.length && !official.marketAll.length) official.at = Date.now() - OFFICIAL_TTL_MS + MARKET_RETRY_MS;
+        })
         .catch((error) => {
             // keep what we had; try again in 15 minutes, or once the rate limit is over (at least a minute)
             const retryMs = error.retryAfterSec ? Math.min(15 * 60, Math.max(60, error.retryAfterSec)) * 1000 : 15 * 60 * 1000;
@@ -263,4 +283,4 @@ async function updateSpecial(actorId, id, patch) {
     return fields;
 }
 
-module.exports = { getSpecials, getSpecialMarket, specialsForBall, updateSpecial, refreshOfficial, EDITABLE };
+module.exports = { getSpecials, getSpecialMarket, specialsForBall, updateSpecial, refreshOfficial, setClient: (discordClient) => (client = discordClient), EDITABLE };

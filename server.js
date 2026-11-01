@@ -79,6 +79,7 @@ const initializeServer = (c) => {
     dexEditor.setClient(c);
     profiles.setClient(c);
     catchStats.setClient(c);
+    specials.setClient(c);
     require("./utils/ballsdex").setClient(c);
 };
 
