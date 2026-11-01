@@ -31,6 +31,7 @@ const specialCollectors = require("./utils/special-collectors");
 const specials = require("./utils/specials");
 const dexEditor = require("./utils/dex-editor");
 const dexes = require("./utils/dexes");
+const deploy = require("./utils/deploy");
 const profiles = require("./utils/profiles");
 const catchStats = require("./utils/catch-stats");
 const contact = require("./utils/contact");
@@ -83,6 +84,7 @@ let client;
 const initializeServer = (c) => {
     client = c;
     dexEditor.setClient(c);
+    deploy.setClient(c);
     profiles.setClient(c);
     catchStats.setClient(c);
     specials.setClient(c);
@@ -874,6 +876,26 @@ app.post("/api/users/:userId/admin/dexes/delete", apiLimiter, verifySignature, r
         res.status(200).json({ success: true, removedFiles: result.removedFiles, ...dexes.overview(client) });
     } catch (error) {
         dexListError(res, error, "Couldn't delete the dex");
+    }
+});
+
+// Website deploys (owner, Moderation -> Deploy): dex changes wait here until the owner presses Deploy (see utils/deploy.js)
+app.get("/api/users/:userId/admin/deploy", apiLimiter, verifySignature, requireOwner, (req, res) => {
+    try {
+        res.status(200).json(deploy.status());
+    } catch (error) {
+        client?.logError?.("Couldn't read the deploy list", error);
+        res.status(500).json({ error: "Couldn't read the deploy list. Check the Errors log." });
+    }
+});
+
+app.post("/api/users/:userId/admin/deploy", apiLimiter, verifySignature, requireOwner, async (req, res) => {
+    try {
+        res.status(200).json({ success: true, ...(await deploy.trigger()) });
+    } catch (error) {
+        if (error.status) return res.status(error.status).json({ error: error.message });
+        client?.logError?.("Website deploy failed", error);
+        res.status(502).json({ error: "Netlify didn't accept the deploy. Check the Errors log." });
     }
 });
 

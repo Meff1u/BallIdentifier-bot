@@ -1,6 +1,7 @@
 const sharp = require("sharp");
 const { hashImageBuffer } = require("./helpers");
 const { DEX_KEY_BY_NAME_ALL } = require("./constants");
+const deploy = require("./deploy");
 
 const API = "https://api.github.com";
 const PREVIEW_WIDTH = 200;
@@ -91,8 +92,12 @@ async function fileSha(path, base) {
     return meta?.sha || null;
 }
 
-/** files: [{ path, content } | { path, buffer } | { path, sha } | { path, remove: true }] */
-async function commitFiles(base, files, message) {
+/**
+ * files: [{ path, content } | { path, buffer } | { path, sha } | { path, remove: true }]
+ * With NETLIFY_BUILD_HOOK set the commit doesn't deploy by itself and is listed as waiting for Deploy (utils/deploy.js).
+ * details: human-readable changes shown in that list.
+ */
+async function commitFiles(base, files, message, details = []) {
     const { branch } = githubConfig();
     const tree = await Promise.all(
         files.map(async (file) => {
@@ -105,8 +110,13 @@ async function commitFiles(base, files, message) {
         }),
     );
     const newTree = await gh("/git/trees", { method: "POST", body: { base_tree: base.treeSha, tree } });
-    const commit = await gh("/git/commits", { method: "POST", body: { message, tree: newTree.sha, parents: [base.commitSha] } });
+    const commit = await gh("/git/commits", { method: "POST", body: { message: deploy.commitMessage(message), tree: newTree.sha, parents: [base.commitSha] } });
     await gh(`/git/refs/heads/${encodeURIComponent(branch)}`, { method: "PATCH", body: { sha: commit.sha, force: false } });
+    try {
+        deploy.record({ title: message, changes: details, sha: commit.sha, url: commit.html_url || null });
+    } catch (error) {
+        client?.logError?.("Couldn't note the change for the next deploy", error);
+    }
     return commit;
 }
 
@@ -367,7 +377,7 @@ function saveEntry({ dex, originalName = null, name, details, image = null, shif
             { path: "changelog.json", content: addChangelog(rawChangelog, dex, changes) },
         );
 
-        const commit = await commitFiles(base, files, `${dex}: ${isNew ? "add" : "update"} ${newName} (${actor})`);
+        const commit = await commitFiles(base, files, `${dex}: ${isNew ? "add" : "update"} ${newName} (${actor})`, changes);
         applyLocally(dex, next, nextHashes);
         client?.logGeneral?.(`Dex editor (${actor}): ${dex} · ${changes.join(" · ")}`);
         return { dex, name: newName, entry: next[newName], shifted, shiftedFrom: shifted ? entry.rarity : null, shiftMode: shifted ? shiftMode : null, changes, commitUrl: commit.html_url || null };
@@ -409,7 +419,7 @@ function deleteEntry({ dex, name, actor = "owner" }) {
             { path: "changelog.json", content: addChangelog(rawChangelog, dex, changes) },
         );
 
-        const commit = await commitFiles(base, files, `${dex}: remove ${target} (${actor})`);
+        const commit = await commitFiles(base, files, `${dex}: remove ${target} (${actor})`, changes);
         applyLocally(dex, data, hashes);
         client?.logGeneral?.(`Dex editor (${actor}): ${dex} · ${changes.join(" · ")}`);
         return { dex, name: target, changes, commitUrl: commit.html_url || null };

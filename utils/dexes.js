@@ -150,7 +150,7 @@ async function commitChange(change) {
         const result = await change(list, incompleteNames, base);
         const files = [{ path: DEX_FILE, content: serialize(list, incompleteNames) }, ...(result.files || [])];
         if (result.changelog) files.push({ path: "changelog.json", content: changelogWith(await readText("changelog.json", base), result.changelog) });
-        const commit = await commitFiles(base, files, result.message);
+        const commit = await commitFiles(base, files, result.message, result.changelog?.changes || []);
 
         ownWriteAt = Date.now();
         apply({ registry: list, incompleteAbbreviations: incompleteNames });
