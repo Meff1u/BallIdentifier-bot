@@ -1,4 +1,8 @@
 const crypto = require("crypto");
+const fs = require("fs");
+const fsp = require("fs/promises");
+const path = require("path");
+const readline = require("readline");
 const zlib = require("zlib");
 
 const { getData, updateData } = require("./helpers");
@@ -588,11 +592,13 @@ function getSpecialId(ball) {
     return ball.special?.id || ball.special_id || null;
 }
 
-function buildCollectionSummary(profile, balls, totals = null) {
+// Streams (async iterables) or arrays: a 2-million-ball collection is read from disk page by page, never held whole
+async function buildCollectionSummary(profile, balls, totals = null) {
     const ballCounts = new Map();
     const countryCounts = new Map();
     const specialCounts = new Map();
     const specialBallCounts = new Map();
+    let listed = 0;
     let specialCount = 0;
     let selfCaughtCount = 0;
     let favoriteCount = 0;
@@ -607,7 +613,8 @@ function buildCollectionSummary(profile, balls, totals = null) {
     let newestCaughtAt = null;
     const catchesByDay = new Map();
 
-    for (const ball of balls) {
+    for await (const ball of balls) {
+        listed += 1;
         const ballId = getBallId(ball);
         if (ballId !== undefined) ballCounts.set(ballId, (ballCounts.get(ballId) || 0) + 1);
         if (getSpecialId(ball)) specialCount += 1;
@@ -687,8 +694,8 @@ function buildCollectionSummary(profile, balls, totals = null) {
 
     return {
         displayName: profile.display_name || profile.username || profile.name || profile.user?.username || profile.player?.username || null,
-        totalBalls: totals?.ballCount ?? balls.length,
-        listedBalls: balls.length,
+        totalBalls: totals?.ballCount ?? listed,
+        listedBalls: listed,
         uniqueBalls: ballCounts.size,
         duplicateCount,
         specialCount,
@@ -727,17 +734,23 @@ function toSpecialRecord(ball, userId) {
 }
 
 async function replaceSpecialCollection(collection, userId, balls) {
-    const specialRecords = balls
-        .map((ball) => toSpecialRecord(ball, userId))
-        .filter(Boolean);
-
     await collection.deleteMany({ user_id: String(userId) });
 
-    for (let index = 0; index < specialRecords.length; index += SPECIAL_WRITE_BATCH_SIZE) {
-        await collection.insertMany(specialRecords.slice(index, index + SPECIAL_WRITE_BATCH_SIZE), { ordered: false });
+    let batch = [];
+    let count = 0;
+    for await (const ball of balls) {
+        const record = toSpecialRecord(ball, userId);
+        if (!record) continue;
+        batch.push(record);
+        count += 1;
+        if (batch.length >= SPECIAL_WRITE_BATCH_SIZE) {
+            await collection.insertMany(batch, { ordered: false });
+            batch = [];
+        }
     }
+    if (batch.length) await collection.insertMany(batch, { ordered: false });
 
-    return specialRecords.length;
+    return count;
 }
 
 /** Non-special instance counts per ball, for the raws list. */
@@ -750,9 +763,9 @@ function nonSpecialWorth(ball) {
     return COMPRESSED_SPECIALS[String(ball.special?.name || "").trim().toLowerCase()] || 0;
 }
 
-function countNonSpecial(balls) {
+async function countNonSpecial(balls) {
     const counts = new Map();
-    for (const ball of balls) {
+    for await (const ball of balls) {
         const worth = nonSpecialWorth(ball);
         if (!worth) continue;
         const id = ball.ball?.id ?? ball.ball_id;
@@ -767,9 +780,9 @@ function countNonSpecial(balls) {
 }
 
 /** Instances owned per ball id (specials included), for the Ballsdex collector check. */
-function countOwned(balls) {
+async function countOwned(balls) {
     const counts = {};
-    for (const ball of balls) {
+    for await (const ball of balls) {
         const id = ball.ball?.id ?? ball.ball_id;
         // Bronze/Silver/Gold count as the non-specials they stand for
         if (id !== undefined && id !== null) counts[id] = (counts[id] || 0) + Math.max(1, nonSpecialWorth(ball));
@@ -831,30 +844,109 @@ function computeRaws(nonSpecial = [], rarityData = {}) {
 }
 
 /* ----- Resumable syncs -----
- * A running sync is checkpointed in MongoDB after every page: the job (ballsdexSyncJobs, _id = user id)
- * holds the next cursor, and the pages fetched so far are in ballsdexSyncPages. If the bot restarts
- * mid-sync, resumeInterruptedSyncs() picks the job up from the last cursor.
+ * A running sync is checkpointed after every page: the job (MongoDB ballsdexSyncJobs, _id = user id) holds the
+ * next cursor and the number of saved pages, and the pages fetched so far are appended to a file on the bot's
+ * disk (assets/sync-checkpoints/<user id>.ndjson, one line per page; a big collection would not fit in the
+ * free MongoDB). A page is appended before the job moves on, so the file always has at least the pages the job
+ * counts. If the bot restarts mid-sync, resumeInterruptedSyncs() picks the job up from the last cursor.
  */
 const RESUME_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const CHECKPOINT_DIR = path.join(__dirname, "../assets/sync-checkpoints");
+const checkpointFile = (userId) => path.join(CHECKPOINT_DIR, `${String(userId).replace(/\D/g, "")}.ndjson`);
 
-let syncIndexReady = null;
+let legacyPagesDropped = false;
 async function syncStorage() {
     const database = await getDatabase();
-    const pages = database.collection("ballsdexSyncPages");
-    syncIndexReady ??= pages.createIndex({ userId: 1, page: 1 }, { unique: true }).catch(() => (syncIndexReady = null));
-    await syncIndexReady;
-    return { jobs: database.collection("ballsdexSyncJobs"), pages };
+    if (!legacyPagesDropped) {
+        // Checkpoints used to live in MongoDB (ballsdexSyncPages): free that space; a job saved that way restarts
+        legacyPagesDropped = true;
+        database.collection("ballsdexSyncPages").drop().catch(() => {});
+    }
+    return { jobs: database.collection("ballsdexSyncJobs") };
+}
+
+const removeCheckpoint = (userId) => fsp.rm(checkpointFile(userId), { force: true });
+
+async function appendCheckpointPage(userId, page, items) {
+    await fsp.mkdir(CHECKPOINT_DIR, { recursive: true });
+    await fsp.appendFile(checkpointFile(userId), `${JSON.stringify({ page, items })}\n`);
+}
+
+/**
+ * The saved pages in order, as one flat list. With `keepPages`, nothing is loaded: the file is only checked and cut
+ * after that many pages (true), or null comes back when it doesn't have them.
+ */
+async function* checkpointBalls(userId) {
+    const lines = readline.createInterface({ input: fs.createReadStream(checkpointFile(userId), { encoding: "utf8" }), crlfDelay: Infinity });
+    let pages = 0;
+    try {
+        for await (const line of lines) {
+            let entry;
+            try {
+                entry = JSON.parse(line);
+            } catch {
+                break;
+            }
+            if (entry.page !== pages) break;
+            pages += 1;
+            for (const item of entry.items || []) yield item;
+        }
+    } finally {
+        lines.close();
+    }
+}
+
+async function readCheckpoint(userId, keepPages) {
+    const file = checkpointFile(userId);
+    let pages = 0;
+    let bytes = 0;
+    try {
+        const lines = readline.createInterface({ input: fs.createReadStream(file, { encoding: "utf8" }), crlfDelay: Infinity });
+        for await (const line of lines) {
+            if (pages >= keepPages) break;
+            let entry;
+            try {
+                entry = JSON.parse(line);
+            } catch {
+                break; // a half-written last line
+            }
+            if (entry.page !== pages) break;
+            pages += 1;
+            bytes += Buffer.byteLength(line) + 1;
+        }
+    } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+    }
+    if (pages < keepPages) return null;
+    await fsp.truncate(file, bytes);
+    return true;
 }
 
 async function createSyncJob(userId) {
-    const { jobs, pages } = await syncStorage();
-    await pages.deleteMany({ userId });
+    const { jobs } = await syncStorage();
+    await removeCheckpoint(userId);
     await jobs.replaceOne({ _id: userId }, { _id: userId, startedAt: new Date(), cursor: null, pages: 0, fetched: 0, updatedAt: new Date() }, { upsert: true });
 }
 
 async function deleteSyncJob(userId) {
-    const { jobs, pages } = await syncStorage();
-    await Promise.all([jobs.deleteOne({ _id: userId }), pages.deleteMany({ userId })]);
+    const { jobs } = await syncStorage();
+    await Promise.all([jobs.deleteOne({ _id: userId }), removeCheckpoint(userId)]);
+}
+
+/** Checkpoint files nobody needs: the job is gone (e.g. the bot stopped in the middle of cleaning up). */
+async function removeOrphanCheckpoints(jobIds) {
+    let names;
+    try {
+        names = await fsp.readdir(CHECKPOINT_DIR);
+    } catch {
+        return;
+    }
+    const keep = new Set(jobIds.map(String));
+    for (const name of names) {
+        const userId = name.replace(/\.ndjson$/, "");
+        if (!name.endsWith(".ndjson") || keep.has(userId) || syncStates.get(userId)?.inProgress) continue;
+        await fsp.rm(path.join(CHECKPOINT_DIR, name), { force: true }).catch(() => {});
+    }
 }
 
 // Only what the summary, specials and raws need: keeps big collections small in MongoDB and in memory
@@ -874,13 +966,20 @@ function compactBall(ball) {
 }
 
 async function fetchBallsResumable(userId, cred, onPage, shouldStop) {
-    const { jobs, pages } = await syncStorage();
+    const { jobs } = await syncStorage();
     const job = (await jobs.findOne({ _id: userId })) || {};
     let cursor = job.cursor || undefined;
     let page = job.pages || 0;
     let fetched = job.fetched || 0;
     let restarted = false;
     let saving = Promise.resolve(); // the previous page's checkpoint, written while the next page loads
+    // The saved pages must be on disk (not after a restart from the MongoDB days, or a deleted file): else start over
+    if (page > 0 && !(await readCheckpoint(userId, page))) {
+        await removeCheckpoint(userId);
+        cursor = undefined;
+        page = 0;
+        fetched = 0;
+    }
     if (page > 0) onPage?.(fetched);
 
     while (page === 0 || cursor) {
@@ -898,7 +997,7 @@ async function fetchBallsResumable(userId, cred, onPage, shouldStop) {
             // A saved cursor the API no longer accepts: start this sync over once
             if (cursor && page > 0 && !restarted && (error.status === 400 || error.status === 422)) {
                 restarted = true;
-                await pages.deleteMany({ userId });
+                await removeCheckpoint(userId);
                 cursor = undefined;
                 page = 0;
                 fetched = 0;
@@ -915,7 +1014,7 @@ async function fetchBallsResumable(userId, cred, onPage, shouldStop) {
         await saving;
         const checkpoint = { cursor: cursor || null, pages: page, fetched, updatedAt: new Date() };
         saving = (async () => {
-            await pages.updateOne({ userId, page: pageIndex }, { $set: { items } }, { upsert: true });
+            await appendCheckpointPage(userId, pageIndex, items);
             await jobs.updateOne({ _id: userId }, { $set: checkpoint });
         })();
         saving.catch(() => {}); // awaited below
@@ -924,8 +1023,8 @@ async function fetchBallsResumable(userId, cred, onPage, shouldStop) {
     }
     await saving;
 
-    const saved = await pages.find({ userId }).sort({ page: 1 }).toArray();
-    return saved.flatMap((entry) => entry.items || []);
+    // Re-readable stream from the checkpoint file: the summary, specials and counts each read it once
+    return { balls: { [Symbol.asyncIterator]: () => checkpointBalls(userId) }, count: fetched };
 }
 
 async function syncCollection(discordUserId, cred, onProgress, shouldStop) {
@@ -936,9 +1035,9 @@ async function syncCollection(discordUserId, cred, onProgress, shouldStop) {
 
 
     onProgress?.({ phase: "balls", fetched: 0, total: expected });
-    const balls = await fetchBallsResumable(discordUserId, cred, (fetched) => onProgress?.({ phase: "balls", fetched, total: expected }), shouldStop);
+    const { balls, count } = await fetchBallsResumable(discordUserId, cred, (fetched) => onProgress?.({ phase: "balls", fetched, total: expected }), shouldStop);
     if (shouldStop()) throw new SyncCancelled(); // e.g. unlinked while the last page was loading
-    onProgress?.({ phase: "saving", fetched: balls.length, total: expected });
+    onProgress?.({ phase: "saving", fetched: count, total: expected });
     return saveCollection(discordUserId, profile, balls, totals);
 }
 
@@ -949,7 +1048,7 @@ async function saveCollection(discordUserId, profile, balls, totals = null, { so
     const collectionsCollection = database.collection("ballsdexCollections");
     const specialsCollection = database.collection("ballsdexSpecials");
 
-    const summary = buildCollectionSummary(profile, balls, totals);
+    const summary = await buildCollectionSummary(profile, balls, totals);
     await database.collection("ballsdexFileInstances").deleteMany({ userId: String(discordUserId) });
     if (source === "file") {
         // Ballsdex exports have no favorites, frames or spawn times: leave those stats empty instead of 0
@@ -967,8 +1066,8 @@ async function saveCollection(discordUserId, profile, balls, totals = null, { so
             $set: {
                 discordUserId,
                 summary,
-                nonSpecial: countNonSpecial(balls),
-                ownedCounts: countOwned(balls),
+                nonSpecial: await countNonSpecial(balls),
+                ownedCounts: await countOwned(balls),
                 ballCount: summary.totalBalls,
                 lastSyncedAt: syncedAt,
             },
@@ -978,7 +1077,7 @@ async function saveCollection(discordUserId, profile, balls, totals = null, { so
     );
     await ballsCollection.deleteMany({ discordUserId });
 
-    return { ballCount: summary.totalBalls, listedBalls: balls.length, specialCount, syncedAt };
+    return { ballCount: summary.totalBalls, listedBalls: summary.listedBalls, specialCount, syncedAt };
 }
 
 async function getStoredCollection(discordUserId) {
@@ -1672,6 +1771,7 @@ function clearPaused(userId) {
 async function resumeInterruptedSyncs() {
     const { jobs } = await syncStorage();
     const found = await jobs.find({}).sort({ startedAt: 1 }).toArray();
+    await removeOrphanCheckpoints(found.map((job) => job._id)).catch(() => {});
     const resumed = [];
     for (const job of found) {
         if (syncStates.get(job._id)?.inProgress || resumeQueue.some((queued) => queued._id === job._id)) continue;
