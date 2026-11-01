@@ -9,7 +9,7 @@
  */
 
 const { getDatabase } = require("./database");
-const { ADMIN_ID } = require("./constants");
+const { ADMIN_ID, SPECIAL_ONLY_BALLS } = require("./constants");
 const seed = require("./specials-seed");
 
 const OFFICIAL_TTL_MS = 6 * 60 * 60 * 1000;
@@ -153,7 +153,9 @@ async function specialsForBall(ballId) {
     if (ballIndex.at !== official.at) {
         const map = new Map();
         for (const special of official.specials) {
+            const only = SPECIAL_ONLY_BALLS.get(special.id); // a few event specials spawned on one or two balls only
             for (const id of special.available_balls || []) {
+                if (only && !only.includes(id)) continue;
                 if (!map.has(id)) map.set(id, []);
                 map.get(id).push(special.id);
             }

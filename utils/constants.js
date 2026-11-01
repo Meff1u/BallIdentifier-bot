@@ -83,6 +83,19 @@ const MATCH_THRESHOLD_OVERRIDES = {
     "Burkina Faso": 25,
 };
 
+/*
+ * Ballsdex lists these specials on every ball that existed while their event ran (available_balls),
+ * but they only ever spawned on one or two balls: special id -> the ball ids that can really have it.
+ * Spawn Arts and Completion hide the impossible entries.
+ */
+const SPECIAL_ONLY_BALLS = new Map([
+    [5, [153]], // Event Reichtangle
+    [12, [255]], // Event BE
+    [36, [443]], // Event PLC
+    [37, [152, 443]], // Ballsdex Games Souvenir
+    [44, [152]], // Event Djibouti
+]);
+
 module.exports = {
     DEX_REGISTRY,
     DEX_KEY_BY_NAME,
@@ -104,4 +117,5 @@ module.exports = {
     PRIVATE_GUILD_ID,
     DEFAULT_MATCH_THRESHOLD,
     MATCH_THRESHOLD_OVERRIDES,
+    SPECIAL_ONLY_BALLS,
 };

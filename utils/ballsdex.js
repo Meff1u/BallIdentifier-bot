@@ -3,7 +3,7 @@ const zlib = require("zlib");
 
 const { getData, updateData } = require("./helpers");
 const { getDatabase } = require("./database");
-const { ADMIN_ID } = require("./constants");
+const { ADMIN_ID, SPECIAL_ONLY_BALLS } = require("./constants");
 
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
@@ -1029,7 +1029,7 @@ const OAUTH_CRED = { userId: "oauth" }; // token/revoke calls: only the IP limit
  * while a newer one loads, so a profile never waits on Ballsdex except the very first time.
  */
 const RECENT_TTL_MS = 15 * 60 * 1000;
-const RECENT_LIMIT = 8;
+const RECENT_LIMIT = 5;
 const recentCatches = new Map(); // user id -> { at, items }
 const recentLoading = new Map(); // user id -> Promise
 let reverseIsNewest = true; // what reverse=true gives (checked on the first answer)
@@ -1109,6 +1109,25 @@ function readCompletion(body) {
     };
 }
 
+/* A few event specials only ever spawned on one or two balls (SPECIAL_ONLY_BALLS), but the API counts
+ * every ball that existed while the event ran: cut the lists down to the real ones and recount. */
+function restrictCompletion(data, specialId) {
+    const only = specialId ? SPECIAL_ONLY_BALLS.get(Number(specialId)) : null;
+    if (!only) return data;
+    const owned = data.owned.filter((ball) => only.includes(ball.id));
+    const missing = data.missing.filter((ball) => only.includes(ball.id));
+    const total = owned.length + missing.length;
+    return {
+        ...data,
+        total,
+        ownedCount: owned.length,
+        missingCount: missing.length,
+        percent: total ? (owned.length / total) * 100 : data.percent,
+        owned,
+        missing,
+    };
+}
+
 /**
  * Completion of a player (optionally for one special). wait: false returns only what's cached (and refreshes
  * it in the background), for the public profile. refresh: true reloads unless it's under a minute old.
@@ -1124,7 +1143,7 @@ async function getCompletion(userId, { specialId = null, wait = true, refresh = 
         const cred = credentialFor(userId);
         const loading = ballsdexRequest(cred, "/me/completion", specialId ? { special_id: specialId } : {}, INTERACTIVE)
             .then((body) => {
-                const data = { ...readCompletion(body), specialId: specialId || null, updatedAt: new Date().toISOString() };
+                const data = { ...restrictCompletion(readCompletion(body), specialId), specialId: specialId || null, updatedAt: new Date().toISOString() };
                 completionCache.set(key, { at: Date.now(), data });
                 if (completionCache.size > 2000) completionCache.delete(completionCache.keys().next().value);
                 return data;
