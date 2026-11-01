@@ -19,6 +19,7 @@ const CATEGORIES = {
     VOTES: { name: "Votes", color: 0x00c853 }, // upvotes and reminders
     CATCHES: { name: "Catches", color: 0x3498db }, // Ballsdex catch messages
     CATCH_STATS: { name: "Catch stats", color: 0x00bcd4 }, // Catch stats: timed catches, servers turning it on/off, opt-outs
+    SPECIALS: { name: "Specials", color: 0x9b59b6 }, // Ballsdex specials: official list and market data refreshes
     SYSTEM: { name: "System", color: 0xf39c12 }, // startup, data refresh, database, reports
     ERRORS: { name: "Errors", color: 0xff0000 }, // errors and crashes
 };

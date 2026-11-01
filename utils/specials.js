@@ -34,6 +34,7 @@ const marketCache = new Map(); // id -> { at, data } or { at, promise }
 let refreshing = null;
 let edits = null; // Map id -> fields
 let client = null;
+let scopesLogged = false; // the owner's scopes are logged once per bot run
 
 function log(message) {
     if (client?.log) client.log("SPECIALS", message);
@@ -53,6 +54,16 @@ function ownerKey() {
 async function fetchOfficial() {
     const { ballsdexRequest, INTERACTIVE } = ballsdex();
     const owner = ownerKey();
+
+    // Once per bot run: which scopes the owner's sign-in actually has (market data needs market:read)
+    if (!scopesLogged) {
+        scopesLogged = true;
+        const me = await ballsdexRequest(owner, "/me", {}, INTERACTIVE).catch(() => null);
+        if (me) {
+            const scopes = Array.isArray(me.scopes) ? me.scopes : [];
+            log(`Owner's Ballsdex scopes: ${scopes.join(" ") || "(none)"}${scopes.includes("market:read") ? "" : " — market:read is missing, market data won't load. Sign in with Ballsdex again (Ballsdex tab)."}`);
+        }
+    }
 
     const specials = [];
     let cursor;
