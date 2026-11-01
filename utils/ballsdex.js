@@ -1023,7 +1023,8 @@ function credentialFor(userId) {
 const OAUTH_CRED = { userId: "oauth" }; // token/revoke calls: only the IP limits apply to them
 
 /*
- * Last catches (public profile tile): the newest balls of a player, one /me/balls request with reverse=true.
+ * Last catches (public profile tile): the newest balls of a player, one /me/balls request sorted by
+ * catch_date (the API's default sort is favourited first, which is not what the tile shows).
  * Refreshed at most every RECENT_TTL_MS and only when the profile is viewed; an older list is shown
  * while a newer one loads, so a profile never waits on Ballsdex except the very first time.
  */
@@ -1041,10 +1042,11 @@ function ballNameById(ballId) {
 
 async function loadRecentCatches(userId) {
     const cred = credentialFor(userId);
-    const fetchPage = async (reverse) => (await ballsdexFetch(cred, "/me/balls", reverse ? { limit: RECENT_LIMIT, reverse: "true" } : { limit: RECENT_LIMIT }, { ...INTERACTIVE, retry: false })).data;
+    const fetchPage = async (reverse) =>
+        (await ballsdexFetch(cred, "/me/balls", { limit: RECENT_LIMIT, sort: "catch_date", ...(reverse ? { reverse: "true" } : {}) }, { ...INTERACTIVE, retry: false })).data;
     let items = getItems(await fetchPage(reverseIsNewest));
     const times = items.map((item) => Date.parse(item.caught_at || "") || 0);
-    // Oldest first means the API's default order is newest first: use it without reverse from now on
+    // Oldest first means catch_date sorts newest first: use it without reverse from now on
     if (times.length > 1 && times[0] < times[times.length - 1]) {
         reverseIsNewest = !reverseIsNewest;
         items = getItems(await fetchPage(reverseIsNewest));
