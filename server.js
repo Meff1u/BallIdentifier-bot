@@ -32,6 +32,7 @@ const dexEditor = require("./utils/dex-editor");
 const dexes = require("./utils/dexes");
 const profiles = require("./utils/profiles");
 const catchStats = require("./utils/catch-stats");
+const contact = require("./utils/contact");
 
 const PORT = process.env.PORT || 3001;
 
@@ -62,12 +63,16 @@ const BIG_BODY_PATH = /^\/api\/users\/\d{17,20}\/(dex\/save|admin\/dexes\/add)$/
 // Profile settings (bio, showcase) don't fit in 1 KB
 const PROFILE_BODY_PATH = /^\/api\/users\/\d{17,20}\/profile$/;
 const profileJson = jsonBody("8kb");
+// Contact form messages (up to 1500 characters)
+const CONTACT_BODY_PATH = /^\/api\/users\/\d{17,20}\/contact$/;
+const contactJson = jsonBody("8kb");
 // Dex settings (catch phrase lists)
 const DEX_SETTINGS_PATH = /^\/api\/users\/\d{17,20}\/admin\/dexes\/(update|delete)$/;
 const dexSettingsJson = jsonBody("16kb");
 app.use((req, res, next) => {
     if (BIG_BODY_PATH.test(req.path)) return next();
     if (PROFILE_BODY_PATH.test(req.path)) return profileJson(req, res, next);
+    if (CONTACT_BODY_PATH.test(req.path)) return contactJson(req, res, next);
     if (DEX_SETTINGS_PATH.test(req.path)) return dexSettingsJson(req, res, next);
     return smallJson(req, res, next);
 });
@@ -80,6 +85,7 @@ const initializeServer = (c) => {
     profiles.setClient(c);
     catchStats.setClient(c);
     specials.setClient(c);
+    contact.setClient(c);
     require("./utils/ballsdex").setClient(c);
 };
 
@@ -916,6 +922,26 @@ app.post("/api/users/:userId/notifications/settings", apiLimiter, verifySignatur
         return res.status(400).json({ error: "enabled and dm must be booleans" });
     }
     res.status(200).json({ success: true, settings: notifications.setSetting(userId, type, { enabled, dm }) });
+});
+
+// Contact form: suggestions / bug reports go to the owner's DMs (10 minute cooldown per user)
+app.get("/api/users/:userId/contact", apiLimiter, verifySignature, (req, res) => {
+    res.status(200).json({ cooldownMs: contact.cooldownLeft(req.params.userId), maxLength: contact.MAX_LENGTH, minLength: contact.MIN_LENGTH });
+});
+
+app.post("/api/users/:userId/contact", apiLimiter, verifySignature, async (req, res) => {
+    try {
+        const { type, message, discord } = req.body || {};
+        const result = await contact.submit(req.params.userId, { type, message }, discord && typeof discord === "object" ? discord : {});
+        res.status(200).json({ success: true, ...result });
+    } catch (error) {
+        if (error instanceof contact.ContactError) {
+            if (error.retryAfterMs) res.setHeader("Retry-After", Math.ceil(error.retryAfterMs / 1000));
+            return res.status(error.status).json({ error: error.message, code: error.code, retryAfterMs: error.retryAfterMs });
+        }
+        client?.logError?.("Contact form", error);
+        res.status(500).json({ error: "Couldn't send your message. Try again later." });
+    }
 });
 
 // ---------------------------------------------------------------------------
