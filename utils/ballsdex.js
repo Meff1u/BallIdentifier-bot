@@ -1498,6 +1498,29 @@ function startSync(userId) {
     return { started: true };
 }
 
+const ETA_WINDOW_MS = 120000;
+
+/**
+ * Adds etaMs (time left while fetching balls) to a progress update, from the speed over the last two minutes.
+ * Waits for a couple of samples; a rate-limit pause shows up as a slower speed, so the estimate grows with it.
+ */
+function withEta(state, progress) {
+    if (progress.phase !== "balls" || !progress.total) {
+        state.etaSamples = null;
+        return progress;
+    }
+    const now = Date.now();
+    const samples = (state.etaSamples ??= []);
+    if (samples.length && progress.fetched < samples[samples.length - 1].fetched) samples.length = 0;
+    samples.push({ at: now, fetched: progress.fetched });
+    while (samples.length > 2 && now - samples[0].at > ETA_WINDOW_MS) samples.shift();
+    const first = samples[0];
+    const elapsed = now - first.at;
+    const gained = progress.fetched - first.fetched;
+    if (elapsed < 3000 || gained <= 0) return { ...progress, etaMs: null };
+    return { ...progress, etaMs: Math.max(0, Math.round(((progress.total - progress.fetched) / gained) * elapsed)) };
+}
+
 /** Runs a sync in the background; with `resume`, continues a checkpointed job after a restart. */
 function runSync(userId, { resume = null } = {}) {
     const state = {
@@ -1534,7 +1557,7 @@ function runSync(userId, { resume = null } = {}) {
                 userId,
                 cred,
                 (progress) => {
-                    state.progress = progress;
+                    state.progress = withEta(state, progress);
                 },
                 () => state.cancelRequested,
             );
