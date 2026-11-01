@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, Partials, Collection, REST, Routes } = require("discord.js");
+const { Client, GatewayIntentBits, Partials, Collection, REST, Routes, ApplicationIntegrationType } = require("discord.js");
 require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
@@ -47,7 +47,14 @@ for (const file of commandFiles) {
     if (command.data && command.execute) client.slashCommands.set(command.data.name, command);
 }
 // Built when registering: /info has a subcommand per dex, and the dex list can change while the bot runs
-const commandJson = () => [...client.slashCommands.values()].map((command) => command.data.toJSON());
+// Public commands are explicitly installable on a server and on a user account (user app: works in any DM or server, even without the bot).
+// Left unset, Discord falls back to the Developer Portal's default install settings, which silently drops the user-app commands.
+const commandJson = () =>
+    [...client.slashCommands.values()].map((command) => {
+        const json = command.data.toJSON();
+        if (PRIVATE_COMMANDS.includes(json.name)) return json;
+        return { ...json, integration_types: [ApplicationIntegrationType.GuildInstall, ApplicationIntegrationType.UserInstall] };
+    });
 
 // Load events
 const eventsPath = path.join(__dirname, "events");
