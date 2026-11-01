@@ -28,7 +28,7 @@ const PAUSED_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // Sync pacing (see syncPageDelay): pages go as fast as the per-minute limits allow, but part of the bot's
 // shared per-IP minute limit always stays free for everything else, more of it while others are using it.
 const MIN_PAGE_DELAY = 100;
-const FALLBACK_PAGE_DELAY = 1000; // before the first rate-limit headers are known
+const FALLBACK_PAGE_DELAY = 1000; // before the first response has shown whether there are rate limits at all
 const IP_MINUTE_FREE_IDLE_SHARE = 0.1; // of the IP's per-minute limit, kept free when nothing else is calling the API
 const IP_MINUTE_FREE_BUSY_SHARE = 0.5; // kept free while other requests are coming in
 const IP_MINUTE_BUSY_OTHERS = 4; // that many other requests in the current minute = busy
@@ -214,6 +214,15 @@ function parseRateLimitList(value) {
         out.set(match[1], params);
     }
     return out;
+}
+
+/**
+ * True when a response carries no rate limit at all (no policy with a quota, no X-RateLimit-Limit): Ballsdex
+ * sends the headers only where a limit applies, so there is nothing to wait for.
+ */
+function hasNoRateLimits(headers) {
+    for (const policy of parseRateLimitList(headers.get("ratelimit-policy")).values()) if (policy.q > 0) return false;
+    return !(Number(headers.get("x-ratelimit-limit")) > 0);
 }
 
 function recordRateLimits(cred, headers) {
@@ -462,7 +471,7 @@ async function ballsdexFetch(cred, path, query = {}, { retry = true, maxWaitMs =
         } catch {
             throw apiError(502, { detail: "invalid response" });
         }
-        return { data, waitMs };
+        return { data, waitMs, unlimited: hasNoRateLimits(response.headers) };
     }
 }
 
@@ -479,8 +488,10 @@ function noteSyncRequest() {
  * its window. The key's own limit is used up to its last request; the shared IP limit keeps
  * IP_MINUTE_FREE_IDLE free, or IP_MINUTE_FREE_BUSY when other requests are using it this minute
  * (website, commands, other users), so the sync slows down by itself and speeds up again after.
+ * When the last response had no rate limit at all (`unlimited`), there is no pause.
  */
-function syncPageDelay(cred, waitMs = 0) {
+function syncPageDelay(cred, waitMs = 0, unlimited = false) {
+    if (unlimited) return 0;
     const ip = viewRateLimits(ipRateLimits)?.limits.find((limit) => limit.name === "ip_minute");
     const key = viewRateLimits(keyRateLimits.get(hashKey(cred)))?.limits.find((limit) => limit.name === "minute");
     if (!ip && !key) return Math.max(waitMs, FALLBACK_PAGE_DELAY);
@@ -520,12 +531,12 @@ async function getAllMyBalls(cred, onPage, shouldStop = () => false) {
 
     do {
         if (shouldStop()) throw new SyncCancelled();
-        const { data, waitMs } = await ballsdexFetch(cred, "/me/balls", { limit: collectionPageSize, cursor });
+        const { data, waitMs, unlimited } = await ballsdexFetch(cred, "/me/balls", { limit: collectionPageSize, cursor });
         noteSyncRequest();
         balls.push(...getItems(data));
         cursor = data.next_cursor;
         onPage?.(balls.length);
-        if (cursor) await sleep(syncPageDelay(cred, waitMs));
+        if (cursor) await sleep(syncPageDelay(cred, waitMs, unlimited));
     } while (cursor);
 
     return balls;
@@ -900,7 +911,7 @@ async function fetchBallsResumable(userId, cred, onPage, shouldStop) {
         })();
         saving.catch(() => {}); // awaited below
         onPage?.(fetched);
-        if (cursor) await sleep(syncPageDelay(cred, response.waitMs));
+        if (cursor) await sleep(syncPageDelay(cred, response.waitMs, response.unlimited));
     }
     await saving;
 
