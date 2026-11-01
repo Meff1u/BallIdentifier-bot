@@ -405,4 +405,6 @@ function getDiscordProfile(userId) {
     return profile && !profile.missing ? profile : null;
 }
 
-module.exports = { init, applyOverlay, getDexCollectors, addSelf, addVerified, removeSelf, getUserCollections, collectionCounts, getDiscordProfile, defaultAvatar };
+const pendingProfiles = () => queue.length;
+
+module.exports = { init, applyOverlay, getDexCollectors, addSelf, addVerified, removeSelf, getUserCollections, collectionCounts, getDiscordProfile, defaultAvatar, publicProfileIds, collectorView, pendingProfiles };

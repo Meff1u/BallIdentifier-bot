@@ -8,6 +8,7 @@
 const { getData, updateData } = require("./helpers");
 const { DEX_KEY_BY_NAME, DEX_NAME_BY_KEY } = require("./constants");
 const collectorStore = require("./collector-store");
+const specialCollectors = require("./special-collectors");
 const { isLinked, getStoredCollection, getRecentCatches, getCompletion } = require("./ballsdex");
 const catchStats = require("./catch-stats");
 
@@ -171,6 +172,7 @@ async function getPublicProfile(userId, { self = false } = {}) {
         createdAt: settings.createdAt || null,
         updatedAt: settings.updatedAt || null,
         collections: settings.showCollections ? collectionsOf(userId) : null,
+        specialCollections: settings.showCollections ? await specialCollectors.getUserSpecials(userId).catch(() => []) : null,
         ballsdex,
         lastCatches,
         catches,

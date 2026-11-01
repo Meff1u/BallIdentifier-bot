@@ -27,6 +27,7 @@ const {
 } = require("./utils/ballsdex");
 const notifications = require("./utils/notifications");
 const collectorStore = require("./utils/collector-store");
+const specialCollectors = require("./utils/special-collectors");
 const specials = require("./utils/specials");
 const dexEditor = require("./utils/dex-editor");
 const dexes = require("./utils/dexes");
@@ -678,6 +679,27 @@ app.post("/api/users/:userId/collectors", apiLimiter, verifySignature, async (re
     } catch (error) {
         if (error.status) return res.status(error.status).json({ error: error.message, code: error.code });
         console.error("[API] Collectors update failed:", error.message);
+        res.status(503).json({ error: "Collector storage is unavailable right now. Try again later." });
+    }
+});
+
+// Who collects which special (Collectors -> Specials)
+app.get("/api/special-collectors", generalLimiter, verifySignature, (req, res) => {
+    res.status(200).json(specialCollectors.getAll());
+});
+
+// Add or remove yourself as a collector of a special; the owner can also remove anyone
+app.post("/api/users/:userId/special-collectors", apiLimiter, verifySignature, async (req, res) => {
+    const { userId } = req.params;
+    const { action, specialId, targetUserId } = req.body || {};
+    if (!["add", "remove"].includes(action) || !Number.isInteger(specialId)) return res.status(400).json({ error: "Invalid request" });
+    if (targetUserId !== undefined && (typeof targetUserId !== "string" || !/^\d{17,20}$/.test(targetUserId))) return res.status(400).json({ error: "Invalid user" });
+    try {
+        const result = action === "remove" ? await specialCollectors.remove(userId, targetUserId || userId, specialId) : await specialCollectors.add(userId, specialId);
+        res.status(200).json({ success: true, ...result });
+    } catch (error) {
+        if (error.status) return res.status(error.status).json({ error: error.message, code: error.code });
+        console.error("[API] Special collectors update failed:", error.message);
         res.status(503).json({ error: "Collector storage is unavailable right now. Try again later." });
     }
 });

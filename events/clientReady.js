@@ -7,6 +7,7 @@ const { ASSETS_BASE_URL, BOT_NAMES, BOT_DATA_KEYS } = require("../utils/constant
 const { getData, updateData, writeJsonFile, readJsonFile, getAssetsPath } = require("../utils/helpers");
 const notifications = require("../utils/notifications");
 const collectorStore = require("../utils/collector-store");
+const specialCollectors = require("../utils/special-collectors");
 const { sendDueSyncReminders, resumeInterruptedSyncs } = require("../utils/ballsdex");
 const dexes = require("../utils/dexes");
 
@@ -29,6 +30,7 @@ module.exports = {
         
         notifications.setClient(client);
         collectorStore.init(client);
+        specialCollectors.init(client);
         await dexes.ready(); // supported dexes (from the website repo) before anything uses them
 
         // Initialize DBL client
