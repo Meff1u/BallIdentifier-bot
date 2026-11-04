@@ -34,6 +34,7 @@ const dexEditor = require("./utils/dex-editor");
 const dexes = require("./utils/dexes");
 const deploy = require("./utils/deploy");
 const profiles = require("./utils/profiles");
+const siteUsers = require("./utils/site-users");
 const catchStats = require("./utils/catch-stats");
 const contact = require("./utils/contact");
 
@@ -87,6 +88,7 @@ const initializeServer = (c) => {
     dexEditor.setClient(c);
     deploy.setClient(c);
     profiles.setClient(c);
+    siteUsers.setClient(c);
     catchStats.setClient(c);
     specials.setClient(c);
     contact.setClient(c);
@@ -192,7 +194,17 @@ const verifySignature = (req, res, next) => {
         return res.status(403).json({ error: "Invalid signature" });
     }
 
-    next();
+    // Per-user routes: a blocked account is refused here, whatever the route (the owner can't be blocked)
+    const userId = req.params.userId;
+    if (!userId || !req.originalUrl.startsWith("/api/users/") || userId === ADMIN_ID) return next();
+    siteUsers
+        .checkAccess(userId)
+        .then((block) => {
+            if (block) return res.status(403).json({ error: siteUsers.blockedMessage(block.reason), code: "ACCOUNT_BLOCKED", reason: block.reason });
+            siteUsers.touch(userId);
+            next();
+        })
+        .catch(() => res.status(503).json({ error: "Account check is unavailable right now. Try again in a moment." }));
 };
 
 // Middleware to validate guild config request body
@@ -909,6 +921,59 @@ app.get("/api/users/:userId/admin/deploy", apiLimiter, verifySignature, requireO
 });
 
 // Database and disk usage (owner, Moderation -> Resources): real numbers only, see utils/resources.js
+// Website users (everyone who logged in with Discord): registered at login, owner panel with block / unblock
+app.post("/api/users/:userId/login", apiLimiter, verifySignature, async (req, res) => {
+    try {
+        await siteUsers.recordLogin(req.params.userId, req.body || {});
+        res.status(200).json({ success: true });
+    } catch (error) {
+        if (error.status) return res.status(error.status).json({ error: error.message, code: error.code });
+        console.error("[API] Login record failed:", error.message);
+        res.status(503).json({ error: "Account check is unavailable right now. Try again in a moment." });
+    }
+});
+
+// Lets website functions that don't call a /api/users route (server settings) ask whether the account is blocked
+app.get("/api/users/:userId/access", apiLimiter, verifySignature, (req, res) => res.status(200).json({ ok: true }));
+
+const siteUserError = (res, error, what) => {
+    if (error.status) return res.status(error.status).json({ error: error.message, code: error.code });
+    client?.logError?.(what, error);
+    res.status(503).json({ error: "User storage is unavailable right now. Try again later." });
+};
+
+app.get("/api/users/:userId/admin/users", apiLimiter, verifySignature, requireOwner, async (req, res) => {
+    try {
+        res.status(200).json(await siteUsers.list(req.query));
+    } catch (error) {
+        siteUserError(res, error, "Site users list failed");
+    }
+});
+
+app.get("/api/users/:userId/admin/users/:targetId", apiLimiter, verifySignature, requireOwner, async (req, res) => {
+    try {
+        res.status(200).json(await siteUsers.detail(req.params.targetId));
+    } catch (error) {
+        siteUserError(res, error, "Site user detail failed");
+    }
+});
+
+app.post("/api/users/:userId/admin/users/:targetId/block", apiLimiter, jsonBody("4kb"), verifySignature, requireOwner, async (req, res) => {
+    try {
+        res.status(200).json({ success: true, ...(await siteUsers.block(req.params.userId, req.params.targetId, req.body?.reason)) });
+    } catch (error) {
+        siteUserError(res, error, "Site user block failed");
+    }
+});
+
+app.post("/api/users/:userId/admin/users/:targetId/unblock", apiLimiter, verifySignature, requireOwner, async (req, res) => {
+    try {
+        res.status(200).json({ success: true, ...(await siteUsers.unblock(req.params.userId, req.params.targetId)) });
+    } catch (error) {
+        siteUserError(res, error, "Site user unblock failed");
+    }
+});
+
 app.get("/api/users/:userId/admin/resources", apiLimiter, verifySignature, requireOwner, async (req, res) => {
     try {
         res.status(200).json(await getResources());

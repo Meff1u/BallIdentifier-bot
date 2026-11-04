@@ -27,6 +27,7 @@ const {
 } = require("../utils/collectors");
 
 const { handleDexEdit } = require("../utils/dex-report-actions");
+const siteUsers = require("../utils/site-users");
 const catchStatsCommand = require("../commands/catchstats-slash");
 
 const DATA_PATH = getAssetsPath("data.json");
@@ -34,6 +35,16 @@ const DATA_PATH = getAssetsPath("data.json");
 module.exports = {
     name: "interactionCreate",
     async execute(interaction, client) {
+        // Accounts blocked by the owner (website: Moderation -> Users) can't use the bot's commands or buttons
+        if (interaction.user) {
+            const block = await siteUsers.checkAccess(interaction.user.id).catch(() => null);
+            if (block) {
+                if (interaction.isAutocomplete()) return interaction.respond([]).catch(() => {});
+                await interaction.reply({ content: `⛔ ${siteUsers.blockedMessage(block.reason)}`, flags: MessageFlags.Ephemeral }).catch(() => {});
+                return;
+            }
+        }
+
         // Dex entry editing from spawn art reports (owner only)
         if ((interaction.isButton() || interaction.isModalSubmit()) && interaction.customId.startsWith("dexedit:")) {
             try {

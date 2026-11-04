@@ -2305,6 +2305,7 @@ module.exports = {
     needsReconnect,
     unlinkAccount,
     getSyncState,
+    lastSuccessMs,
     getSyncOverview,
     cancelActiveSync,
     getRateLimits,
