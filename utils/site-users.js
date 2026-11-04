@@ -19,6 +19,7 @@ let client = null;
 let loading = null;
 const blocked = new Map(); // id -> reason
 const touched = new Map(); // id -> last write (ms)
+const relogin = new Set(); // ids that must log in again (the owner logged out inactive users)
 
 const fail = (status, message, code) => Object.assign(new Error(message), { status, code });
 const log = (message) => client?.log?.("SYSTEM", message);
@@ -58,6 +59,9 @@ function init() {
             await col.createIndex({ status: 1 });
             await col.createIndex({ lastSeenAt: -1 });
             for (const doc of await col.find({ status: "blocked" }).project({ blockReason: 1 }).toArray()) blocked.set(doc._id, doc.blockReason || "");
+            for (const doc of await col.find({ reloginBefore: { $exists: true } }).project({ reloginBefore: 1, lastLoginAt: 1 }).toArray()) {
+                if (!doc.lastLoginAt || doc.lastLoginAt < doc.reloginBefore) relogin.add(doc._id);
+            }
             await importLegacy(col).catch((error) => client?.logError?.("Site users import failed", error));
         })().catch((error) => {
             loading = null;
@@ -73,6 +77,9 @@ async function checkAccess(userId) {
     await init();
     return blocked.has(userId) ? { reason: blocked.get(userId) } : null;
 }
+
+/** True when the owner logged this account out for inactivity and it hasn't logged in again yet. Call after init()/checkAccess. */
+const needsLogin = (userId) => userId !== ADMIN_ID && relogin.has(userId);
 
 const blockedMessage = (reason) => `Your account has been blocked.${reason ? ` Reason: ${reason}` : ""}`;
 
@@ -104,6 +111,7 @@ async function recordLogin(userId, profile = {}) {
         { upsert: true },
     );
     touched.set(userId, now.getTime());
+    relogin.delete(userId);
 }
 
 function nameOf(doc) {
@@ -277,4 +285,26 @@ async function unblock(actorId, targetId) {
     return { status: "active" };
 }
 
-module.exports = { setClient, init, checkAccess, blockedMessage, touch, recordLogin, list, detail, block, unblock };
+/**
+ * Owner: make everyone without activity for `days` days log in again (the owner is never affected).
+ * Activity = lastSeenAt; accounts that have none (imported ones) count as inactive. With dryRun only counts them.
+ */
+async function logoutInactive(actorId, days, dryRun = false) {
+    if (actorId !== ADMIN_ID) throw fail(403, "Only the owner can do this.", "FORBIDDEN");
+    const count = Math.floor(Number(days));
+    if (!Number.isFinite(count) || count < 1 || count > 365) throw fail(400, "Choose between 1 and 365 days.", "BAD_DAYS");
+    await init();
+    const col = await collection();
+    const cutoff = new Date(Date.now() - count * 24 * 60 * 60 * 1000);
+    const filter = { _id: { $ne: ADMIN_ID }, $or: [{ lastSeenAt: { $lt: cutoff } }, { lastSeenAt: { $exists: false } }] };
+    if (dryRun) return { affected: await col.countDocuments(filter), dryRun: true };
+
+    const now = new Date();
+    const ids = (await col.find(filter).project({ _id: 1 }).toArray()).map((doc) => doc._id);
+    if (ids.length) await col.updateMany({ _id: { $in: ids } }, { $set: { reloginBefore: now } });
+    for (const id of ids) relogin.add(id);
+    log(`🚪 Site users: <@${actorId}> logged out ${ids.length} account${ids.length === 1 ? "" : "s"} inactive for ${count}+ days`);
+    return { affected: ids.length };
+}
+
+module.exports = { setClient, init, checkAccess, needsLogin, logoutInactive, blockedMessage, touch, recordLogin, list, detail, block, unblock };

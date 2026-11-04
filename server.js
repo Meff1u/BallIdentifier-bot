@@ -201,6 +201,10 @@ const verifySignature = (req, res, next) => {
         .checkAccess(userId)
         .then((block) => {
             if (block) return res.status(403).json({ error: siteUsers.blockedMessage(block.reason), code: "ACCOUNT_BLOCKED", reason: block.reason });
+            // Logged out for inactivity: everything except the login registration itself needs a new login first
+            if (siteUsers.needsLogin(userId) && !req.originalUrl.startsWith(`/api/users/${userId}/login`)) {
+                return res.status(401).json({ error: "You were logged out for inactivity. Log in again.", code: "LOGIN_REQUIRED" });
+            }
             siteUsers.touch(userId);
             next();
         })
@@ -947,6 +951,14 @@ app.get("/api/users/:userId/admin/users", apiLimiter, verifySignature, requireOw
         res.status(200).json(await siteUsers.list(req.query));
     } catch (error) {
         siteUserError(res, error, "Site users list failed");
+    }
+});
+
+app.post("/api/users/:userId/admin/users/logout-inactive", apiLimiter, jsonBody("1kb"), verifySignature, requireOwner, async (req, res) => {
+    try {
+        res.status(200).json({ success: true, ...(await siteUsers.logoutInactive(req.params.userId, req.body?.days, req.body?.dryRun === true)) });
+    } catch (error) {
+        siteUserError(res, error, "Logging out inactive users failed");
     }
 });
 
