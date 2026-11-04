@@ -125,12 +125,14 @@ function nameOf(doc) {
     return {
         username: doc.username || cached?.username || fallback?.username || null,
         displayName: doc.displayName || cached?.globalName || fallback?.name || null,
+        avatarUrl: cached?.displayAvatarURL?.({ extension: "png", size: 64 }) || fallback?.avatarUrl || null,
     };
 }
 
-function avatarOf(doc) {
-    if (!doc.avatar) return null;
-    return `https://cdn.discordapp.com/avatars/${doc._id}/${doc.avatar}.${doc.avatar.startsWith("a_") ? "gif" : "png"}?size=64`;
+// The avatar saved at login, else the bot's cached Discord user / profile cache (accounts imported or only seen by activity have none saved)
+function avatarOf(doc, names) {
+    if (doc.avatar) return `https://cdn.discordapp.com/avatars/${doc._id}/${doc.avatar}.${doc.avatar.startsWith("a_") ? "gif" : "png"}?size=64`;
+    return names.avatarUrl;
 }
 
 function rowOf(doc, ballsdex) {
@@ -141,7 +143,7 @@ function rowOf(doc, ballsdex) {
         id: doc._id,
         username: names.username,
         displayName: names.displayName,
-        avatarUrl: avatarOf(doc),
+        avatarUrl: avatarOf(doc, names),
         status: doc.status === "blocked" ? "blocked" : "active",
         ballsdexLinked: ballsdex.isLinked(doc._id),
         lastSyncAt: iso(ballsdex.lastSuccessMs(record.ballsdexSync)),
