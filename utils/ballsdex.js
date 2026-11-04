@@ -39,6 +39,7 @@ const IP_MINUTE_BUSY_OTHERS = 4; // that many other requests in the current minu
 const SYNC_COOLDOWN_MS = 24 * 60 * 60 * 1000; // after a successful sync
 const SYNC_RETRY_COOLDOWN_MS = 5 * 60 * 1000; // after a failed or cancelled sync
 const TOP_ENTRIES = 5;
+const RECENT_SPECIALS = 5; // newest special catches kept in the collection summary (profile: Last special catches)
 
 // Raw value of one non-special ball per rarity tier (t19-t23 share 0.1). Tiers are the dex "rarity" rank.
 const RAW_TIER_VALUES = [
@@ -612,6 +613,7 @@ async function buildCollectionSummary(profile, balls, totals = null) {
     let oldestCaughtAt = null;
     let newestCaughtAt = null;
     const catchesByDay = new Map();
+    const recentSpecials = []; // newest first, at most RECENT_SPECIALS
 
     for await (const ball of balls) {
         listed += 1;
@@ -637,6 +639,16 @@ async function buildCollectionSummary(profile, balls, totals = null) {
             };
             current.count += 1;
             specialBallCounts.set(specialBallKey, current);
+        }
+
+        // Bronze/Silver/Gold are awards for owning many balls, not catches
+        if (special && country && ball.caught_at && nonSpecialWorth(ball) === 0) {
+            const time = Date.parse(ball.caught_at);
+            if (Number.isFinite(time) && (recentSpecials.length < RECENT_SPECIALS || time > recentSpecials[recentSpecials.length - 1].time)) {
+                recentSpecials.push({ time, name: country, special, caughtAt: ball.caught_at, selfCaught: Boolean(ball.self_caught) });
+                recentSpecials.sort((a, b) => b.time - a.time);
+                if (recentSpecials.length > RECENT_SPECIALS) recentSpecials.length = RECENT_SPECIALS;
+            }
         }
 
         if (ball.caught_at) {
@@ -719,6 +731,7 @@ async function buildCollectionSummary(profile, balls, totals = null) {
         topCountries: getTopEntries(countryCounts),
         topSpecials: getTopEntries(specialCounts),
         topSpecialBalls,
+        recentSpecials: recentSpecials.map(({ time, ...item }) => item),
     };
 }
 

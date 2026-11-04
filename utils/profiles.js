@@ -140,6 +140,21 @@ async function ballsdexOf(userId) {
     };
 }
 
+/**
+ * Newest special catches from the last sync (the sync lists every ball with its catch date; Ballsdex has no
+ * "specials only" list to ask live). Null until the player's next sync after this was added.
+ */
+async function lastSpecialCatchesOf(userId) {
+    if (!isLinked(userId)) return null;
+    const stored = await getStoredCollection(userId).catch(() => null);
+    const items = stored?.summary?.recentSpecials;
+    if (!Array.isArray(items) || !items.length) return null;
+    return {
+        items: items.slice(0, 5).map((item) => ({ name: item.name, special: item.special, caughtAt: item.caughtAt || null, selfCaught: Boolean(item.selfCaught) })),
+        syncedAt: stored.lastSyncedAt || null,
+    };
+}
+
 /** The profile as others see it, or null when it's private, hidden or never set up. `self` also returns private ones. */
 async function getPublicProfile(userId, { self = false } = {}) {
     const stored = storedProfile(userId);
@@ -153,6 +168,7 @@ async function getPublicProfile(userId, { self = false } = {}) {
     const ballsdex = settings.showBallsdex ? await ballsdexOf(userId) : null;
     // Newest Ballsdex catches (one API request per 15 min at most, only while the profile is viewed)
     const lastCatches = settings.showLastCatches && isLinked(userId) ? await getRecentCatches(userId).catch(() => null) : null;
+    const lastSpecialCatches = settings.showLastCatches ? await lastSpecialCatchesOf(userId) : null;
     // Catch stats have their own switch: shown to everyone only when public, always to the owner
     const catchSettings = catchStats.userSettings(userId);
     let catches = null;
@@ -176,6 +192,7 @@ async function getPublicProfile(userId, { self = false } = {}) {
         specialCollections: settings.showCollections ? await specialCollectors.getUserSpecials(userId).catch(() => []) : null,
         ballsdex,
         lastCatches,
+        lastSpecialCatches,
         catches,
     };
 }
