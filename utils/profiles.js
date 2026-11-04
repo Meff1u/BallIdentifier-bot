@@ -135,6 +135,7 @@ async function ballsdexOf(userId) {
         mostActiveCatchCount: s.mostActiveCatchCount || 0,
         topCountries: (s.topCountries || []).slice(0, 5),
         topSpecials: (s.topSpecials || []).slice(0, 5),
+        topSpecialBalls: (s.topSpecialBalls || []).slice(0, 5),
         completion: completion ? { percent: completion.percent, owned: completion.ownedCount, total: completion.total } : null,
     };
 }
