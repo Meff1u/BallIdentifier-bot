@@ -75,12 +75,12 @@ module.exports = {
                 },
                 {
                     name: "Links",
-                    value: "[GitHub Repository](https://github.com/Meff1u/BallIdentifier-bot)\n[Website](https://ballidentifier.xyz)\n[All features & commands](https://ballidentifier.xyz/bot)\nNotification settings: website, bell icon",
+                    value: "[GitHub Repository](https://github.com/Meff1u/BallIdentifier-bot)\n[Website](https://ballidentifier.xyz)\n[All features & commands](https://ballidentifier.xyz/bot)\n[Your Ballsdex account](https://ballidentifier.xyz/ballsdex)\nNotification settings: website, bell icon",
                     inline: false,
                 },
                 {
                     name: "How to Use",
-                    value: 'Right-click on a message with an image from one of the supported bots and select "Identify" (image below)',
+                    value: 'Right-click on a message with an image from one of the supported bots and select "Identify" (image below). More: `/ballsdex` (your collection, completion, specials), `/collectors`, `/info`, `/profile` and `/catchstats`.',
                     inline: true,
                 },
             )
