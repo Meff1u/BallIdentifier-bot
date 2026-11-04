@@ -14,6 +14,7 @@ const SNOWFLAKE = /^\d{17,20}$/;
 const TOUCH_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_REASON = 300;
 const MAX_ROWS = 5000;
+const PAGE_SIZE = 5; // users per page in the owner panel
 
 let client = null;
 let loading = null;
@@ -163,7 +164,7 @@ const SORTS = {
 };
 
 /** Owner list: search by name or ID, filters, sorting and paging. */
-async function list({ search = "", status = "all", ballsdex = "all", sort = "seen", page = 1, pageSize = 25 } = {}) {
+async function list({ search = "", status = "all", ballsdex = "all", sort = "seen", page = 1 } = {}) {
     await init();
     const ballsdexApi = require("./ballsdex");
     const docs = await (await collection()).find({}).limit(MAX_ROWS).toArray();
@@ -186,7 +187,7 @@ async function list({ search = "", status = "all", ballsdex = "all", sort = "see
         rows.sort((a, b) => key(b).localeCompare(key(a)));
     }
 
-    const size = Math.min(Math.max(Number(pageSize) || 25, 1), 50);
+    const size = PAGE_SIZE;
     const pages = Math.max(1, Math.ceil(rows.length / size));
     const current = Math.min(Math.max(Number(page) || 1, 1), pages);
     return { summary, matching: rows.length, page: current, pages, users: rows.slice((current - 1) * size, current * size) };
