@@ -75,7 +75,7 @@ module.exports = {
                 },
                 {
                     name: "Links",
-                    value: "[GitHub Repository](https://github.com/Meff1u/BallIdentifier-bot)\n[Website](https://ballidentifier.xyz)\n[All features & commands](https://ballidentifier.xyz/#/bot)\nNotification settings: website, bell icon",
+                    value: "[GitHub Repository](https://github.com/Meff1u/BallIdentifier-bot)\n[Website](https://ballidentifier.xyz)\n[All features & commands](https://ballidentifier.xyz/bot)\nNotification settings: website, bell icon",
                     inline: false,
                 },
                 {
@@ -92,7 +92,7 @@ module.exports = {
             new ButtonBuilder()
                 .setLabel("What's new")
                 .setStyle(ButtonStyle.Link)
-                .setURL("https://ballidentifier.xyz/#/identify?whatsnew=1"),
+                .setURL("https://ballidentifier.xyz/identify?whatsnew=1"),
             new ButtonBuilder()
                 .setLabel("Buy me a coffee")
                 .setStyle(ButtonStyle.Link)

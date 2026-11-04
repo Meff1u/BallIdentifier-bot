@@ -184,7 +184,7 @@ module.exports = {
             return interaction.reply({
                 content:
                     "Your Ballsdex collection synchronization has started. Big collections take a while (about 1,500 balls a minute). " +
-                    "You'll get a notification when it finishes; follow the progress on https://ballidentifier.xyz/#/ballsdex",
+                    "You'll get a notification when it finishes; follow the progress on https://ballidentifier.xyz/ballsdex",
                 components: [new ActionRowBuilder().addComponents(cancelButton)],
                 flags: MessageFlags.Ephemeral,
             });
@@ -239,7 +239,7 @@ module.exports = {
                     .addTextDisplayComponents(
                         new TextDisplayBuilder().setContent(
                             `-# Values: T1 1 · T4 0.8 · T6 0.75 · T7 0.5 · T10 0.4 · T12 0.25 · T15 0.2 · T18 0.15 · T19-T23 0.1\n` +
-                                `-# Last synced <t:${syncedAt}:R> · full list on https://ballidentifier.xyz/#/ballsdex/raws`,
+                                `-# Last synced <t:${syncedAt}:R> · full list on https://ballidentifier.xyz/ballsdex/raws`,
                         ),
                     );
                 return interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 });

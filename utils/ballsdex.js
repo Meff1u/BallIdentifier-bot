@@ -1502,7 +1502,7 @@ async function unlinkAccount(userId) {
         getNotifier()
             .notify(userId, "ballsdex_account", {
                 title: "Ballsdex account unlinked",
-                body: "Your Ballsdex API key and synced collection data were removed.",
+                body: "Your Ballsdex sign-in and synced collection data were removed.",
                 link: "#/ballsdex",
             })
             .catch(() => {});

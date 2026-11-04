@@ -60,7 +60,7 @@ const TYPES = {
     },
     ballsdex_account: {
         label: "Ballsdex account changes",
-        description: "A Ballsdex API key was linked to or removed from your account.",
+        description: "Your Ballsdex account was connected, reconnected or disconnected.",
         defaults: { enabled: true, dm: true },
     },
     update_dex: {

@@ -87,7 +87,7 @@ module.exports = {
 
         container.addTextDisplayComponents(
             new TextDisplayBuilder().setContent(
-                "-# Collect one of these? Add yourself on https://ballidentifier.xyz/#/collectors",
+                "-# Collect one of these? Add yourself on https://ballidentifier.xyz/collectors",
             ),
         );
 
