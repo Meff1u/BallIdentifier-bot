@@ -29,6 +29,7 @@ const {
 
 const { handleDexEdit } = require("../utils/dex-report-actions");
 const siteUsers = require("../utils/site-users");
+const contact = require("../utils/contact");
 const catchStatsCommand = require("../commands/catchstats-slash");
 
 const DATA_PATH = getAssetsPath("data.json");
@@ -52,6 +53,18 @@ module.exports = {
                 await handleDexEdit(interaction, client);
             } catch (error) {
                 client.logError?.("Dex edit interaction failed", error);
+                const reply = { content: `❌ ${error.message}`, flags: MessageFlags.Ephemeral };
+                await (interaction.deferred || interaction.replied ? interaction.followUp(reply) : interaction.reply(reply)).catch(() => {});
+            }
+            return;
+        }
+
+        // Contact & Support: the owner's "Answer" and the author's one-time "Reply" (buttons + popups)
+        if ((interaction.isButton() || interaction.isModalSubmit()) && (interaction.customId.startsWith(contact.REPLY_PREFIX) || interaction.customId.startsWith(contact.USER_PREFIX))) {
+            try {
+                await contact.handleInteraction(interaction, client);
+            } catch (error) {
+                client.logError?.("Contact answer failed", error);
                 const reply = { content: `❌ ${error.message}`, flags: MessageFlags.Ephemeral };
                 await (interaction.deferred || interaction.replied ? interaction.followUp(reply) : interaction.reply(reply)).catch(() => {});
             }

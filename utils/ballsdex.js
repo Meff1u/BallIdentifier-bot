@@ -1150,7 +1150,7 @@ const OAUTH_CRED = { userId: "oauth" }; // token/revoke calls: only the IP limit
  * while a newer one loads, so a profile never waits on Ballsdex except the very first time.
  */
 const RECENT_TTL_MS = 15 * 60 * 1000;
-const RECENT_LIMIT = 5;
+const RECENT_LIMIT = 6;
 const recentCatches = new Map(); // user id -> { at, items }
 const recentLoading = new Map(); // user id -> Promise
 let reverseIsNewest = true; // what reverse=true gives (checked on the first answer)

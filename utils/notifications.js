@@ -42,6 +42,7 @@ const DM_STYLE = {
     collector_status: { emoji: "🏅", color: 0xf1c40f },
     account_status: { emoji: "🛡️", color: 0xed4245 },
     notifier_issue: { emoji: "⚠️", color: 0xfaa61a },
+    support_reply: { emoji: "✉️", color: 0x5865f2 },
 };
 
 const TYPES = {
@@ -85,6 +86,14 @@ const TYPES = {
         label: "Account status",
         description: "Your account was blocked or unblocked by the owner.",
         defaults: { enabled: true, dm: true },
+        mandatory: true,
+    },
+    // Can't be turned off and isn't listed in the settings: the owner's answer to a Contact & Support message
+    // when it couldn't be delivered by DM (the bot shares no server with the user)
+    support_reply: {
+        label: "Support answers",
+        description: "An answer from the owner to your Contact & Support message.",
+        defaults: { enabled: true, dm: false },
         mandatory: true,
     },
     ballsdex_account: {
