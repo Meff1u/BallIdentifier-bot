@@ -1,5 +1,5 @@
 const { getDatabase } = require("./database");
-const { BOT_DATA_KEYS, ADMIN_ID } = require("./constants");
+const { BOT_DATA_KEYS, ADMIN_ID, DEX_NAME_BY_KEY } = require("./constants");
 const { isLinked, getStoredCollection, verifyFileBall } = require("./ballsdex");
 const { getData } = require("./helpers");
 
@@ -328,7 +328,7 @@ async function addSelf(userId, dexKey, ballId) {
         }
         if (total >= MAX_SELF_ENTRIES) throw fail(429, `You've reached the limit of ${MAX_SELF_ENTRIES} self-added collectors.`, "MAX_ENTRIES");
         if (status === "unverified" && unverified >= MAX_UNVERIFIED) {
-            throw fail(429, `You already have ${MAX_UNVERIFIED} unverified collections in this dex. Remove one first, or ask the owner to verify one.`, "UNVERIFIED_LIMIT");
+            throw fail(429, `You already have ${MAX_UNVERIFIED} unverified collections in ${DEX_NAME_BY_KEY[dexKey] || "this dex"}. Remove one first, or ask the owner to verify one.`, "UNVERIFIED_LIMIT");
         }
 
         await saveEntry(dexKey, found, userId, { addedAt: new Date(now).toISOString(), status });
