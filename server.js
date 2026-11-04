@@ -677,11 +677,12 @@ app.get("/api/collectors/:dexKey", generalLimiter, verifySignature, (req, res) =
     res.status(200).json(result);
 });
 
-// Add or remove yourself as a collector; the owner can also add anyone (verified) and remove anyone
+// Add or remove yourself as a collector (verified or unverified, see utils/collector-store.js); the owner can also
+// add anyone (verified), remove anyone and set a collector's status ("set-status")
 app.post("/api/users/:userId/collectors", apiLimiter, verifySignature, async (req, res) => {
     const { userId } = req.params;
-    const { action, dexKey, ballId, targetUserId } = req.body || {};
-    if (!["add", "remove"].includes(action) || typeof dexKey !== "string" || !Number.isInteger(ballId)) {
+    const { action, dexKey, ballId, targetUserId, status } = req.body || {};
+    if (!["add", "remove", "set-status"].includes(action) || typeof dexKey !== "string" || !Number.isInteger(ballId)) {
         return res.status(400).json({ error: "Invalid request" });
     }
     if (targetUserId !== undefined && (typeof targetUserId !== "string" || !/^\d{17,20}$/.test(targetUserId))) {
@@ -689,7 +690,10 @@ app.post("/api/users/:userId/collectors", apiLimiter, verifySignature, async (re
     }
     try {
         let result;
-        if (action === "remove") result = await collectorStore.removeSelf(userId, targetUserId || userId, dexKey, ballId);
+        if (action === "set-status") {
+            if (!targetUserId) return res.status(400).json({ error: "Invalid user" });
+            result = await collectorStore.setStatus(userId, targetUserId, dexKey, ballId, status);
+        } else if (action === "remove") result = await collectorStore.removeSelf(userId, targetUserId || userId, dexKey, ballId);
         else if (targetUserId && targetUserId !== userId) result = await collectorStore.addVerified(userId, targetUserId, dexKey, ballId);
         else result = await collectorStore.addSelf(userId, dexKey, ballId);
         res.status(200).json({ success: true, ...result });

@@ -7,13 +7,17 @@ const PROFILE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MISSING_PROFILE_TTL_MS = 24 * 60 * 60 * 1000;
 const PROFILE_FETCH_GAP_MS = 250;
 const DAILY_ADD_LIMIT = 20; // adds per user per 24 h
-const MAX_SELF_ENTRIES = 300; // self entries per user, all dexes
+const MAX_SELF_ENTRIES = 300; // entries a user added themselves (not added by the owner), all dexes
+const MAX_UNVERIFIED = 5; // unverified entries per user, per dex (checked in addSelf, i.e. on the backend)
 // Enabled dexes only (the list can change while the bot runs)
 const DEX_KEYS = { has: (key) => Object.values(BOT_DATA_KEYS).includes(key) };
 
 let client = null;
 let ready = false;
-const selfEntries = new Map(); // "dexKey:ballId" -> Map(userId -> { addedAt, status: "self" | "verified" | "removed" })
+// Statuses: "verified", "unverified" or "removed" (hides a collector from the dex data). Old records say "self":
+// in Ballsdex those were only saved after the sync + half-CC check, so they count as verified; in every other
+// dex nothing was ever checked, so they are unverified (see normalizeStatus, applied when the records load).
+const selfEntries = new Map(); // "dexKey:ballId" -> Map(userId -> { addedAt, status, addedBy? })
 const staticCollectors = new WeakMap(); // ball object -> collectors from the dex JSON
 const profiles = new Map(); // userId -> { name, username, avatarUrl, missing, fetchedAt }
 const addLog = new Map(); // userId -> [timestamps] of recent adds
@@ -27,6 +31,21 @@ const isDeletedProfile = (profile) => Boolean(profile && !profile.missing && DEL
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const entryKey = (dexKey, ballId) => `${dexKey}:${ballId}`;
+
+function normalizeStatus(dexKey, status) {
+    if (status === "verified" || status === "unverified" || status === "removed") return status;
+    return dexKey === "BD" ? "verified" : "unverified"; // legacy "self"
+}
+
+// One add at a time per user, so the limits can't be beaten by sending several requests at once
+const userLocks = new Map();
+function withUserLock(userId, task) {
+    const run = (userLocks.get(userId) || Promise.resolve()).then(task, task);
+    const tail = run.catch(() => {});
+    userLocks.set(userId, tail);
+    tail.then(() => userLocks.get(userId) === tail && userLocks.delete(userId));
+    return run;
+}
 
 function defaultAvatar(userId) {
     try {
@@ -45,7 +64,7 @@ function staticOf(ball) {
     return staticCollectors.get(ball);
 }
 
-// "removed" entries hide a collector from the dex data; "self"/"verified" ones add a collector
+// "removed" entries hide a collector from the dex data; "verified"/"unverified" ones add a collector
 function activeIds(dexKey, ball) {
     const statics = staticOf(ball) || [];
     const entries = selfEntries.get(entryKey(dexKey, ball.id));
@@ -220,7 +239,7 @@ async function init(discordClient) {
         for (const entry of entries) {
             const key = entryKey(entry.dexKey, entry.ballId);
             if (!selfEntries.has(key)) selfEntries.set(key, new Map());
-            selfEntries.get(key).set(entry.userId, { addedAt: entry.addedAt, status: entry.status || "self" });
+            selfEntries.get(key).set(entry.userId, { addedAt: entry.addedAt, status: normalizeStatus(entry.dexKey, entry.status), addedBy: entry.addedBy });
         }
         for (const { _id, ...profile } of cachedProfiles) profiles.set(_id, profile);
         ready = true;
@@ -252,7 +271,7 @@ function getDexCollectors(dexKey) {
             if (entry.status === "verified" && !statics.includes(userId)) list.push(collectorView(userId, "verified", entry.addedAt, "site", publicIds));
         }
         for (const [userId, entry] of self || []) {
-            if (entry.status === "self" && !statics.includes(userId)) list.push(collectorView(userId, "self", entry.addedAt, "site", publicIds));
+            if (entry.status === "unverified" && !statics.includes(userId)) list.push(collectorView(userId, "unverified", entry.addedAt, "site", publicIds));
         }
         if (list.length) entries[ball.id] = list;
     }
@@ -269,36 +288,55 @@ function fail(status, message, code) {
     return error;
 }
 
+/**
+ * Adds the user as a collector of a ball. Never refused for lack of a sync: the entry is "verified" only when the
+ * Ballsdex check passes (synced account owning at least half of the CC requirement), otherwise "unverified".
+ * Every other dex is always "unverified" (nothing to confirm it with); the owner can verify entries by hand.
+ * A user can have at most MAX_UNVERIFIED unverified entries per dex.
+ */
 async function addSelf(userId, dexKey, ballId) {
     const found = resolveBall(dexKey, ballId);
     if (activeIds(dexKey, found.ball).includes(userId)) {
         throw fail(409, `You're already a collector of ${found.name}.`, "ALREADY");
     }
 
+    let status = "unverified";
+    let reason = null;
     if (dexKey === "BD") {
         try {
             await checkBallsdexOwnership(userId, found);
+            status = "verified";
         } catch (error) {
-            client?.log?.("COLLECTORS", `⛔ ${who(userId)} couldn't add themselves to ${found.name} (${dexKey}): ${error.message}`);
-            throw error;
+            reason = error.message;
         }
     }
 
-    const now = Date.now();
-    const recent = (addLog.get(userId) || []).filter((time) => now - time < 24 * 60 * 60 * 1000);
-    if (recent.length >= DAILY_ADD_LIMIT) throw fail(429, `You can add yourself to ${DAILY_ADD_LIMIT} balls a day. Try again tomorrow.`, "DAILY_LIMIT");
-    let total = 0;
-    for (const users of selfEntries.values()) if (users.get(userId)?.status === "self") total++;
-    if (total >= MAX_SELF_ENTRIES) throw fail(429, `You've reached the limit of ${MAX_SELF_ENTRIES} self-added collectors.`, "MAX_ENTRIES");
+    return withUserLock(userId, async () => {
+        if (activeIds(dexKey, found.ball).includes(userId)) throw fail(409, `You're already a collector of ${found.name}.`, "ALREADY");
 
-    const addedAt = new Date(now).toISOString();
-    await saveEntry(dexKey, found, userId, { addedAt, status: "self" });
-    recent.push(now);
-    addLog.set(userId, recent);
-    applyBall(dexKey, found.ball);
-    enqueueProfile(userId);
-    client?.log?.("COLLECTORS", `➕ ${who(userId)} added themselves to ${found.name} (${dexKey})`);
-    return { ballId: found.ball.id, ballName: found.name };
+        const now = Date.now();
+        const recent = (addLog.get(userId) || []).filter((time) => now - time < 24 * 60 * 60 * 1000);
+        if (recent.length >= DAILY_ADD_LIMIT) throw fail(429, `You can add yourself to ${DAILY_ADD_LIMIT} balls a day. Try again tomorrow.`, "DAILY_LIMIT");
+        let total = 0;
+        let unverified = 0;
+        for (const [key, users] of selfEntries) {
+            const entry = users.get(userId);
+            if (!entry || entry.status === "removed") continue;
+            if (!entry.addedBy) total++;
+            if (entry.status === "unverified" && key.startsWith(`${dexKey}:`)) unverified++;
+        }
+        if (total >= MAX_SELF_ENTRIES) throw fail(429, `You've reached the limit of ${MAX_SELF_ENTRIES} self-added collectors.`, "MAX_ENTRIES");
+        if (status === "unverified" && unverified >= MAX_UNVERIFIED) {
+            throw fail(429, `You already have ${MAX_UNVERIFIED} unverified collections in this dex. Remove one first, or ask the owner to verify one.`, "UNVERIFIED_LIMIT");
+        }
+
+        await saveEntry(dexKey, found, userId, { addedAt: new Date(now).toISOString(), status });
+        recent.push(now);
+        addLog.set(userId, recent);
+        enqueueProfile(userId);
+        client?.log?.("COLLECTORS", `➕ ${who(userId)} added themselves to ${found.name} (${dexKey}) as ${status}${reason ? ` (${reason})` : ""}`);
+        return { ballId: found.ball.id, ballName: found.name, status, reason: status === "unverified" ? reason : null };
+    });
 }
 
 /**
@@ -356,7 +394,7 @@ async function saveEntry(dexKey, found, userId, entry, extra = {}) {
     );
     const key = entryKey(dexKey, found.ball.id);
     if (!selfEntries.has(key)) selfEntries.set(key, new Map());
-    selfEntries.get(key).set(userId, entry);
+    selfEntries.get(key).set(userId, { ...entry, addedBy: extra.addedBy ?? entry.addedBy });
     applyBall(dexKey, found.ball);
 }
 
@@ -381,6 +419,22 @@ async function addVerified(actorId, targetId, dexKey, ballId) {
     enqueueProfile(targetId);
     client?.log?.("COLLECTORS", `✅ ${who(actorId)} added ${who(targetId)} to ${found.name} (${dexKey}) as verified`);
     return { ballId: found.ball.id, ballName: found.name };
+}
+
+/** Owner only: verify / unverify a collector who added themselves on the website (entries from the dex data stay verified). */
+async function setStatus(actorId, targetId, dexKey, ballId, status) {
+    if (actorId !== ADMIN_ID) throw fail(403, "Only the owner can change a collector's status.", "FORBIDDEN");
+    if (status !== "verified" && status !== "unverified") throw fail(400, "Invalid status.", "BAD_STATUS");
+    const found = resolveBall(dexKey, ballId);
+    const current = selfEntries.get(entryKey(dexKey, found.ball.id))?.get(targetId);
+    if (!current || current.status === "removed") {
+        if ((staticOf(found.ball) || []).includes(targetId) && !current) throw fail(400, "This entry comes from the dex data, so it is always verified.", "STATIC");
+        throw fail(404, "No such collector entry.", "NOT_FOUND");
+    }
+    if (current.status === status) throw fail(409, `That collector is already ${status}.`, "ALREADY");
+    await saveEntry(dexKey, found, targetId, { addedAt: current.addedAt || new Date().toISOString(), status, addedBy: current.addedBy }, { statusBy: actorId, statusAt: new Date().toISOString() });
+    client?.log?.("COLLECTORS", `🛡️ ${who(actorId)} set ${who(targetId)} to ${status} for ${found.name} (${dexKey})`);
+    return { ballId: found.ball.id, ballName: found.name, status };
 }
 
 /** Users remove their own website entries; the owner can remove anyone, including dex-data collectors. */
@@ -450,4 +504,4 @@ function getDiscordProfile(userId) {
 
 const pendingProfiles = () => queue.length;
 
-module.exports = { init, applyOverlay, getDexCollectors, addSelf, addVerified, removeSelf, getUserCollections, collectionCounts, getDiscordProfile, defaultAvatar, publicProfileIds, collectorView, pendingProfiles };
+module.exports = { init, applyOverlay, getDexCollectors, addSelf, addVerified, setStatus, removeSelf, getUserCollections, collectionCounts, getDiscordProfile, defaultAvatar, publicProfileIds, collectorView, pendingProfiles };
