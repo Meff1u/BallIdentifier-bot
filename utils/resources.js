@@ -23,7 +23,7 @@ const positive = (value) => (Number.isFinite(value) && value >= 0 ? value : null
 
 async function database() {
     try {
-        const stats = await getDatabase().command({ dbStats: 1, scale: 1 });
+        const stats = await (await getDatabase()).command({ dbStats: 1, scale: 1 });
         const limitMb = Number(process.env.DB_STORAGE_LIMIT_MB);
         const fsTotal = positive(stats.fsTotalSize) || null;
         return {
