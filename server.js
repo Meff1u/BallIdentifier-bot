@@ -95,7 +95,19 @@ const initializeServer = (c) => {
 // Rate limit middleware (each limiter has its own store, so public and API limits don't share a budget)
 const rateLimiterStores = [];
 
-const clientIp = (req) => req.ip || req.socket.remoteAddress;
+// Self-hosted website (docker-compose, TRUST_CLIENT_IP_HEADER=1): the website container sends the visitor's IP in
+// X-Client-IP, so limits apply per visitor instead of to the whole website. Trusted only from private addresses
+// (the Docker network), never from the internet.
+const PRIVATE_ADDRESS = /^(::ffff:)?(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)|^::1$|^f[cd][0-9a-f]{2}:/i;
+const VALID_IP = /^[0-9a-f.:]{2,45}$/i;
+const clientIp = (req) => {
+    const direct = req.socket.remoteAddress || "";
+    if (process.env.TRUST_CLIENT_IP_HEADER === "1" && PRIVATE_ADDRESS.test(direct)) {
+        const forwarded = String(req.get("X-Client-IP") || "").trim();
+        if (VALID_IP.test(forwarded)) return forwarded;
+    }
+    return req.ip || direct;
+};
 
 const createRateLimiter = (maxRequests, windowMs, keyOf = clientIp) => {
     const store = new Map();
@@ -125,7 +137,7 @@ const createRateLimiter = (maxRequests, windowMs, keyOf = clientIp) => {
     };
 };
 
-// Rate limiters. Website requests come through Netlify functions, which share a few IPs across ALL users,
+// Rate limiters. Website requests all come from the website container (it forwards the visitor's IP, see clientIp),
 // so the signed endpoints are limited per Discord user / server instead of per IP (with a high per-IP ceiling).
 const generalLimiter = createRateLimiter(60, 60 * 1000); // public endpoints
 const apiLimiter = createRateLimiter(30, 60 * 1000, (req) => {
@@ -895,7 +907,7 @@ app.post("/api/users/:userId/admin/deploy", apiLimiter, verifySignature, require
     } catch (error) {
         if (error.status) return res.status(error.status).json({ error: error.message });
         client?.logError?.("Website deploy failed", error);
-        res.status(502).json({ error: "Netlify didn't accept the deploy. Check the Errors log." });
+        res.status(502).json({ error: "The website didn't accept the deploy. Check the Errors log." });
     }
 });
 

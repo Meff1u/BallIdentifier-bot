@@ -94,7 +94,7 @@ async function fileSha(path, base) {
 
 /**
  * files: [{ path, content } | { path, buffer } | { path, sha } | { path, remove: true }]
- * With NETLIFY_BUILD_HOOK set the commit doesn't deploy by itself and is listed as waiting for Deploy (utils/deploy.js).
+ * The website picks the commit up on Deploy; until then it is listed as waiting (utils/deploy.js).
  * details: human-readable changes shown in that list.
  */
 async function commitFiles(base, files, message, details = []) {
