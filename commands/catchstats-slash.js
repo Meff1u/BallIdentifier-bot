@@ -1,6 +1,6 @@
 /**
  * /catchstats — catch times on servers with Catch stats turned on (website: Bot -> Catch stats).
- *   /catchstats me [user]          your stats (or another user's, if they made them public)
+ *   /catchstats me [user]          your last 30 days and your record (or another user's, if they made them public)
  *   /catchstats server [period]    fastest catchers of this server (only users with public stats)
  *   /catchstats settings [public] [tracking]   make your stats public / stop being tracked (deletes your data)
  * Also handles the buttons under catch replies: "My stats" and "Don't track me".
@@ -22,7 +22,8 @@ const catchStats = require("../utils/catch-stats");
 const { COLORS } = require("../utils/constants");
 
 const { formatMs } = catchStats;
-const PERIOD_LABELS = { all: "all time", "30d": "last 30 days", "7d": "last 7 days" };
+const PERIOD_LABELS = { "30d": "last 30 days", "7d": "last 7 days" };
+const day = (date) => (date ? ` · set <t:${Math.floor(new Date(date).getTime() / 1000)}:D>` : "");
 const SITE = "https://ballidentifier.xyz/bot/catch-stats";
 
 const container = (...blocks) => {
@@ -35,9 +36,9 @@ const container = (...blocks) => {
 };
 
 async function statsView(userId, { self }) {
-    const { settings, all, last30, last7 } = await catchStats.getUserStats(userId);
+    const { settings, last30, last7, records } = await catchStats.getUserStats(userId);
     const who = self ? "Your" : `<@${userId}>'s`;
-    if (!all) {
+    if (!last30.count && !records.personal) {
         return container(
             `## ${who} catch stats`,
             self
@@ -52,23 +53,24 @@ async function statsView(userId, { self }) {
     return container(
         `## ${who} catch stats`,
         [
-            line("Catches", all.count.toLocaleString("en-US")),
-            line("Average", formatMs(all.averageMs)),
-            line("Fastest", `${formatMs(all.bestMs)}${all.best ? ` (${all.best.ball})` : ""}`),
-            line("Last 30 days", last30.count ? `${last30.count} catches · avg ${formatMs(last30.averageMs)} · best ${formatMs(last30.bestMs)}` : "no catches"),
+            line("Last 30 days", last30.count ? `${last30.count.toLocaleString("en-US")} catches · avg ${formatMs(last30.averageMs)} · best ${formatMs(last30.bestMs)}${last30.bestBall ? ` (${last30.bestBall.ball})` : ""}` : "no catches"),
             line("Last 7 days", last7.count ? `${last7.count} catches · avg ${formatMs(last7.averageMs)} · best ${formatMs(last7.bestMs)}` : "no catches"),
-        ].join("\n"),
-        all.fastestBalls.length ? `**Fastest balls** (3+ catches)\n${balls(all.fastestBalls)}` : null,
+            records.personal ? line("Personal record", `${formatMs(records.personal.ms)} (${records.personal.ball})${day(records.personal.at)}`) : null,
+        ]
+            .filter(Boolean)
+            .join("\n"),
+        last30.fastestBalls.length ? `**Fastest balls, last 30 days** (3+ catches)\n${balls(last30.fastestBalls)}` : null,
         self ? `-# Your stats are **${settings.public ? "public" : "private"}**. Change it with /catchstats settings or on ${SITE}` : null,
     );
 }
 
-function boardView(board, title) {
+function boardView(board, title, serverRecord = null) {
     const row = (entry, index, value) => `${index + 1}. ${entry.name ? `**${entry.name}**` : `<@${entry.userId}>`} · ${value}`;
     return container(
         `## ${title}`,
         `**Fastest catch**\n${board.fastest.length ? board.fastest.map((e, i) => row(e, i, `${formatMs(e.bestMs)}`)).join("\n") : "Nobody yet."}`,
         `**Best average** (${board.minCount}+ catches)\n${board.average.length ? board.average.map((e, i) => row(e, i, `${formatMs(e.averageMs)} over ${e.count}`)).join("\n") : "Nobody yet."}`,
+        serverRecord ? `🏆 **Server record:** <@${serverRecord.userId}> · ${formatMs(serverRecord.ms)} (${serverRecord.ball})${day(serverRecord.at)}` : null,
         `-# Only users who made their catch stats public are listed (/catchstats settings public:True). More on ${SITE}`,
     );
 }
@@ -91,7 +93,7 @@ module.exports = {
                 .setName("server")
                 .setDescription("Fastest catchers of this server (users with public stats).")
                 .addStringOption((option) =>
-                    option.setName("period").setDescription("Time range").addChoices({ name: "All time", value: "all" }, { name: "Last 30 days", value: "30d" }, { name: "Last 7 days", value: "7d" }),
+                    option.setName("period").setDescription("Time range").addChoices({ name: "Last 30 days", value: "30d" }, { name: "Last 7 days", value: "7d" }),
                 ),
         )
         .addSubcommand((sub) =>
@@ -119,9 +121,9 @@ module.exports = {
                 if (!interaction.guildId) return interaction.reply({ content: "Use this on a server.", flags: MessageFlags.Ephemeral });
                 const period = interaction.options.getString("period") || "30d";
                 await interaction.deferReply();
-                const board = await catchStats.leaderboard({ period, guildId: interaction.guildId });
+                const [board, serverRecord] = await Promise.all([catchStats.leaderboard({ period, guildId: interaction.guildId }), catchStats.getServerRecord(interaction.guildId)]);
                 const enabled = catchStats.guildConfig(interaction.guildId).enabled;
-                const box = boardView(board, `Fastest catchers · ${interaction.guild?.name || "this server"} · ${PERIOD_LABELS[period]}`);
+                const box = boardView(board, `Fastest catchers · ${interaction.guild?.name || "this server"} · ${PERIOD_LABELS[period]}`, serverRecord);
                 if (!enabled) box.addTextDisplayComponents(new TextDisplayBuilder().setContent("-# Catch stats are turned off on this server. An admin can turn them on on the website."));
                 return interaction.editReply({ components: [box], flags: [MessageFlags.IsComponentsV2], allowedMentions: { parse: [] } });
             }

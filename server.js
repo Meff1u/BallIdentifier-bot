@@ -7,6 +7,7 @@ const { getData, updateData } = require("./utils/helpers");
 const { SUPPORTED_BOT_IDS, ADMIN_ID } = require("./utils/constants");
 const { getDatabase } = require("./utils/database");
 const { getRecentLogs } = require("./utils/logger");
+const { getResources } = require("./utils/resources");
 const {
     connectOAuth,
     isLinked,
@@ -901,6 +902,16 @@ app.get("/api/users/:userId/admin/deploy", apiLimiter, verifySignature, requireO
     }
 });
 
+// Database and disk usage (owner, Moderation -> Resources): real numbers only, see utils/resources.js
+app.get("/api/users/:userId/admin/resources", apiLimiter, verifySignature, requireOwner, async (req, res) => {
+    try {
+        res.status(200).json(await getResources());
+    } catch (error) {
+        client?.logError?.("Couldn't read the resource usage", error);
+        res.status(500).json({ error: "Couldn't read the resource usage. Check the Errors log." });
+    }
+});
+
 app.post("/api/users/:userId/admin/deploy", apiLimiter, verifySignature, requireOwner, async (req, res) => {
     try {
         res.status(200).json({ success: true, ...(await deploy.trigger()) });
@@ -1087,7 +1098,7 @@ const catchError = (res, error, what) => {
 
 app.get("/api/catch-stats/leaderboard", profileLimiter, verifySignature, async (req, res) => {
     try {
-        const period = Object.hasOwn(catchStats.PERIODS, req.query.period) ? req.query.period : "all";
+        const period = Object.hasOwn(catchStats.PERIODS, req.query.period) ? req.query.period : "30d";
         const guildId = /^\d{17,20}$/.test(String(req.query.guildId || "")) ? String(req.query.guildId) : null;
         res.status(200).json(await catchStats.leaderboard({ period, guildId, limit: 15 }));
     } catch (error) {

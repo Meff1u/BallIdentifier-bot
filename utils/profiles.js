@@ -159,7 +159,8 @@ async function getPublicProfile(userId, { self = false } = {}) {
     let catches = null;
     if (catchSettings.tracking && (catchSettings.public || self)) {
         const result = await catchStats.getUserStats(userId).catch(() => null);
-        catches = result?.all ? { public: catchSettings.public, all: result.all, last30: result.last30, last7: result.last7 } : { public: catchSettings.public, all: null };
+        // Only the last 30 days (Recent Catch Stats); the permanent records are not part of the profile
+        catches = result ? { public: catchSettings.public, last30: result.last30, last7: result.last7 } : { public: catchSettings.public, last30: null };
     }
     return {
         id: userId,

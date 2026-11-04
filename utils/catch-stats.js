@@ -7,8 +7,15 @@
  * /catchstats settings or the website). Opting out deletes their catch data. Stats are private by
  * default; only users who make them public appear in rankings or on their profile.
  *
- * Storage (MongoDB): catchEvents (one per catch, kept 35 days, for 7/30-day numbers),
- * catchStats (per-user all-time totals), catchGuilds (server records). Settings live in data.json:
+ * Storage (MongoDB), three separate things:
+ *   history  catchEvents: one per catch, deleted after 35 days (TTL). Every number shown (averages, counts,
+ *            rankings, the profile's "Recent Catch Stats") is computed from the last 30 days of it; nothing
+ *            is totalled over a longer time.
+ *   records  catchStats (per user: best / bestMs with the date it was set, balls.<key>.bestMs + bestAt) and
+ *            catchGuilds (best = the server record with its date). Kept until the user opts out; the 35-day
+ *            cleanup of the history never touches them. Old documents still hold unused all-time counters
+ *            (count, totalMs, balls.<key>.count/totalMs, guilds): they are no longer read or updated.
+ * Settings live in data.json:
  * users[id].catchStats = { public, tracking }, guilds[id].catchStats = { enabled, mode, lines, ... }.
  * How catch messages are recognized: utils/catch-phrases.js (phrases are set per dex on the website)
  */
@@ -22,8 +29,9 @@ const { rulesFor, CATCH_STATS_BOTS } = require("./catch-phrases");
 const MAX_CATCH_MS = 60 * 60 * 1000; // slower than an hour isn't a reaction time (the spawn sat there)
 const EVENT_TTL_SEC = 35 * 24 * 60 * 60;
 const SPAWN_MEMORY_MS = 2 * 60 * 60 * 1000;
-const PERIODS = { all: null, "30d": 30, "7d": 7 };
-const MIN_FOR_AVERAGE = { all: 20, "30d": 10, "7d": 5 }; // catches needed to be ranked by average
+const PERIODS = { "30d": 30, "7d": 7 };
+const STATS_DAYS = 30; // the window every shown number covers
+const MIN_FOR_AVERAGE = { "30d": 10, "7d": 5 }; // catches needed to be ranked by average
 const LINES = ["average", "ballAverage", "best", "serverRank"];
 const DEFAULT_GUILD = { enabled: false, mode: "every", lines: { average: true, ballAverage: true, best: true, serverRank: false } };
 const DEFAULT_USER = { public: false, tracking: true };
@@ -90,10 +98,6 @@ const publicUserIds = () =>
 /* ----- Detection ----- */
 
 const ballKey = (dexKey, ball) => `${dexKey}:${encodeURIComponent(ball).replace(/\./g, "%2E")}`;
-const decodeBallKey = (key) => {
-    const [dexKey, ...rest] = key.split(":");
-    return { dexKey, ball: decodeURIComponent(rest.join(":")) };
-};
 const DEX_NAMES = DEX_NAME_BY_KEY;
 
 function messageText(message) {
@@ -249,48 +253,55 @@ async function collections() {
     return { events: db.collection("catchEvents"), stats: db.collection("catchStats"), guilds: db.collection("catchGuilds") };
 }
 
-/** Saves one catch and says what it changed (records, averages). */
+/**
+ * Saves one catch and says what it changed. The catch goes into the history (catchEvents); the permanent
+ * records (personal, per ball, server) are only touched when this catch beats them, and keep the date.
+ * Averages and counts in the result are the last 30 days, worked out from the history.
+ */
 async function record({ userId, guildId, dexKey, ball, ms }) {
     const { events, stats, guilds } = await collections();
     const key = ballKey(dexKey, ball);
     const at = new Date();
-    const before = (await stats.findOne({ _id: userId })) || { count: 0, totalMs: 0, balls: {}, guilds: {} };
-    const ballBefore = before.balls?.[key] || { count: 0, totalMs: 0 };
-    const guildBefore = (await guilds.findOne({ _id: guildId })) || {};
+    const [before, guildBefore] = await Promise.all([stats.findOne({ _id: userId }), guilds.findOne({ _id: guildId })]);
+    const hadRecord = Number.isFinite(before?.bestMs);
+    const ballBest = before?.balls?.[key]?.bestMs;
+    const guildBest = guildBefore?.best?.ms;
 
-    const personalRecord = before.count > 0 && ms < before.bestMs;
-    const ballRecord = ballBefore.count > 0 && ms < ballBefore.bestMs;
-    const serverRecord = Boolean(guildBefore.best) && ms < guildBefore.best.ms;
+    const personalRecord = hadRecord && ms < before.bestMs;
+    const ballRecord = Number.isFinite(ballBest) && ms < ballBest;
+    const serverRecord = Number.isFinite(guildBest) && ms < guildBest;
 
-    const update = {
-        $inc: { count: 1, totalMs: ms, [`balls.${key}.count`]: 1, [`balls.${key}.totalMs`]: ms, [`guilds.${guildId}.count`]: 1, [`guilds.${guildId}.totalMs`]: ms },
-        $min: { bestMs: ms, [`balls.${key}.bestMs`]: ms, [`guilds.${guildId}.bestMs`]: ms },
-        $set: { updatedAt: at },
-        $setOnInsert: { firstAt: at },
-    };
-    if (!before.count || ms < before.bestMs) update.$set.best = { ms, ball, dexKey, guildId, at };
+    const update = { $set: { updatedAt: at }, $setOnInsert: { firstAt: at } };
+    if (!hadRecord || ms < before.bestMs) {
+        update.$set.bestMs = ms;
+        update.$set.best = { ms, ball, dexKey, guildId, at };
+    }
+    if (!Number.isFinite(ballBest) || ms < ballBest) {
+        update.$set[`balls.${key}.bestMs`] = ms;
+        update.$set[`balls.${key}.bestAt`] = at;
+    }
 
-    // Worked out before writing, from the numbers as they were
-    const result = {
+    await events.insertOne({ userId, guildId, dexKey, ball, ms, at });
+    const [month, ballMonth] = await Promise.all([
+        windowRows(userId, STATS_DAYS).then(totalsOf),
+        windowRows(userId, STATS_DAYS, { dexKey, ball }).then(totalsOf),
+        stats.updateOne({ _id: userId }, update, { upsert: true }),
+        !Number.isFinite(guildBest) || ms < guildBest ? guilds.updateOne({ _id: guildId }, { $set: { best: { ms, userId, ball, dexKey, at } } }, { upsert: true }) : null,
+    ]);
+
+    return {
         ms,
-        count: before.count + 1,
-        averageMs: Math.round((before.totalMs + ms) / (before.count + 1)),
-        bestMs: Math.min(before.bestMs ?? ms, ms),
-        previousBestMs: before.count ? before.bestMs : null,
-        best: !before.count || ms < before.bestMs ? { ms, ball } : before.best,
-        ball: { count: ballBefore.count + 1, averageMs: Math.round((ballBefore.totalMs + ms) / (ballBefore.count + 1)), bestMs: Math.min(ballBefore.bestMs ?? ms, ms) },
+        count: month.count,
+        averageMs: month.averageMs,
+        bestMs: Math.min(before?.bestMs ?? ms, ms),
+        previousBestMs: hadRecord ? before.bestMs : null,
+        best: !hadRecord || ms < before.bestMs ? { ms, ball } : before.best,
+        ball: { count: ballMonth.count, averageMs: ballMonth.averageMs, bestMs: Math.min(ballBest ?? ms, ms) },
         personalRecord,
         ballRecord,
         serverRecord,
-        firstCatch: before.count === 0,
+        firstCatch: !hadRecord,
     };
-
-    await Promise.all([
-        events.insertOne({ userId, guildId, dexKey, ball, ms, at }),
-        stats.updateOne({ _id: userId }, update, { upsert: true }),
-        !guildBefore.best || ms < guildBefore.best.ms ? guilds.updateOne({ _id: guildId }, { $set: { best: { ms, userId, ball, dexKey, at } } }, { upsert: true }) : null,
-    ]);
-    return result;
 }
 
 /* ----- Reply in the channel ----- */
@@ -335,8 +346,8 @@ async function reply(message, found, result) {
     if (result.ballRecord && !result.personalRecord && !result.serverRecord) lines.push(`🎯 Your fastest ${found.ball} yet`);
 
     const stats = [];
-    if (config.lines.average && result.count > 1) stats.push(`avg ${formatMs(result.averageMs)} (${result.count.toLocaleString("en-US")} catches)`);
-    if (config.lines.ballAverage && result.ball.count > 1) stats.push(`${found.ball}: avg ${formatMs(result.ball.averageMs)}, best ${formatMs(result.ball.bestMs)}`);
+    if (config.lines.average && result.count > 1) stats.push(`avg ${formatMs(result.averageMs)} (${result.count.toLocaleString("en-US")} catches, 30 days)`);
+    if (config.lines.ballAverage && result.ball.count > 1) stats.push(`${found.ball}: avg ${formatMs(result.ball.averageMs)} (30 days), best ${formatMs(result.ball.bestMs)}`);
     if (config.lines.best && !result.personalRecord && !result.firstCatch && result.best) stats.push(`best ${formatMs(result.best.ms)} (${result.best.ball})`);
     if (config.lines.serverRank) {
         const rank = await serverRank(message.guildId, found.userId).catch(() => null);
@@ -356,73 +367,70 @@ async function reply(message, found, result) {
 
 /* ----- Reading ----- */
 
-function summarize(doc) {
-    if (!doc?.count) return null;
-    const balls = Object.entries(doc.balls || {})
-        .map(([key, value]) => ({ ...decodeBallKey(key), count: value.count, averageMs: Math.round(value.totalMs / value.count), bestMs: value.bestMs }))
-        .map((entry) => ({ ...entry, dex: DEX_NAMES[entry.dexKey] || entry.dexKey }));
+/** The user's catches of the last `days` days grouped by ball (from the history): [{ _id: { dexKey, ball }, count, totalMs, bestMs }]. */
+async function windowRows(userId, days, { dexKey = null, ball = null } = {}) {
+    const { events } = await collections();
+    const match = { userId, at: { $gte: new Date(Date.now() - days * 86400000) } };
+    if (dexKey && ball) Object.assign(match, { dexKey, ball });
+    return events.aggregate([{ $match: match }, { $group: { _id: { dexKey: "$dexKey", ball: "$ball" }, count: { $sum: 1 }, totalMs: { $sum: "$ms" }, bestMs: { $min: "$ms" } } }]).toArray();
+}
+
+function totalsOf(rows) {
+    const count = rows.reduce((sum, row) => sum + row.count, 0);
+    if (!count) return { count: 0, averageMs: null, bestMs: null };
+    return { count, averageMs: Math.round(rows.reduce((sum, row) => sum + row.totalMs, 0) / count), bestMs: Math.min(...rows.map((row) => row.bestMs)) };
+}
+
+/** Last 30 days in detail (profile, website, command): totals, fastest ball and the ball lists. */
+function summarizeWindow(rows) {
+    const balls = rows.map((row) => ({ dexKey: row._id.dexKey, dex: DEX_NAMES[row._id.dexKey] || row._id.dexKey, ball: row._id.ball, count: row.count, averageMs: Math.round(row.totalMs / row.count), bestMs: row.bestMs }));
+    const fastest = [...balls].sort((a, b) => a.bestMs - b.bestMs)[0];
     return {
-        count: doc.count,
-        averageMs: Math.round(doc.totalMs / doc.count),
-        bestMs: doc.bestMs,
-        best: doc.best ? { ms: doc.best.ms, ball: doc.best.ball, dex: DEX_NAMES[doc.best.dexKey] || doc.best.dexKey, at: doc.best.at } : null,
-        firstAt: doc.firstAt || null,
-        updatedAt: doc.updatedAt || null,
+        ...totalsOf(rows),
+        bestBall: fastest ? { ball: fastest.ball, dex: fastest.dex } : null,
+        uniqueBalls: balls.length,
         fastestBalls: balls.filter((b) => b.count >= 3).sort((a, b) => a.averageMs - b.averageMs).slice(0, 5),
         mostCaught: [...balls].sort((a, b) => b.count - a.count).slice(0, 5),
-        uniqueBalls: balls.length,
     };
 }
 
-async function windowStats(userId, days) {
-    const { events } = await collections();
-    const [row] = await events
-        .aggregate([
-            { $match: { userId, at: { $gte: new Date(Date.now() - days * 86400000) } } },
-            { $group: { _id: null, count: { $sum: 1 }, avg: { $avg: "$ms" }, best: { $min: "$ms" } } },
-        ])
-        .toArray();
-    return row ? { count: row.count, averageMs: Math.round(row.avg), bestMs: row.best } : { count: 0, averageMs: null, bestMs: null };
+/** The permanent personal record with the date it was set. */
+function recordsOf(doc) {
+    const best = doc?.best;
+    return { personal: best ? { ms: best.ms, ball: best.ball, dex: DEX_NAMES[best.dexKey] || best.dexKey, at: best.at || null } : null };
 }
 
-/** Everything about one user (their own view; profiles use it only when public). */
+/** The permanent record of a server (fastest catch there) with its date, or null. */
+async function getServerRecord(guildId) {
+    const { guilds } = await collections();
+    const best = (await guilds.findOne({ _id: guildId }))?.best;
+    return best ? { ms: best.ms, userId: best.userId, ball: best.ball, dex: DEX_NAMES[best.dexKey] || best.dexKey, at: best.at || null } : null;
+}
+
+/** Everything about one user: the last 30 / 7 days (from the history) and the permanent records. */
 async function getUserStats(userId) {
     const { stats } = await collections();
-    const all = summarize(await stats.findOne({ _id: userId }));
-    if (!all) return { settings: userSettings(userId), all: null };
-    const [last30, last7] = await Promise.all([windowStats(userId, 30), windowStats(userId, 7)]);
-    return { settings: userSettings(userId), all, last30, last7 };
+    const [doc, rows30, rows7] = await Promise.all([stats.findOne({ _id: userId }), windowRows(userId, STATS_DAYS), windowRows(userId, 7)]);
+    return { settings: userSettings(userId), last30: summarizeWindow(rows30), last7: totalsOf(rows7), records: recordsOf(doc) };
 }
 
-/** Rankings of users with public catch stats: fastest single catch and best average. */
-async function leaderboard({ period = "all", guildId = null, limit = 10 } = {}) {
-    const days = PERIODS[period] ?? null;
+/** Rankings of users with public catch stats over the last 30 or 7 days: fastest single catch and best average. */
+async function leaderboard({ period = "30d", guildId = null, limit = 10 } = {}) {
+    if (!Object.hasOwn(PERIODS, period)) period = "30d";
     const ids = publicUserIds();
-    const minCount = MIN_FOR_AVERAGE[period] || 5;
+    const minCount = MIN_FOR_AVERAGE[period];
     if (!ids.length) return { period, guildId, minCount, fastest: [], average: [] };
-    const { events, stats } = await collections();
+    const { events } = await collections();
 
-    let rows;
-    if (days || guildId) {
-        const match = { userId: { $in: ids } };
-        if (days) match.at = { $gte: new Date(Date.now() - days * 86400000) };
-        if (guildId) match.guildId = guildId;
-        if (!days && guildId) {
-            // all time on one server: from the per-server totals
-            rows = (await stats.find({ _id: { $in: ids }, [`guilds.${guildId}.count`]: { $gt: 0 } }).toArray()).map((doc) => {
-                const g = doc.guilds[guildId];
-                return { userId: doc._id, count: g.count, averageMs: Math.round(g.totalMs / g.count), bestMs: g.bestMs };
-            });
-        } else {
-            rows = (
-                await events
-                    .aggregate([{ $match: match }, { $group: { _id: "$userId", count: { $sum: 1 }, avg: { $avg: "$ms" }, best: { $min: "$ms" } } }])
-                    .toArray()
-            ).map((row) => ({ userId: row._id, count: row.count, averageMs: Math.round(row.avg), bestMs: row.best }));
-        }
-    } else {
-        rows = (await stats.find({ _id: { $in: ids }, count: { $gt: 0 } }).toArray()).map((doc) => ({ userId: doc._id, count: doc.count, averageMs: Math.round(doc.totalMs / doc.count), bestMs: doc.bestMs, best: doc.best }));
-    }
+    const match = { userId: { $in: ids }, at: { $gte: new Date(Date.now() - PERIODS[period] * 86400000) } };
+    if (guildId) match.guildId = guildId;
+    const rows = (await events.aggregate([{ $match: match }, { $sort: { ms: 1 } }, { $group: { _id: "$userId", count: { $sum: 1 }, avg: { $avg: "$ms" }, best: { $first: "$ms" }, bestBall: { $first: "$ball" } } }]).toArray()).map((row) => ({
+        userId: row._id,
+        count: row.count,
+        averageMs: Math.round(row.avg),
+        bestMs: row.best,
+        best: { ball: row.bestBall },
+    }));
 
     const people = require("./collector-store");
     const withPerson = (row) => {
@@ -434,7 +442,6 @@ async function leaderboard({ period = "all", guildId = null, limit = 10 } = {}) 
             username: profile?.username || site?.discord?.username || null,
             avatarUrl: profile?.avatarUrl || site?.discord?.avatarUrl || people.defaultAvatar(row.userId),
             hasProfile: Boolean(site?.public && !site.blocked),
-            best: row.best ? { ms: row.best.ms, ball: row.best.ball } : undefined,
         };
     };
     return {
@@ -467,6 +474,7 @@ module.exports = {
     userSettings,
     setUserSettings,
     getUserStats,
+    getServerRecord,
     leaderboard,
     PERIODS,
     LINES,
