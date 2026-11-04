@@ -21,6 +21,10 @@ const queue = [];
 const queued = new Set();
 let draining = false;
 
+// Discord renames a deleted account to deleted_user_<id> (deleted_account_<id> in older exports); its entries are dropped
+const DELETED_USERNAME = /^deleted_(?:user|account)_[a-z0-9]+$/;
+const isDeletedProfile = (profile) => Boolean(profile && !profile.missing && DELETED_USERNAME.test(String(profile.username || "")));
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const entryKey = (dexKey, ballId) => `${dexKey}:${ballId}`;
 
@@ -68,6 +72,7 @@ function applyOverlay() {
         }
     }
     warmProfiles();
+    purgeKnownDeleted();
 }
 
 function findBall(dexKey, ballId) {
@@ -114,6 +119,7 @@ async function drainProfiles() {
             }
             if (profile) {
                 profiles.set(userId, profile);
+                if (isDeletedProfile(profile)) purgeDeletedUser(userId).catch((error) => console.error("[COLLECTORS] ❌ Couldn't remove a deleted account:", error.message));
                 getDatabase()
                     .then((db) => db.collection("discordProfiles").updateOne({ _id: userId }, { $set: profile }, { upsert: true }))
                     .catch(() => {});
@@ -122,6 +128,46 @@ async function drainProfiles() {
         }
     } finally {
         draining = false;
+    }
+}
+
+/**
+ * Removes a deleted Discord account from every collector list: its website entries are deleted, and the ones
+ * that come from the dex JSON (which can't be edited from here) are hidden like an owner removal. Also its
+ * Specials entries. Only called for an account whose Discord username is exactly the deleted-account pattern.
+ */
+async function purgeDeletedUser(userId) {
+    if (!ready || !client?.rarities) return 0;
+    const db = await getDatabase();
+    let count = 0;
+    for (const [dexKey, rarities] of Object.entries(client.rarities)) {
+        if (!DEX_KEYS.has(dexKey) || !rarities) continue;
+        for (const [name, ball] of Object.entries(rarities)) {
+            if (!ball || typeof ball !== "object" || ball.id === undefined) continue;
+            const key = entryKey(dexKey, ball.id);
+            const entry = selfEntries.get(key)?.get(userId);
+            if ((staticOf(ball) || []).includes(userId)) {
+                if (entry?.status === "removed") continue;
+                await saveEntry(dexKey, { name, ball }, userId, { addedAt: new Date().toISOString(), status: "removed" }, { removedBy: "deleted-account" });
+                count++;
+            } else if (entry) {
+                await db.collection("collectorEntries").deleteOne({ dexKey, ballId: ball.id, userId });
+                selfEntries.get(key).delete(userId);
+                if (!selfEntries.get(key).size) selfEntries.delete(key);
+                applyBall(dexKey, ball);
+                count++;
+            }
+        }
+    }
+    count += await require("./special-collectors").purgeUser(userId);
+    if (count) client?.log?.("COLLECTORS", `🗑️ Removed ${count} collector entries of the deleted account ${userId}`);
+    return count;
+}
+
+/** Deleted accounts already known from the cached profiles (also catches entries left by an earlier run). */
+function purgeKnownDeleted() {
+    for (const [userId, profile] of profiles) {
+        if (isDeletedProfile(profile)) purgeDeletedUser(userId).catch((error) => console.error("[COLLECTORS] ❌ Couldn't remove a deleted account:", error.message));
     }
 }
 

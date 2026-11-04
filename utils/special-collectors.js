@@ -126,6 +126,19 @@ async function remove(actorId, targetId, specialId) {
     return { specialId };
 }
 
+/** Drops every special entry of a user (a deleted Discord account). Returns how many were removed. */
+async function purgeUser(userId) {
+    if (!ready) return 0;
+    let count = 0;
+    for (const [specialId, users] of entries) {
+        if (!users.delete(userId)) continue;
+        count++;
+        if (!users.size) entries.delete(specialId);
+    }
+    if (count) await (await getDatabase()).collection("specialCollectorEntries").deleteMany({ userId });
+    return count;
+}
+
 /** Specials a user collects, newest special first (for the public profile). */
 async function getUserSpecials(userId) {
     const ids = [...entries].filter(([, users]) => users.has(userId)).map(([specialId]) => specialId);
@@ -145,4 +158,4 @@ async function getUserSpecials(userId) {
         });
 }
 
-module.exports = { setClient, init, getAll, add, remove, getUserSpecials };
+module.exports = { setClient, init, getAll, add, remove, purgeUser, getUserSpecials };
