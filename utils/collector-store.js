@@ -407,6 +407,23 @@ function resolveBall(dexKey, ballId) {
     return found;
 }
 
+/** Tells a collector the owner changed one of their entries (entries within an hour become one notification). */
+function tellCollector(targetId, found, dexKey, what) {
+    try {
+        require("./notifications")
+            .notify(targetId, "collector_status", {
+                title: `Collector ${what}`,
+                body: `${found.name} (${DEX_NAME_BY_KEY[dexKey] || dexKey}): ${what}`,
+                link: "#/collectors",
+                linkLabel: "Open Collectors",
+                merge: true,
+            })
+            .catch(() => {});
+    } catch {
+        // notifications are optional
+    }
+}
+
 /** Owner only: add any Discord user as a verified collector (no ownership checks). */
 async function addVerified(actorId, targetId, dexKey, ballId) {
     if (actorId !== ADMIN_ID) throw fail(403, "Only the owner can add other collectors.", "FORBIDDEN");
@@ -418,6 +435,7 @@ async function addVerified(actorId, targetId, dexKey, ballId) {
     }
     await saveEntry(dexKey, found, targetId, { addedAt: new Date().toISOString(), status: "verified" }, { addedBy: actorId });
     enqueueProfile(targetId);
+    tellCollector(targetId, found, dexKey, "added as verified");
     client?.log?.("COLLECTORS", `✅ ${who(actorId)} added ${who(targetId)} to ${found.name} (${dexKey}) as verified`);
     return { ballId: found.ball.id, ballName: found.name };
 }
@@ -453,6 +471,7 @@ async function setStatus(actorId, targetId, dexKey, ballId, status) {
             { statusBy: actorId, statusAt: new Date().toISOString() },
         );
     }
+    tellCollector(targetId, found, dexKey, status === "verified" ? "verified" : "set to unverified");
     client?.log?.("COLLECTORS", `🛡️ ${who(actorId)} set ${who(targetId)} to ${status} for ${found.name} (${dexKey})`);
     return { ballId: found.ball.id, ballName: found.name, status };
 }
@@ -479,6 +498,7 @@ async function removeSelf(actorId, targetId, dexKey, ballId) {
         if (selfEntries.get(key)?.size === 0) selfEntries.delete(key);
         applyBall(dexKey, found.ball);
     }
+    if (actorId !== targetId) tellCollector(targetId, found, dexKey, "removed by the owner");
     client?.log?.("COLLECTORS", `➖ ${who(actorId)} removed ${actorId === targetId ? "themselves" : who(targetId)} from ${found.name} (${dexKey})`);
     return { ballId: found.ball.id, ballName: found.name };
 }

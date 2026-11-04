@@ -24,6 +24,9 @@ const { getData, updateData } = require("./helpers");
 
 const INBOX_LIMIT = 40;
 const SITE_URL = "https://ballidentifier.xyz";
+const DM_MIN_GAP_MS = 60 * 60 * 1000; // at most one DM per type per user per hour
+const MERGE_WINDOW_MS = 60 * 60 * 1000; // notify(..., { merge }) joins entries this close together
+const MERGE_SHOWN = 4;
 const MAX_DM_TEXT = 3500; // components v2 messages allow 4000 characters of text in total
 
 // Look of the DM card per notification type
@@ -35,6 +38,10 @@ const DM_STYLE = {
     ballsdex_account: { emoji: "🔑", color: 0xa020f0 },
     update_dex: { emoji: "🗂️", color: 0x6839a6 },
     update_site: { emoji: "✨", color: 0x7289da },
+    sync_slot: { emoji: "🔓", color: 0x3498db },
+    collector_status: { emoji: "🏅", color: 0xf1c40f },
+    account_status: { emoji: "🛡️", color: 0xed4245 },
+    notifier_issue: { emoji: "⚠️", color: 0xfaa61a },
 };
 
 const TYPES = {
@@ -46,7 +53,7 @@ const TYPES = {
     vote_thanks: {
         label: "Thanks for voting",
         description: "A thank-you when you upvote the bot.",
-        defaults: { enabled: true, dm: true },
+        defaults: { enabled: true, dm: false },
     },
     sync_finished: {
         label: "Ballsdex sync finished",
@@ -55,8 +62,30 @@ const TYPES = {
     },
     sync_available: {
         label: "Ballsdex sync available",
-        description: "Your 24-hour sync cooldown ended, or a busy sync slot freed up.",
+        description: "Your 24-hour sync cooldown ended.",
         defaults: { enabled: true, dm: false },
+    },
+    sync_slot: {
+        label: "Ballsdex sync slot free",
+        description: "You were waiting for another sync to finish and your turn has come.",
+        defaults: { enabled: true, dm: true },
+    },
+    collector_status: {
+        label: "Collector changes",
+        description: "The owner verified, unverified, added or removed one of your collector entries.",
+        defaults: { enabled: true, dm: false },
+    },
+    notifier_issue: {
+        label: "Notifier problems",
+        description: "A notifier you set up can't post or ping on its server (missing permissions or a deleted role).",
+        defaults: { enabled: true, dm: true },
+    },
+    // Can't be turned off and isn't listed in the settings: blocks and unblocks of your website account
+    account_status: {
+        label: "Account status",
+        description: "Your account was blocked or unblocked by the owner.",
+        defaults: { enabled: true, dm: true },
+        mandatory: true,
     },
     ballsdex_account: {
         label: "Ballsdex account changes",
@@ -85,11 +114,15 @@ function getSettings(userId, data = getData()) {
     const stored = user.notificationSettings || {};
     const legacy = user.notifications || {};
     const settings = {};
-    for (const [type, { defaults }] of Object.entries(TYPES)) {
+    for (const [type, { defaults, mandatory }] of Object.entries(TYPES)) {
+        if (mandatory) {
+            settings[type] = { enabled: true, dm: true };
+            continue;
+        }
         const value = { ...defaults, ...(stored[type] || {}) };
         // DM switches saved by the removed /notifications command keep working until the user changes the setting
         if (!stored[type]) {
-            if (type === "vote_thanks") value.dm = legacy.thanks !== false;
+            if (type === "vote_thanks") value.dm = legacy.thanks === true;
             if (type === "vote_reminder") value.dm = legacy.reminder === true;
         }
         if (!value.enabled) value.dm = false;
@@ -99,7 +132,7 @@ function getSettings(userId, data = getData()) {
 }
 
 function setSetting(userId, type, { enabled, dm }) {
-    if (!TYPES[type]) throw new Error("Unknown notification type");
+    if (!TYPES[type] || TYPES[type].mandatory) throw new Error("Unknown notification type");
     return updateData((data) => {
         const current = getSettings(userId, data)[type];
         const next = {
@@ -234,25 +267,44 @@ function markRead(userId, ids) {
 /**
  * Send one notification. The DM is a card with the title and `dmText` (default: body),
  * a button to `link` on the website (label: `linkLabel`) and any extra `buttons` ([{ label, url }]).
+ * Options: noDm (history only, whatever the DM setting), inbox: false (DM only), merge (add to the user's newest unread
+ * entry of this type when it is less than an hour old). A user gets at most one DM per type per hour, except for
+ * mandatory types. Mandatory types ignore the settings and are kept in the history even for users who never opened the website.
  * @returns {Promise<{stored: boolean, dm: boolean}>}
  */
-async function notify(userId, type, { title, body = "", link = null, linkLabel = "Open on the website", dmText, buttons = [] } = {}) {
+async function notify(userId, type, { title, body = "", link = null, linkLabel = "Open on the website", dmText, buttons = [], noDm = false, inbox = true, merge = false } = {}) {
     userId = String(userId);
+    const mandatory = Boolean(TYPES[type]?.mandatory);
     const settings = getSettings(userId)[type];
     if (!settings?.enabled) return { stored: false, dm: false };
 
     let stored = false;
+    let dmAllowed = settings.dm && !noDm && Boolean(client);
     updateData((data) => {
-        const user = data.users[userId];
-        if (!user?.web) return;
-        user.inbox ??= [];
-        user.inbox.unshift(inboxItem(type, title, body, link));
-        user.inbox.length = Math.min(user.inbox.length, INBOX_LIMIT);
-        stored = true;
+        if (inbox && (mandatory || data.users[userId]?.web)) {
+            const user = (data.users[userId] ??= {});
+            user.inbox ??= [];
+            const last = user.inbox[0];
+            if (merge && last && last.type === type && !last.read && Date.now() - new Date(last.createdAt).getTime() < MERGE_WINDOW_MS) {
+                last.lines = [...(last.lines || [last.body]), body].filter(Boolean);
+                last.body = last.lines.slice(-MERGE_SHOWN).join("\n") + (last.lines.length > MERGE_SHOWN ? `\n+${last.lines.length - MERGE_SHOWN} more` : "");
+                last.title = `${last.lines.length} updates`;
+            } else {
+                user.inbox.unshift(inboxItem(type, title, body, link));
+                user.inbox.length = Math.min(user.inbox.length, INBOX_LIMIT);
+            }
+            stored = true;
+        }
+        if (dmAllowed && !mandatory) {
+            const user = (data.users[userId] ??= {});
+            const sentAt = user.dmSentAt?.[type] ? new Date(user.dmSentAt[type]).getTime() : 0;
+            if (Date.now() - sentAt < DM_MIN_GAP_MS) dmAllowed = false;
+            else (user.dmSentAt ??= {})[type] = new Date().toISOString();
+        }
     });
 
     let dm = false;
-    if (settings.dm && client) {
+    if (dmAllowed) {
         const url = siteUrl(link);
         dm = await sendDm(userId, buildDmCard({ type, title, text: dmText || body, buttons: [...buttons, url ? { label: linkLabel, url } : null] }));
     }
@@ -336,7 +388,9 @@ async function notifyChangelog(entries) {
 }
 
 function publicTypes() {
-    return Object.entries(TYPES).map(([id, { label, description }]) => ({ id, label, description }));
+    return Object.entries(TYPES)
+        .filter(([, { mandatory }]) => !mandatory)
+        .map(([id, { label, description }]) => ({ id, label, description }));
 }
 
 module.exports = { TYPES, setClient, getSettings, setSetting, markWebUser, getInbox, markRead, notify, notifyChangelog, mergeChangelogEntries, CHANGELOG_MERGE_GAP_SEC, publicTypes };

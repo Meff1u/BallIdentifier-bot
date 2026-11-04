@@ -434,6 +434,8 @@ app.post("/api/guilds/:guildId/config", apiLimiter, verifySignature, validateGui
 
     const { guildId } = req.params;
     const { selectedBots, selectedRole, customMessage, setupBy, setupAt, isDelete } = req.body;
+    // The Discord ID of the person who saved it: notifier problems are reported to them
+    const setupById = /^\d{17,20}$/.test(String(req.body.setupById || "")) ? String(req.body.setupById) : undefined;
     // "spawn" (default) = Spawn notifier, "tradesman" = Tradesman notifier; stored side by side
     const kind = req.body.kind === "tradesman" ? "tradesman" : "notifier";
 
@@ -490,7 +492,7 @@ app.post("/api/guilds/:guildId/config", apiLimiter, verifySignature, validateGui
         }
 
         // Update notifier configuration (atomic read-modify-write)
-        const notifier = { selectedBots, selectedRole, customMessage, setupBy, setupAt };
+        const notifier = { selectedBots, selectedRole, customMessage, setupBy, setupAt, ...(setupById ? { setupById } : {}) };
         updateData((data) => {
             data.guilds[guildId] ??= {};
             data.guilds[guildId][kind] = notifier;

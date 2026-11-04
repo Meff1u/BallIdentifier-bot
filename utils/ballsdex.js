@@ -1489,6 +1489,7 @@ async function connectOAuth(userId, { code, codeVerifier, redirectUri }) {
             title: wasLinked ? "Ballsdex account reconnected" : "Ballsdex account linked",
             body: "Your Ballsdex account was connected to BallIdentifier with Sign in with Ballsdex. Not you? Unlink it in the Ballsdex tab.",
             link: "#/ballsdex",
+            noDm: wasLinked, // only the first connection is worth a DM; a reconnect is something you just did
         })
         .catch(() => {});
     return { reconnected: wasLinked, scope: tokens.scope || null };
@@ -1504,6 +1505,7 @@ async function unlinkAccount(userId) {
                 title: "Ballsdex account unlinked",
                 body: "Your Ballsdex sign-in and synced collection data were removed.",
                 link: "#/ballsdex",
+                noDm: true,
             })
             .catch(() => {});
         try {
@@ -1559,7 +1561,7 @@ function releaseSlotWaiters(exceptUserId = null) {
         setWaiting(waiterId, false);
         if (!getSavedApiKey(waiterId) || cooldownLeftMs(waiterId) > 0 || syncBlocked(waiterId)) continue;
         getNotifier()
-            .notify(waiterId, "sync_available", {
+            .notify(waiterId, "sync_slot", {
                 title: "You can sync your Ballsdex collection now",
                 body: "The sync that was running has finished.",
                 link: "#/ballsdex",
@@ -1780,7 +1782,7 @@ function runSync(userId, { resume = null } = {}) {
                         title: "Ballsdex sync paused",
                         body: `${error.reason || error.message} ${fetched} balls are saved; the sync continues by itself in about ${hours} h.`,
                         link: "#/ballsdex",
-                        dmText: `Your Ballsdex sync paused after ${fetched} balls: ${error.reason || error.message} It continues by itself in about ${hours} h, nothing is lost.`,
+                        noDm: true, // it continues by itself; the "finished" notification is the one worth a DM
                     })
                     .catch(() => {});
             } else {
@@ -2224,13 +2226,6 @@ function startFastSync(userId, { url } = {}) {
                 await deleteSyncJob(userId).catch(() => {});
                 clearPaused(userId);
             }
-            getNotifier()
-                .notify(userId, "sync_finished", {
-                    title: "Fast Sync finished",
-                    body: `${result.ballCount.toLocaleString("en-US")} balls imported from your Ballsdex export. Your stats and raws are up to date.`,
-                    link: "#/ballsdex",
-                })
-                .catch(() => {});
         } catch (error) {
             if (!error.status) console.error("[BALLSDEX] Fast Sync failed:", error);
             state.error = error.message;

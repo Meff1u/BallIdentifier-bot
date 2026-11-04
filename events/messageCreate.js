@@ -153,6 +153,42 @@ function formatNotifierMessage(template, values) {
  * Tradesman notifier: ping the role when a wandering tradesman shows up.
  * Placeholders: {role}, {offers} (what's for sale).
  */
+const ISSUE_GAP_MS = 24 * 60 * 60 * 1000;
+const MISSING_ACCESS = new Set([50001, 50013, 10003, 160002]);
+
+/**
+ * Tells whoever set a notifier up that it can't do its job (deleted role, no access to the channel).
+ * Once per problem and server every 24 hours; older configurations without setupById are only logged.
+ */
+function reportNotifierIssue(m, client, kind, settings, problem) {
+    const userId = settings?.setupById;
+    const guildId = m.guildId;
+    if (!userId || !guildId) return;
+    const key = `${kind}:${problem}`;
+    let fresh = false;
+    updateData((data) => {
+        const guild = (data.guilds[guildId] ??= {});
+        const last = guild.notifierIssues?.[key] || 0;
+        if (Date.now() - last < ISSUE_GAP_MS) return;
+        (guild.notifierIssues ??= {})[key] = Date.now();
+        fresh = true;
+    });
+    if (!fresh) return;
+    const label = kind === "tradesman" ? "Tradesman Notifier" : "Spawn Notifier";
+    const text =
+        problem === "role"
+            ? "the role to ping no longer exists. Pick a new role in the notifier settings."
+            : "the bot can't send messages in the channel where a spawn appeared (missing access or permissions).";
+    require("../utils/notifications")
+        .notify(userId, "notifier_issue", {
+            title: `${label} problem in ${m.guild?.name || "your server"}`,
+            body: `Your ${label} in ${m.guild?.name || "this server"} isn't working: ${text}`,
+            link: "#/bot/notifier",
+            linkLabel: "Open the Notifier",
+        })
+        .catch(() => {});
+}
+
 async function notifyTradesman(m, client, settings, offers) {
     const { customMessage, selectedRole } = settings;
     const guildName = m.guild?.name || m.guildId;
@@ -160,11 +196,13 @@ async function notifyTradesman(m, client, settings, offers) {
         .replaceAll("{role}", `<@&${selectedRole}>`)
         .replaceAll("{offers}", offers.length ? offers.join(", ") : "unknown")
         .slice(0, 2000);
+    if (m.guild && selectedRole && !m.guild.roles.cache.has(selectedRole)) reportNotifierIssue(m, client, "tradesman", settings, "role");
     try {
         await m.reply({ content, allowedMentions: { parse: [], roles: [selectedRole], repliedUser: false } });
         client.logImage(`[${guildName}] 🛒 Tradesman notified (${offers.length} offer${offers.length === 1 ? "" : "s"})`);
     } catch (error) {
         client.logImage(`[${guildName}] ❌ Could not send tradesman message: ${error.message}`);
+        if (MISSING_ACCESS.has(error.code)) reportNotifierIssue(m, client, "tradesman", settings, "access");
     }
 }
 
@@ -185,6 +223,7 @@ async function notify(m, client, settings, info) {
         const bestMatch = findBestMatch(hash, hashes);
         const isConfident = bestMatch.diff <= getMatchThreshold(bestMatch.country);
 
+        if (m.guild && selectedRole && !m.guild.roles.cache.has(selectedRole)) reportNotifierIssue(m, client, "notifier", settings, "role");
         const ballName = isConfident ? bestMatch.country : "Unknown (probably new spawn art)";
         const foundBall = isConfident ? client.rarities?.[BOT_DATA_KEYS[m.author.id]]?.[bestMatch.country] : null;
 
@@ -201,6 +240,7 @@ async function notify(m, client, settings, info) {
             })
             .catch((error) => {
                 client.logImage(`[${guildName}] ❌ Could not send notifier message: ${error.message}`);
+                if (MISSING_ACCESS.has(error.code)) reportNotifierIssue(m, client, "notifier", settings, "access");
             });
 
         // Log the identification result

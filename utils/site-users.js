@@ -265,6 +265,14 @@ async function block(actorId, targetId, reason) {
         // nothing to cancel
     }
     if (hideProfile) await Promise.resolve(require("./profiles").moderate(targetId, "hide")).catch(() => {});
+    // The account is logged out, so only a DM can reach the user (the reason is the one they'd see at login)
+    require("./notifications")
+        .notify(targetId, "account_status", {
+            title: "Your account was blocked",
+            body: `Your BallIdentifier account was blocked by the owner. Reason: ${text}`,
+            inbox: false,
+        })
+        .catch(() => {});
     log(`🔒 Site account blocked: <@${targetId}> by <@${actorId}> | Reason: ${text}`);
     return { status: "blocked" };
 }
@@ -284,6 +292,14 @@ async function unblock(actorId, targetId) {
     blocked.delete(targetId);
     // The profile stays private until the user makes it public again
     if (doc?.profileHiddenByBlock) await Promise.resolve(require("./profiles").moderate(targetId, "unhide")).catch(() => {});
+    require("./notifications")
+        .notify(targetId, "account_status", {
+            title: "Your account was unblocked",
+            body: "You can use BallIdentifier again. Log in with Discord on the website." + (doc?.profileHiddenByBlock ? " Your profile stays private until you make it public again." : ""),
+            link: "#/",
+            linkLabel: "Open BallIdentifier",
+        })
+        .catch(() => {});
     log(`🔓 Site account unblocked: <@${targetId}> by <@${actorId}>`);
     return { status: "active" };
 }
