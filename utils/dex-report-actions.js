@@ -104,7 +104,7 @@ function summary(result, mode) {
 
 async function save(options, mode, interaction, reportMessage) {
     const image = await downloadBuffer(options.imageUrl);
-    const result = await dexEditor.saveEntry({ ...options, image, actor: `Discord report, ${interaction.user.username}` });
+    const result = await dexEditor.saveEntry({ ...options, image, actor: `Discord report, ${interaction.user.username}`, actorMention: `Discord report, <@${interaction.user.id}>` });
     await reportMessage?.reply({ content: summary(result, mode), allowedMentions: { parse: [] } }).catch(() => {});
     return summary(result, mode);
 }

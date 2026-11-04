@@ -193,7 +193,7 @@ module.exports = {
         // "You can sync again" reminders (24 h after a Ballsdex sync)
         // Syncs cut off by a restart continue from their last saved page
         resumeInterruptedSyncs()
-            .then((ids) => ids.length && client.log("BALLSDEX", `Resumed ${ids.length} interrupted sync(s) after a restart: ${ids.join(", ")}`))
+            .then((ids) => ids.length && client.log("BALLSDEX", `Resumed ${ids.length} interrupted sync(s) after a restart: ${ids.map((id) => `<@${id}>`).join(", ")}`))
             .catch((error) => console.error("[BALLSDEX] Couldn't resume interrupted syncs:", error.message));
 
         setInterval(() => sendDueSyncReminders().catch((error) => console.error("[BALLSDEX] Reminder loop:", error.message)), REMINDER_INTERVAL);
@@ -201,7 +201,7 @@ module.exports = {
         setInterval(
             () =>
                 resumeInterruptedSyncs()
-                    .then((ids) => ids.length && client.log("BALLSDEX", `Continued ${ids.length} paused sync(s): ${ids.join(", ")}`))
+                    .then((ids) => ids.length && client.log("BALLSDEX", `Continued ${ids.length} paused sync(s): ${ids.map((id) => `<@${id}>`).join(", ")}`))
                     .catch((error) => console.error("[BALLSDEX] Couldn't continue paused syncs:", error.message)),
             REMINDER_INTERVAL,
         );
@@ -220,7 +220,7 @@ module.exports = {
                     body: "Your upvote removes the identify cooldown while it's active.",
                 });
 
-                client.log("VOTES", `🗳️ New upvote: <@${vote.id}> (${vote.username})`);
+                client.log("VOTES", `🗳️ New upvote: <@${vote.id}>`);
             } catch (error) {
                 console.error(`[DATAS] ❌ Error handling vote:`, error.message);
             }

@@ -109,7 +109,7 @@ async function add(userId, specialId) {
     if (addLog.has(userId)) addLog.get(userId).push(Date.now());
     else addLog.set(userId, [Date.now()]);
     collectorStore.getDiscordProfile(userId); // warms the name and avatar
-    client?.log?.("COLLECTORS", `➕ ${userId} added themselves to special ${special.name} (#${special.id})`);
+    client?.log?.("COLLECTORS", `➕ <@${userId}> added themselves to special ${special.name} (#${special.id})`);
     return { specialId: special.id, specialName: special.name };
 }
 
@@ -122,7 +122,7 @@ async function remove(actorId, targetId, specialId) {
     await db.collection("specialCollectorEntries").deleteOne({ specialId, userId: targetId });
     entries.get(specialId).delete(targetId);
     if (!entries.get(specialId).size) entries.delete(specialId);
-    client?.log?.("COLLECTORS", `➖ ${actorId === targetId ? `${actorId} removed themselves` : `${actorId} removed ${targetId}`} from special #${specialId}`);
+    client?.log?.("COLLECTORS", `➖ ${actorId === targetId ? `<@${actorId}> removed themselves` : `<@${actorId}> removed <@${targetId}>`} from special #${specialId}`);
     return { specialId };
 }
 

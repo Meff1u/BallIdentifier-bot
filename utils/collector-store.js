@@ -259,11 +259,8 @@ function getDexCollectors(dexKey) {
     return { entries, pendingProfiles: queue.length };
 }
 
-// Log label for a user: "@name (id)" when the profile is known
-function who(userId) {
-    const profile = profiles.get(userId);
-    return profile?.username ? `@${profile.username} (${userId})` : userId;
-}
+// Log label for a user: a Discord mention (the website log shows it as "username (id)")
+const who = (userId) => `<@${userId}>`;
 
 function fail(status, message, code) {
     const error = new Error(message);

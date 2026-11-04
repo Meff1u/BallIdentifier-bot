@@ -85,7 +85,7 @@ async function submit(userId, { type, message }, discord = {}) {
         client.logError?.("Contact form DM failed", error);
         throw new ContactError(502, "Couldn't deliver your message. Try again later.");
     }
-    client.log?.("API", `📨 Contact form (${kind.label}) from ${userId}`);
+    client.log?.("API", `📨 Contact form (${kind.label}) from <@${userId}>`);
     return { cooldownMs: COOLDOWN_MS };
 }
 

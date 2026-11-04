@@ -286,8 +286,9 @@ function applyLocally(dex, data, hashes) {
  * @param {string} [options.previousAlt] Ballsdex, new art: optional alt text for the old art in Previous arts
  * @param {string} [options.previousUntil] Ballsdex, new art: "used until" of the old art (default: this month and year)
  * @param {string} [options.actor]       who did it, for the commit message
+ * @param {string} [options.actorMention] the same person as a Discord mention (<@id>) for the Discord log
  */
-function saveEntry({ dex, originalName = null, name, details, image = null, shift = false, merge = false, previousAlt = "", previousUntil = "", actor = "owner" }) {
+function saveEntry({ dex, originalName = null, name, details, image = null, shift = false, merge = false, previousAlt = "", previousUntil = "", actor = "owner", actorMention = null }) {
     checkDex(dex);
     const newName = cleanName(name);
     const oldName = originalName ? cleanName(originalName) : null;
@@ -397,7 +398,7 @@ function saveEntry({ dex, originalName = null, name, details, image = null, shif
 
         const commit = await commitFiles(base, files, `${dex}: ${isNew ? "add" : "update"} ${newName} (${actor})`, changes, { changelog: { type: "dex", dex, changes } });
         applyLocally(dex, next, nextHashes);
-        client?.logGeneral?.(`Dex editor (${actor}): ${dex} · ${changes.join(" · ")}`);
+        client?.logGeneral?.(`Dex editor (${actorMention || actor}): ${dex} · ${changes.join(" · ")}`);
         return { dex, name: newName, entry: next[newName], shifted, shiftedFrom: shifted ? entry.rarity : null, shiftMode: shifted ? shiftMode : null, changes, commitUrl: commit.html_url || null };
     });
 }
@@ -438,7 +439,7 @@ function deleteEntry({ dex, name, actor = "owner" }) {
 
         const commit = await commitFiles(base, files, `${dex}: remove ${target} (${actor})`, changes, { changelog: { type: "dex", dex, changes } });
         applyLocally(dex, data, hashes);
-        client?.logGeneral?.(`Dex editor (${actor}): ${dex} · ${changes.join(" · ")}`);
+        client?.logGeneral?.(`Dex editor (${actorMention || actor}): ${dex} · ${changes.join(" · ")}`);
         return { dex, name: target, changes, commitUrl: commit.html_url || null };
     });
 }

@@ -81,13 +81,13 @@ module.exports = {
             const userTag = `${interaction.user.username}`;
             const guildName = interaction.guild?.name || "DM";
             client.logDiscord(
-                `${commandType} Command: \`${interaction.commandName}\` | User: ${userTag} | Guild: ${guildName}`,
+                `${commandType} Command: \`${interaction.commandName}\` | User: <@${interaction.user.id}> | Guild: ${guildName}`,
             );
 
             try {
                 await command.execute(interaction);
             } catch (error) {
-                client.logError(`Command error: ${interaction.commandName} (${userTag}, ${guildName})`, error);
+                client.logError(`Command error: ${interaction.commandName} (${userTag} (${interaction.user.id}), ${guildName})`, error);
                 if (interaction.replied || interaction.deferred) {
                     await interaction.followUp({
                         content: "Error.",

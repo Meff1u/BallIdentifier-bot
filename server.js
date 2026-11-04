@@ -770,7 +770,7 @@ app.get("/api/users/:userId/admin/overview", apiLimiter, verifySignature, requir
             lastDataRefresh: client.lastDataRefresh || null,
             dexes: Object.fromEntries(Object.entries(client.rarities || {}).map(([key, data]) => [key, Object.keys(data || {}).length])),
         },
-        logs: getRecentLogs(["ERRORS", "BALLSDEX", "CATCH_STATS", "COLLECTORS", "API", "VOTES", "SPECIALS", "SYSTEM"]),
+        logs: getRecentLogs(["ERRORS", "BALLSDEX", "CATCH_STATS", "COLLECTORS", "API", "VOTES", "SPECIALS", "SYSTEM"], (id) => client?.users?.cache.get(id)?.username || collectorStore.getDiscordProfile(id)?.username || null),
     });
 });
 
@@ -778,7 +778,7 @@ app.get("/api/users/:userId/admin/overview", apiLimiter, verifySignature, requir
 app.post("/api/users/:userId/admin/sync/cancel", apiLimiter, verifySignature, requireOwner, (req, res) => {
     const target = cancelActiveSync();
     if (!target) return res.status(409).json({ error: "No sync is running." });
-    client?.log?.("BALLSDEX", `Owner cancelled the running sync of ${target}`);
+    client?.log?.("BALLSDEX", `Owner cancelled the running sync of <@${target}>`);
     notifications
         .notify(target, "sync_finished", {
             title: "Ballsdex sync cancelled",
@@ -1057,7 +1057,7 @@ app.post("/api/users/:userId/profile", apiLimiter, verifySignature, async (req, 
             await catchStats.setUserSettings(userId, { public: catchInput.public, tracking: catchInput.tracking });
             if (before.tracking && catchInput.tracking === false) client?.log?.("CATCH_STATS", `🔕 <@${userId}> opted out of Catch stats (website)`);
         }
-        if (wasPublic !== profiles.isPublic(userId)) client?.log?.("PROFILES", `${profiles.isPublic(userId) ? "🌐" : "🔒"} ${userId} made their profile ${profiles.isPublic(userId) ? "public" : "private"}`);
+        if (wasPublic !== profiles.isPublic(userId)) client?.log?.("PROFILES", `${profiles.isPublic(userId) ? "🌐" : "🔒"} <@${userId}> made their profile ${profiles.isPublic(userId) ? "public" : "private"}`);
         res.status(200).json({ ...result, catchStats: catchStats.userSettings(userId), profile: await profiles.getPublicProfile(userId, { self: true }) });
     } catch (error) {
         profileError(res, error, "Profile save failed");
@@ -1068,7 +1068,7 @@ app.post("/api/users/:userId/profile", apiLimiter, verifySignature, async (req, 
 app.post("/api/users/:userId/admin/profiles/:targetId", apiLimiter, verifySignature, requireOwner, (req, res) => {
     try {
         const result = profiles.moderate(req.params.targetId, req.body?.action);
-        client?.log?.("PROFILES", `🛡️ Owner: ${req.body?.action} on ${req.params.targetId}'s profile`);
+        client?.log?.("PROFILES", `🛡️ Owner: ${req.body?.action} on the profile of <@${req.params.targetId}>`);
         res.status(200).json({ success: true, ...result });
     } catch (error) {
         profileError(res, error, "Profile moderation failed");

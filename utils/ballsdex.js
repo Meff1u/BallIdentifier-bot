@@ -204,6 +204,8 @@ const keyRateLimits = new Map(); // user id -> { at, limits } (each player has t
 let ipRateLimits = null; // { at, limits }
 
 const hashKey = (cred) => `user:${cred.userId}`;
+// Log text for a lock scope: "user:<id>[:player]" as a Discord mention, "ip" as is
+const scopeLabel = (scope) => scope.replace(/^user:(\d{17,20})/, "<@$1>");
 
 // Keys whose last successful response had no rate limit headers (an unlimited key that bypasses the shared IP
 // limit): their syncs don't wait, don't stop for the IP quota and ignore IP lockouts.
@@ -411,7 +413,7 @@ function noteLockouts(cred, path, response) {
             .map((name) => (response.headers.get(name) ? `${name}: ${response.headers.get(name)}` : null))
             .filter(Boolean)
             .join(" | ");
-        log(`⛔ 429 on ${path} (${scopes.join(", ")}), Retry-After ${retryAfterSec} s${headers ? ` — ${headers}` : " — no rate-limit headers"}`);
+        log(`⛔ 429 on ${path} (${scopes.map(scopeLabel).join(", ")}), Retry-After ${retryAfterSec} s${headers ? ` — ${headers}` : " — no rate-limit headers"}`);
     }
 }
 
@@ -441,7 +443,7 @@ async function ballsdexFetch(cred, path, query = {}, { retry = true, maxWaitMs =
                 const key = `skip:${hashKey(cred)}`;
                 if (Date.now() - (lastLogged.get(key) || 0) > 60 * 1000) {
                     lastLogged.set(key, Date.now());
-                    log(`⏸️ Not sent (limit locked for ${Math.ceil(lockedMs / 1000)} s): ${path} for ${hashKey(cred)}`);
+                    log(`⏸️ Not sent (limit locked for ${Math.ceil(lockedMs / 1000)} s): ${path} for ${scopeLabel(hashKey(cred))}`);
                 }
                 throw apiError(429, { retryAfterSec: lockedMs / 1000, cred });
             }
@@ -1604,6 +1606,7 @@ function finishSync(userId, state, outcome) {
             lastFastOutcome: previous.lastFastOutcome,
             lastFinishedAt: new Date().toISOString(),
             lastOutcome: outcome,
+            lastSuccessAt: outcome === "success" ? new Date().toISOString() : previous.lastSuccessAt,
             nextSyncAt,
             // remind only after a real sync; a quick retry window needs no notification
             notifyAvailableAt: outcome === "success" && userId !== ADMIN_ID ? nextSyncAt : null,
@@ -1828,9 +1831,18 @@ async function resumeInterruptedSyncs() {
     return resumed;
 }
 
+/** When a user's last successful sync (API or Fast Sync) finished, in ms; null when they never had one. */
+function lastSuccessMs(record = {}) {
+    const times = [record.lastSuccessAt, record.lastOutcome === "success" ? record.lastFinishedAt : null, record.lastFastOutcome === "success" ? record.lastFastAt : null]
+        .map((value) => (value ? new Date(value).getTime() : NaN))
+        .filter(Number.isFinite);
+    return times.length ? Math.max(...times) : null;
+}
+
 /** Owner view: the running sync, who's waiting for the slot, and interrupted syncs queued to resume. */
 function getSyncOverview() {
     const users = getData().users;
+    const successTimes = Object.values(users).map((user) => lastSuccessMs(user.ballsdexSync)).filter((time) => time !== null);
     return {
         active: activeSync ? { userId: activeSync.userId, resumed: Boolean(activeSync.state.resumed), ...getSyncState(activeSync.userId) } : null,
         waiting: [...slotWaiters],
@@ -1840,7 +1852,9 @@ function getSyncOverview() {
             .map(([userId, user]) => ({ userId, resumeAt: user.ballsdexSync.pausedUntil, fetched: user.ballsdexSync.pausedFetched ?? null })),
         linkedAccounts: Object.values(users).filter((user) => user.ballsdex?.oauth?.refresh).length,
         switches: getSyncSwitches(),
-        syncedLast24h: Object.values(users).filter((user) => user.ballsdexSync?.lastOutcome === "success" && Date.now() - new Date(user.ballsdexSync.lastFinishedAt).getTime() < 86400000).length,
+        // Accounts by their last successful sync (API or Fast Sync); the record survives unlinking
+        syncedLast24h: successTimes.filter((time) => Date.now() - time < 86400000).length,
+        syncedAllTime: successTimes.length,
     };
 }
 
@@ -2191,7 +2205,7 @@ function startFastSync(userId, { url } = {}) {
                 record.fastNextAt = new Date(Date.now() + wait).toISOString();
                 record.lastFastAt = new Date().toISOString();
                 record.lastFastOutcome = outcome;
-                if (outcome === "success") record.lastFinishedAt = new Date().toISOString();
+                if (outcome === "success") record.lastFinishedAt = record.lastSuccessAt = new Date().toISOString();
             });
             state.inProgress = false;
             state.finishedAt = Date.now();

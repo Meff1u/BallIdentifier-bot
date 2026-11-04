@@ -44,9 +44,20 @@ function remember(category, text) {
     list.length = Math.min(list.length, RECENT_LIMIT);
 }
 
-/** { category: [{ at, text }] } newest first, for the given categories (all by default). */
-function getRecentLogs(categories = Object.keys(CATEGORIES)) {
-    return Object.fromEntries(categories.filter((category) => recentLogs.has(category)).map((category) => [category, recentLogs.get(category)]));
+// Logs name users as <@id>: a real mention in the Discord threads, "username (id)" on the website
+const USER_MENTION = /<@!?(\d{17,20})>/g;
+
+/** { category: [{ at, text }] } newest first, for the given categories (all by default). `nameOf(id)` gives a username. */
+function getRecentLogs(categories = Object.keys(CATEGORIES), nameOf = null) {
+    const readable = (text) => text.replace(USER_MENTION, (_, id) => {
+        const name = nameOf?.(id);
+        return name ? `${name} (${id})` : id;
+    });
+    return Object.fromEntries(
+        categories
+            .filter((category) => recentLogs.has(category))
+            .map((category) => [category, recentLogs.get(category).map((entry) => ({ ...entry, text: readable(entry.text) }))]),
+    );
 }
 
 function getTimestamp() {
