@@ -265,7 +265,7 @@ function getDexCollectors(dexKey) {
         for (const id of statics) {
             const entry = self?.get(id);
             if (entry?.status === "removed") continue;
-            list.push(entry ? collectorView(id, entry.status, entry.addedAt, "site", publicIds) : collectorView(id, "verified", null, "data", publicIds));
+            list.push(entry ? collectorView(id, entry.status, entry.addedAt, "data", publicIds) : collectorView(id, "verified", null, "data", publicIds));
         }
         for (const [userId, entry] of self || []) {
             if (entry.status === "verified" && !statics.includes(userId)) list.push(collectorView(userId, "verified", entry.addedAt, "site", publicIds));
@@ -273,6 +273,7 @@ function getDexCollectors(dexKey) {
         for (const [userId, entry] of self || []) {
             if (entry.status === "unverified" && !statics.includes(userId)) list.push(collectorView(userId, "unverified", entry.addedAt, "site", publicIds));
         }
+        list.sort((a, b) => (b.source === "verified") - (a.source === "verified")); // verified first (stable)
         if (list.length) entries[ball.id] = list;
     }
     return { entries, pendingProfiles: queue.length };
@@ -323,7 +324,7 @@ async function addSelf(userId, dexKey, ballId) {
             const entry = users.get(userId);
             if (!entry || entry.status === "removed") continue;
             if (!entry.addedBy) total++;
-            if (entry.status === "unverified" && key.startsWith(`${dexKey}:`)) unverified++;
+            if (entry.status === "unverified" && key.startsWith(`${dexKey}:`) && !entry.addedBy) unverified++;
         }
         if (total >= MAX_SELF_ENTRIES) throw fail(429, `You've reached the limit of ${MAX_SELF_ENTRIES} self-added collectors.`, "MAX_ENTRIES");
         if (status === "unverified" && unverified >= MAX_UNVERIFIED) {
@@ -421,18 +422,37 @@ async function addVerified(actorId, targetId, dexKey, ballId) {
     return { ballId: found.ball.id, ballName: found.name };
 }
 
-/** Owner only: verify / unverify a collector who added themselves on the website (entries from the dex data stay verified). */
+/**
+ * Owner only: verify / unverify any collector. For collectors from the dex data (always verified in the JSON, which
+ * can't be edited from here) "unverified" is saved as an override entry (addedBy = owner, so it isn't counted in the
+ * user's limits); making them verified again deletes the override.
+ */
 async function setStatus(actorId, targetId, dexKey, ballId, status) {
     if (actorId !== ADMIN_ID) throw fail(403, "Only the owner can change a collector's status.", "FORBIDDEN");
     if (status !== "verified" && status !== "unverified") throw fail(400, "Invalid status.", "BAD_STATUS");
     const found = resolveBall(dexKey, ballId);
-    const current = selfEntries.get(entryKey(dexKey, found.ball.id))?.get(targetId);
-    if (!current || current.status === "removed") {
-        if ((staticOf(found.ball) || []).includes(targetId) && !current) throw fail(400, "This entry comes from the dex data, so it is always verified.", "STATIC");
-        throw fail(404, "No such collector entry.", "NOT_FOUND");
+    const key = entryKey(dexKey, found.ball.id);
+    const current = selfEntries.get(key)?.get(targetId);
+    const fromData = (staticOf(found.ball) || []).includes(targetId);
+    if (current?.status === "removed" || (!current && !fromData)) throw fail(404, "No such collector entry.", "NOT_FOUND");
+    const currentStatus = current ? current.status : "verified";
+    if (currentStatus === status) throw fail(409, `That collector is already ${status}.`, "ALREADY");
+
+    if (fromData && status === "verified") {
+        const db = await getDatabase();
+        await db.collection("collectorEntries").deleteOne({ dexKey, ballId: found.ball.id, userId: targetId });
+        selfEntries.get(key)?.delete(targetId);
+        if (selfEntries.get(key)?.size === 0) selfEntries.delete(key);
+        applyBall(dexKey, found.ball);
+    } else {
+        await saveEntry(
+            dexKey,
+            found,
+            targetId,
+            { addedAt: current?.addedAt || new Date().toISOString(), status, addedBy: current?.addedBy ?? (fromData ? actorId : undefined) },
+            { statusBy: actorId, statusAt: new Date().toISOString() },
+        );
     }
-    if (current.status === status) throw fail(409, `That collector is already ${status}.`, "ALREADY");
-    await saveEntry(dexKey, found, targetId, { addedAt: current.addedAt || new Date().toISOString(), status, addedBy: current.addedBy }, { statusBy: actorId, statusAt: new Date().toISOString() });
     client?.log?.("COLLECTORS", `🛡️ ${who(actorId)} set ${who(targetId)} to ${status} for ${found.name} (${dexKey})`);
     return { ballId: found.ball.id, ballName: found.name, status };
 }
@@ -476,7 +496,7 @@ function getUserCollections(userId) {
             if (entry?.status === "removed") continue;
             const fromData = (staticOf(ball) || []).includes(userId);
             if (!fromData && !entry) continue;
-            result.push({ dexKey, id: Number(ball.id), name, rarity: ball.rarity, verified: fromData || entry.status === "verified" });
+            result.push({ dexKey, id: Number(ball.id), name, rarity: ball.rarity, verified: entry ? entry.status === "verified" : fromData });
         }
     }
     return result;
