@@ -141,10 +141,12 @@ const createRateLimiter = (maxRequests, windowMs, keyOf = clientIp) => {
 // Rate limiters. Website requests all come from the website container (it forwards the visitor's IP, see clientIp),
 // so the signed endpoints are limited per Discord user / server instead of per IP (with a high per-IP ceiling).
 const generalLimiter = createRateLimiter(60, 60 * 1000); // public endpoints
-const apiLimiter = createRateLimiter(30, 60 * 1000, (req) => {
+const perOwnerLimiter = createRateLimiter(50, 60 * 1000, (req) => {
     const owner = req.params.userId ? `user:${req.params.userId}` : req.params.guildId ? `guild:${req.params.guildId}` : null;
     return owner || clientIp(req);
 });
+// 50/min per user or server; the bot owner is not limited here (Moderation polls often; the per-IP ceiling below still applies)
+const apiLimiter = (req, res, next) => (req.params.userId === ADMIN_ID ? next() : perOwnerLimiter(req, res, next));
 const apiCeiling = createRateLimiter(1200, 60 * 1000); // everything under /api, per IP
 app.use("/api", apiCeiling);
 
