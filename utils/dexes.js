@@ -127,13 +127,6 @@ function serialize(list, incompleteNames) {
     return `${JSON.stringify(file, null, 4)}\n`;
 }
 
-function changelogWith(raw, entry) {
-    const changelog = JSON.parse(raw);
-    changelog.changes ??= [];
-    changelog.changes.unshift({ timestamp: String(Math.floor(Date.now() / 1000)), ...entry });
-    return `${JSON.stringify(changelog, null, 4)}\n`;
-}
-
 /**
  * One change to dexes.json (plus other files), committed to the website repo and used right away.
  * change(list, incompleteNames, base) returns { files?, message, changelog? } and edits the list in place.
@@ -149,8 +142,7 @@ async function commitChange(change) {
 
         const result = await change(list, incompleteNames, base);
         const files = [{ path: DEX_FILE, content: serialize(list, incompleteNames) }, ...(result.files || [])];
-        if (result.changelog) files.push({ path: "changelog.json", content: changelogWith(await readText("changelog.json", base), result.changelog) });
-        const commit = await commitFiles(base, files, result.message, result.changelog?.changes || []);
+        const commit = await commitFiles(base, files, result.message, result.changelog?.changes || [], { changelog: result.changelog || null });
 
         ownWriteAt = Date.now();
         apply({ registry: list, incompleteAbbreviations: incompleteNames });

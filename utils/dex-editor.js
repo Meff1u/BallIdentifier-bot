@@ -96,9 +96,17 @@ async function fileSha(path, base) {
  * files: [{ path, content } | { path, buffer } | { path, sha } | { path, remove: true }]
  * The website picks the commit up on Deploy; until then it is listed as waiting (utils/deploy.js).
  * details: human-readable changes shown in that list.
+ * changelog: { type, dex?, changes } note for changelog.json. While deploys are deferred it waits with the commit and is
+ *   written once per deploy (utils/deploy.js); otherwise it goes into this commit.
+ * track: false for commits that must not appear in the deploy list (the changelog commit itself).
  */
-async function commitFiles(base, files, message, details = []) {
+async function commitFiles(base, files, message, details = [], { changelog = null, track = true } = {}) {
     const { branch } = githubConfig();
+    const deferred = Boolean(changelog) && deploy.enabled();
+    if (changelog && !deferred) {
+        const entry = { timestamp: String(Math.floor(Date.now() / 1000)), ...changelog };
+        files = [...files, { path: "changelog.json", content: withChangelog(await readText("changelog.json", base), [entry]) }];
+    }
     const tree = await Promise.all(
         files.map(async (file) => {
             const item = { path: file.path, mode: "100644", type: "blob" };
@@ -113,7 +121,7 @@ async function commitFiles(base, files, message, details = []) {
     const commit = await gh("/git/commits", { method: "POST", body: { message: deploy.commitMessage(message), tree: newTree.sha, parents: [base.commitSha] } });
     await gh(`/git/refs/heads/${encodeURIComponent(branch)}`, { method: "PATCH", body: { sha: commit.sha, force: false } });
     try {
-        deploy.record({ title: message, changes: details, sha: commit.sha, url: commit.html_url || null });
+        if (track) deploy.record({ title: message, changes: details, sha: commit.sha, url: commit.html_url || null, ...(deferred ? { changelog } : {}) });
     } catch (error) {
         client?.logError?.("Couldn't note the change for the next deploy", error);
     }
@@ -231,11 +239,22 @@ function describeEdit(name, before, after) {
     return diffs.length ? `${name}: ${diffs.join(", ")}` : null;
 }
 
-function addChangelog(raw, dex, changes) {
+/** changelog.json with the entries (newest first) added on top. */
+function withChangelog(raw, entries) {
     const changelog = JSON.parse(raw);
     changelog.changes ??= [];
-    changelog.changes.unshift({ timestamp: String(Math.floor(Date.now() / 1000)), type: "dex", dex, changes });
+    changelog.changes.unshift(...entries);
     return `${JSON.stringify(changelog, null, 4)}\n`;
+}
+
+/** One commit with the merged changelog entries of a deploy (utils/deploy.js). */
+function commitChangelog(entries) {
+    if (!entries.length) return Promise.resolve(null);
+    return runExclusive(async () => {
+        const base = await getBase();
+        const raw = await readText("changelog.json", base);
+        return commitFiles(base, [{ path: "changelog.json", content: withChangelog(raw, entries) }], "Changelog: deployed changes", [], { track: false });
+    });
 }
 
 /** The bot uses the new data right away (raw.githubusercontent.com caches files for a few minutes). */
@@ -282,7 +301,7 @@ function saveEntry({ dex, originalName = null, name, details, image = null, shif
         const base = await getBase();
         const dataPath = `assets/jsons/${dex}.json`;
         const hashPath = `assets/jsons/${dex}Hashes.json`;
-        const [rawData, rawHashes, rawChangelog] = await Promise.all([readText(dataPath, base), readText(hashPath, base), readText("changelog.json", base)]);
+        const [rawData, rawHashes] = await Promise.all([readText(dataPath, base), readText(hashPath, base)]);
         const format = detectFormat(rawData);
         const data = JSON.parse(rawData);
         const hashes = JSON.parse(rawHashes);
@@ -374,10 +393,9 @@ function saveEntry({ dex, originalName = null, name, details, image = null, shif
         files.push(
             { path: dataPath, content: serializeDex(next, format) },
             { path: hashPath, content: serializeHashes(nextHashes) },
-            { path: "changelog.json", content: addChangelog(rawChangelog, dex, changes) },
         );
 
-        const commit = await commitFiles(base, files, `${dex}: ${isNew ? "add" : "update"} ${newName} (${actor})`, changes);
+        const commit = await commitFiles(base, files, `${dex}: ${isNew ? "add" : "update"} ${newName} (${actor})`, changes, { changelog: { type: "dex", dex, changes } });
         applyLocally(dex, next, nextHashes);
         client?.logGeneral?.(`Dex editor (${actor}): ${dex} · ${changes.join(" · ")}`);
         return { dex, name: newName, entry: next[newName], shifted, shiftedFrom: shifted ? entry.rarity : null, shiftMode: shifted ? shiftMode : null, changes, commitUrl: commit.html_url || null };
@@ -392,7 +410,7 @@ function deleteEntry({ dex, name, actor = "owner" }) {
         const base = await getBase();
         const dataPath = `assets/jsons/${dex}.json`;
         const hashPath = `assets/jsons/${dex}Hashes.json`;
-        const [rawData, rawHashes, rawChangelog] = await Promise.all([readText(dataPath, base), readText(hashPath, base), readText("changelog.json", base)]);
+        const [rawData, rawHashes] = await Promise.all([readText(dataPath, base), readText(hashPath, base)]);
         const data = JSON.parse(rawData);
         if (!(target in data)) throw userError(`${target} isn't in ${dex}.`, 404);
         const hashes = JSON.parse(rawHashes);
@@ -416,10 +434,9 @@ function deleteEntry({ dex, name, actor = "owner" }) {
         files.push(
             { path: dataPath, content: serializeDex(data, detectFormat(rawData)) },
             { path: hashPath, content: serializeHashes(hashes) },
-            { path: "changelog.json", content: addChangelog(rawChangelog, dex, changes) },
         );
 
-        const commit = await commitFiles(base, files, `${dex}: remove ${target} (${actor})`, changes);
+        const commit = await commitFiles(base, files, `${dex}: remove ${target} (${actor})`, changes, { changelog: { type: "dex", dex, changes } });
         applyLocally(dex, data, hashes);
         client?.logGeneral?.(`Dex editor (${actor}): ${dex} · ${changes.join(" · ")}`);
         return { dex, name: target, changes, commitUrl: commit.html_url || null };
@@ -439,6 +456,7 @@ module.exports = {
     getBase,
     readText,
     commitFiles,
+    commitChangelog,
     runExclusive,
     githubConfig,
     userError,
