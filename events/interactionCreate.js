@@ -21,6 +21,7 @@ const { unlinkAccount, cancelSync } = require("../utils/ballsdex");
 const {
     PAGE_SIZE,
     buildCollectorsView,
+    addSelfButton,
     findCollectorEntry,
     getCollectorBalls,
     getCollectorsSession,
@@ -314,6 +315,24 @@ module.exports = {
                 return interaction.update(view);
             }
 
+            // "I collect this": adds the user as a collector (verification and limits as on the website)
+            if (interaction.customId.startsWith("collectors-add:")) {
+                const [, dataKey, ballId] = interaction.customId.split(":");
+                await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+                try {
+                    const result = await require("../utils/collector-store").addSelf(interaction.user.id, dataKey, Number(ballId));
+                    const text =
+                        result.status === "verified"
+                            ? `✅ You're now a **verified** collector of **${result.ballName}**.`
+                            : `✅ Added as an **unverified** collector of **${result.ballName}**.${result.reason ? `\n-# ${result.reason}` : ""}`;
+                    return interaction.editReply({ content: text });
+                } catch (error) {
+                    if (error.status) return interaction.editReply({ content: error.message });
+                    client.logError(`Collector add failed (${interaction.user.id})`, error);
+                    return interaction.editReply({ content: "Couldn't add you right now. Try again in a moment." });
+                }
+            }
+
             // Handle collectors button
             if (interaction.customId.startsWith("collectors_")) {
                 const parts = interaction.customId.split("_");
@@ -330,7 +349,7 @@ module.exports = {
 
                 // Find ball by ID
                 const ballEntry = Object.entries(rarities).find(([_, data]) => data.id === ballId);
-                if (!ballEntry || !ballEntry[1].collectors) {
+                if (!ballEntry) {
                     return interaction.reply({
                         content: "No collectors data found.",
                         flags: MessageFlags.Ephemeral,
@@ -338,7 +357,7 @@ module.exports = {
                 }
 
                 const [ballName, ballData] = ballEntry;
-                const collectors = ballData.collectors;
+                const collectors = ballData.collectors || [];
 
                 // Format collectors list
                 const collectorsList =
@@ -362,9 +381,10 @@ module.exports = {
                             .setSpacing(SeparatorSpacingSize.Small)
                             .setDivider(true),
                     )
+                    .addActionRowComponents(new ActionRowBuilder().addComponents(addSelfButton(dataKey, ballData.id, ballName)))
                     .addTextDisplayComponents(
                         new TextDisplayBuilder().setContent(
-                            "-# Collect one of these? Add yourself on https://ballidentifier.xyz/collectors",
+                            "-# Collect this one? Press the button, or manage your collections on https://ballidentifier.xyz/collectors",
                         ),
                     );
 

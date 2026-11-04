@@ -414,7 +414,7 @@ function tellCollector(targetId, found, dexKey, what) {
             .notify(targetId, "collector_status", {
                 title: `Collector ${what}`,
                 body: `${found.name} (${DEX_NAME_BY_KEY[dexKey] || dexKey}): ${what}`,
-                link: "#/collectors",
+                link: "/collectors",
                 linkLabel: "Open Collectors",
                 merge: true,
             })

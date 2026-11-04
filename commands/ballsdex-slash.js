@@ -19,13 +19,17 @@ const {
     getStoredCollection,
     startSync,
     computeRaws,
+    getCompletion,
 } = require("../utils/ballsdex");
+const specialsApi = require("../utils/specials");
 
 const SUBCOMMAND_COOLDOWNS = {
     link: 20 * 1000,
     unlink: 20 * 1000,
     collection: 5 * 60 * 1000,
     raws: 30 * 1000,
+    completion: 30 * 1000,
+    specials: 10 * 1000,
 };
 const subcommandCooldowns = new Map();
 
@@ -62,6 +66,21 @@ function formatDuration(milliseconds) {
     return parts.join(" ");
 }
 
+const SITE_URL = "https://ballidentifier.xyz";
+const specialLabel = (special) => special.alias || special.name || `Special #${special.id}`;
+/** Unicode emoji only: custom Discord emoji can't be shown reliably outside their server */
+const specialEmoji = (special) => special.emoji || (special.officialEmoji && !/^<a?:/.test(special.officialEmoji) ? special.officialEmoji : "");
+const customEmojiUrl = (special) => {
+    const match = /^<a?:\w+:(\d+)>$/.exec(special.officialEmoji || "");
+    return match ? `https://cdn.discordapp.com/emojis/${match[1]}.webp?size=128` : null;
+};
+const priceOf = (special) => {
+    const avg = special.priceAverage;
+    const high = special.priceHighest;
+    if (avg && high && avg !== high) return `${avg} avg · ${high} highest`;
+    return avg || high || null;
+};
+
 function formatRanking(entries) {
     return entries.length
         ? entries.map(({ name, count }) => `  - ${name}: \`${count.toLocaleString("en-US")}\``).join("\n")
@@ -90,7 +109,33 @@ module.exports = {
         .addSubcommand((subcommand) => subcommand.setName("unlink").setDescription("Disconnect your Ballsdex account."))
         .addSubcommand((subcommand) => subcommand.setName("collection").setDescription("View your saved Ballsdex collection summary."))
         .addSubcommand((subcommand) => subcommand.setName("sync").setDescription("Synchronize your Ballsdex collection to BallIdentifier."))
-        .addSubcommand((subcommand) => subcommand.setName("raws").setDescription("Value of your rare (T1-T23) non-special balls.")),
+        .addSubcommand((subcommand) => subcommand.setName("raws").setDescription("Value of your rare (T1-T23) non-special balls."))
+        .addSubcommand((subcommand) =>
+            subcommand
+                .setName("completion")
+                .setDescription("Which Ballsdex balls you own and which are missing (straight from Ballsdex, no sync needed).")
+                .addStringOption((option) => option.setName("special").setDescription("Only for this special").setAutocomplete(true)),
+        )
+        .addSubcommand((subcommand) =>
+            subcommand
+                .setName("specials")
+                .setDescription("Ballsdex specials: prices, event details and market.")
+                .addStringOption((option) => option.setName("special").setDescription("A special to look at (leave empty for the list)").setAutocomplete(true)),
+        ),
+
+    async autocomplete(interaction) {
+        const query = String(interaction.options.getFocused() || "").toLowerCase().replace(/^#/, "");
+        try {
+            const { specials } = await specialsApi.getSpecials();
+            const choices = specials
+                .filter((item) => !query || String(item.id) === query || [item.name, item.alias].some((value) => value?.toLowerCase().includes(query)))
+                .slice(0, 25)
+                .map((item) => ({ name: `${specialLabel(item)} (#${item.id})`.slice(0, 100), value: String(item.id) }));
+            await interaction.respond(choices);
+        } catch {
+            await interaction.respond([]).catch(() => {});
+        }
+    },
 
     async execute(interaction) {
         const subcommand = interaction.options.getSubcommand();
@@ -124,7 +169,7 @@ module.exports = {
                 )
                 .addTextDisplayComponents(
                     new TextDisplayBuilder().setContent(
-                        "-# BallIdentifier only gets read access, and the sign-in is stored encrypted. Remove it any time with **/ballsdex unlink** or on your Ballsdex Keys page.",
+                        "-# BallIdentifier only gets read access, and the sign-in is stored encrypted. Remove it any time with **/ballsdex unlink**.",
                     ),
                 )
                 .addActionRowComponents(new ActionRowBuilder().addComponents(linkButton));
@@ -188,6 +233,115 @@ module.exports = {
                 components: [new ActionRowBuilder().addComponents(cancelButton)],
                 flags: MessageFlags.Ephemeral,
             });
+        }
+
+        if (subcommand === "completion") {
+            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+            const userId = interaction.user.id;
+            if (!isLinked(userId)) return interaction.editReply({ content: "Link your Ballsdex account first with `/ballsdex link`." });
+            if (needsReconnect(userId)) return interaction.editReply({ content: "Reconnect your Ballsdex account with `/ballsdex link` first." });
+            const raw = interaction.options.getString("special");
+            const specialId = /^\d{1,6}$/.test(raw || "") ? Number(raw) : null;
+            try {
+                const [completion, list] = await Promise.all([getCompletion(userId, { specialId }), specialId ? specialsApi.getSpecials().catch(() => null) : null]);
+                const special = specialId ? list?.specials?.find((item) => item.id === specialId) : null;
+                const percent = Number.isFinite(completion.percent) ? completion.percent : completion.total ? (completion.ownedCount / completion.total) * 100 : 0;
+                const percentText = `${percent.toFixed(percent >= 99.95 || percent === 0 ? 0 : 1)}%`;
+                const fmt = (n) => n.toLocaleString("en-US");
+                let missing = "";
+                let shown = 0;
+                for (const ball of completion.missing) {
+                    const piece = `${shown ? ", " : ""}${ball.name}`;
+                    if (missing.length + piece.length > 2600) break;
+                    missing += piece;
+                    shown++;
+                }
+                const hidden = completion.missing.length - shown;
+                const container = new ContainerBuilder()
+                    .setAccentColor(0xa020f0)
+                    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`# Completion${special ? ` · ${specialEmoji(special)} ${specialLabel(special)}`.replace("  ", " ") : ""}`))
+                    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${percentText}** · \`${fmt(completion.ownedCount)}\` of \`${fmt(completion.total)}\` owned · \`${fmt(completion.missingCount)}\` missing`))
+                    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+                    .addTextDisplayComponents(
+                        new TextDisplayBuilder().setContent(completion.missing.length ? `**Missing**\n${missing}${hidden > 0 ? `\n-# …and ${fmt(hidden)} more on the website` : ""}` : "Nothing missing. Well done!"),
+                    )
+                    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+                    .addTextDisplayComponents(
+                        new TextDisplayBuilder().setContent(`-# Updated <t:${Math.floor(new Date(completion.updatedAt).getTime() / 1000)}:R> · straight from the Ballsdex API · ${SITE_URL}/ballsdex/completion`),
+                    );
+                return interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+            } catch (error) {
+                if (!error.ballsdexApi) console.error("[BALLSDEX] Completion failed:", error.message);
+                return interaction.editReply({ content: error.ballsdexApi || error.code === "RECONNECT" ? error.message : "Couldn't reach the Ballsdex API. Try again in a moment." });
+            }
+        }
+
+        if (subcommand === "specials") {
+            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+            try {
+                const data = await specialsApi.getSpecials();
+                const query = (interaction.options.getString("special") || "").trim().toLowerCase().replace(/^#/, "");
+                if (!query) {
+                    let text = "";
+                    let shown = 0;
+                    for (const item of data.specials) {
+                        const line = `${specialEmoji(item) ? `${specialEmoji(item)} ` : ""}**${specialLabel(item)}**${priceOf(item) ? ` · ${priceOf(item)}` : ""}\n`;
+                        if (text.length + line.length > 3300) break;
+                        text += line;
+                        shown++;
+                    }
+                    const container = new ContainerBuilder()
+                        .setAccentColor(0xa020f0)
+                        .addTextDisplayComponents(new TextDisplayBuilder().setContent("# Ballsdex specials"))
+                        .addTextDisplayComponents(new TextDisplayBuilder().setContent(text || "No specials loaded yet."))
+                        .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+                        .addTextDisplayComponents(
+                            new TextDisplayBuilder().setContent(
+                                `-# Prices are in commons (average · highest), community estimates. Pick one with the **special** option for details${shown < data.specials.length ? `; ${data.specials.length - shown} more on` : ". All on"} ${SITE_URL}/ballsdex/specials`,
+                            ),
+                        );
+                    return interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+                }
+                const special =
+                    data.specials.find((item) => String(item.id) === query) ||
+                    data.specials.find((item) => [item.name, item.alias].some((value) => value?.toLowerCase() === query)) ||
+                    data.specials.find((item) => [item.name, item.alias].some((value) => value?.toLowerCase().includes(query)));
+                if (!special) return interaction.editReply({ content: "No special matches that. Start typing in the **special** option to pick one." });
+
+                const facts = [];
+                if (special.tradeable === false || special.priceAverage === "Untradable") facts.push("- 🔒 Untradeable");
+                const price = priceOf(special);
+                if (price && special.priceAverage !== "Untradable") facts.push(`- Common price: **${price}**`);
+                if (special.spawnRate) facts.push(`- Spawn rate: ${special.spawnRate}`);
+                if (special.duration) facts.push(`- Duration: ${special.duration}`);
+                const stamp = (value) => (value && Number.isFinite(Date.parse(value)) ? `<t:${Math.floor(Date.parse(value) / 1000)}:D>` : null);
+                if (stamp(special.startDate)) facts.push(`- Event: ${stamp(special.startDate)}${stamp(special.endDate) ? ` to ${stamp(special.endDate)}` : ""}`);
+                if (special.availableCount) facts.push(`- Can appear on \`${special.availableCount.toLocaleString("en-US")}\` balls`);
+                const market = [];
+                if (special.market?.recent) market.push(`- Last ${data.marketWindowDays || 30} days: \`${special.market.recent.sales}\` sales, median \`${special.market.recent.median?.toLocaleString("en-US")}\``);
+                if (special.market?.all) market.push(`- All time: \`${special.market.all.sales}\` sales, median \`${special.market.all.median?.toLocaleString("en-US")}\``);
+
+                const emoji = specialEmoji(special);
+                const head = new TextDisplayBuilder().setContent(
+                    `# ${emoji ? `${emoji} ` : ""}${specialLabel(special)}\n-# ${special.alias && special.name && special.alias !== special.name ? `${special.name} · ` : ""}#${special.id}`,
+                );
+                const container = new ContainerBuilder().setAccentColor(0xa020f0);
+                const thumb = customEmojiUrl(special);
+                if (thumb) container.addSectionComponents(new SectionBuilder().addTextDisplayComponents(head).setThumbnailAccessory(new ThumbnailBuilder().setURL(thumb)));
+                else container.addTextDisplayComponents(head);
+                container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+                container.addTextDisplayComponents(new TextDisplayBuilder().setContent(facts.length ? facts.join("\n") : "-# No details saved for this special yet."));
+                if (special.notes) container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`> ${String(special.notes).replace(/\n/g, "\n> ").slice(0, 600)}`));
+                if (market.length) {
+                    container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+                    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**Market**\n${market.join("\n")}`));
+                }
+                container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Prices are in commons, community estimates · ${SITE_URL}/ballsdex/specials/${special.id}`));
+                return interaction.editReply({ components: [container], flags: MessageFlags.IsComponentsV2 });
+            } catch (error) {
+                if (!error.ballsdexApi) console.error("[BALLSDEX] Specials failed:", error.message);
+                return interaction.editReply({ content: "Couldn't load the specials right now. Try again in a moment." });
+            }
         }
 
         if (subcommand === "raws") {

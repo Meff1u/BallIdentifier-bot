@@ -274,6 +274,38 @@ async function getPublicProfile(userId, { self = false } = {}) {
     };
 }
 
+/**
+ * A short public summary for the bot's /profile (no Ballsdex API requests: stored data only).
+ * null when the profile isn't public (or was hidden by the owner).
+ */
+async function getProfileCard(userId) {
+    const stored = storedProfile(userId);
+    const settings = settingsOf(userId);
+    if (!stored || settings.blocked || !settings.public) return null;
+    let ballsdex = null;
+    if (settings.showBallsdex && isLinked(userId)) {
+        const summary = (await getStoredCollection(userId).catch(() => null))?.summary;
+        if (summary) ballsdex = { totalBalls: summary.totalBalls ?? null, uniqueBalls: summary.uniqueBalls ?? null, specialCount: summary.specialCount ?? null };
+    }
+    const catchSettings = catchStats.userSettings(userId);
+    let catches = null;
+    if (catchSettings.tracking && catchSettings.public) {
+        const last30 = (await catchStats.getUserStats(userId).catch(() => null))?.last30;
+        if (last30?.count) catches = { count: last30.count, averageMs: last30.averageMs };
+    }
+    return {
+        id: userId,
+        ...discordOf(userId, stored),
+        bio: settings.bio,
+        pronouns: settings.pronouns,
+        favoriteDex: settings.favoriteDex,
+        showcase: settings.showcase.map((item) => item.name),
+        collectionCount: settings.showCollections ? collectionsOf(userId).reduce((sum, group) => sum + group.balls.length, 0) : null,
+        ballsdex,
+        catches,
+    };
+}
+
 /** Own settings for the editor. */
 function getSettings(userId) {
     const settings = settingsOf(userId);
@@ -365,4 +397,4 @@ const isPublic = (userId) => {
     return Boolean(profile?.public && !profile.blocked);
 };
 
-module.exports = { setClient, getPublicProfile, getSettings, saveSettings, moderate, searchProfiles, isPublic };
+module.exports = { setClient, getPublicProfile, getProfileCard, getSettings, saveSettings, moderate, searchProfiles, isPublic };

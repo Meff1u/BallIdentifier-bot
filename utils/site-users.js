@@ -296,7 +296,7 @@ async function unblock(actorId, targetId) {
         .notify(targetId, "account_status", {
             title: "Your account was unblocked",
             body: "You can use BallIdentifier again. Log in with Discord on the website." + (doc?.profileHiddenByBlock ? " Your profile stays private until you make it public again." : ""),
-            link: "#/",
+            link: "/",
             linkLabel: "Open BallIdentifier",
         })
         .catch(() => {});

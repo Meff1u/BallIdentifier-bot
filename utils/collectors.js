@@ -101,6 +101,14 @@ function getDexChoices(focusedValue = "") {
         .map((dexName) => ({ name: dexName, value: dexName }));
 }
 
+/** "I collect this": adds the user as a collector of the ball (same rules and limits as the website). */
+function addSelfButton(dataKey, ballId, ballName) {
+    return new ButtonBuilder()
+        .setCustomId(`collectors-add:${dataKey}:${ballId}`)
+        .setStyle(ButtonStyle.Success)
+        .setLabel(`I collect ${ballName}`.slice(0, 80));
+}
+
 function buildCollectorsView(client, dataKey, selectedBallName, page = 0, sessionId) {
     const rarities = client.rarities?.[dataKey];
 
@@ -196,11 +204,13 @@ function buildCollectorsView(client, dataKey, selectedBallName, page = 0, sessio
         container.addActionRowComponents(new ActionRowBuilder().addComponents(searchButton));
     }
 
+    container.addActionRowComponents(new ActionRowBuilder().addComponents(addSelfButton(dataKey, selectedBall.data.id, selectedBall.name)));
+
     container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
 
     container.addTextDisplayComponents(
         new TextDisplayBuilder().setContent(
-            "-# Collect one of these? Add yourself on https://ballidentifier.xyz/collectors",
+            "-# Collect one of these? Press the button above, or manage your collections on https://ballidentifier.xyz/collectors",
         ),
     );
 
@@ -215,4 +225,5 @@ module.exports = {
     findCollectorEntry,
     getCollectorBalls,
     buildCollectorsView,
+    addSelfButton,
 };

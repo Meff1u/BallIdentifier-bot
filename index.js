@@ -9,7 +9,7 @@ const { closeDatabase, initializeDatabase } = require("./utils/database");
 const TOKEN = process.env.TOKEN;
 const { PRIVATE_GUILD_ID } = require("./utils/constants");
 const dexes = require("./utils/dexes");
-const PRIVATE_COMMANDS = ["refresh", "msg", "bdcompare"];
+const PRIVATE_COMMANDS = ["refresh"];
 
 const client = new Client({
     intents: [

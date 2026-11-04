@@ -362,7 +362,7 @@ async function notifyChangelog(entries) {
                 if (!settings.enabled) continue;
                 if (user.web) {
                     user.inbox ??= [];
-                    user.inbox.unshift(inboxItem(type, title, body, "#/identify?whatsnew=1"));
+                    user.inbox.unshift(inboxItem(type, title, body, "/identify?whatsnew=1"));
                     user.inbox.length = Math.min(user.inbox.length, INBOX_LIMIT);
                 }
                 if (settings.dm) {

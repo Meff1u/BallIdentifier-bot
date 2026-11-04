@@ -183,7 +183,7 @@ function reportNotifierIssue(m, client, kind, settings, problem) {
         .notify(userId, "notifier_issue", {
             title: `${label} problem in ${m.guild?.name || "your server"}`,
             body: `Your ${label} in ${m.guild?.name || "this server"} isn't working: ${text}`,
-            link: "#/bot/notifier",
+            link: "/bot/notifier",
             linkLabel: "Open the Notifier",
         })
         .catch(() => {});

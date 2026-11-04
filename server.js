@@ -808,7 +808,7 @@ app.post("/api/users/:userId/admin/sync/cancel", apiLimiter, verifySignature, re
         .notify(target, "sync_finished", {
             title: "Ballsdex sync cancelled",
             body: "Your sync was stopped by the BallIdentifier owner. You can start a new one in 5 minutes.",
-            link: "#/ballsdex",
+            link: "/ballsdex",
         })
         .catch(() => {});
     res.status(200).json({ success: true, userId: target });

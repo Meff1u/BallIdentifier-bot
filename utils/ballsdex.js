@@ -1385,7 +1385,7 @@ function dropGrant(userId) {
         .notify(userId, "ballsdex_account", {
             title: "Sign in with Ballsdex again",
             body: "BallIdentifier can't reach your Ballsdex account anymore (the sign-in expired or access was removed). Your stats are still here; sign in again to sync.",
-            link: "#/ballsdex",
+            link: "/ballsdex",
         })
         .catch(() => {});
 }
@@ -1488,7 +1488,7 @@ async function connectOAuth(userId, { code, codeVerifier, redirectUri }) {
         .notify(userId, "ballsdex_account", {
             title: wasLinked ? "Ballsdex account reconnected" : "Ballsdex account linked",
             body: "Your Ballsdex account was connected to BallIdentifier with Sign in with Ballsdex. Not you? Unlink it in the Ballsdex tab.",
-            link: "#/ballsdex",
+            link: "/ballsdex",
             noDm: wasLinked, // only the first connection is worth a DM; a reconnect is something you just did
         })
         .catch(() => {});
@@ -1504,7 +1504,7 @@ async function unlinkAccount(userId) {
             .notify(userId, "ballsdex_account", {
                 title: "Ballsdex account unlinked",
                 body: "Your Ballsdex sign-in and synced collection data were removed.",
-                link: "#/ballsdex",
+                link: "/ballsdex",
                 noDm: true,
             })
             .catch(() => {});
@@ -1564,7 +1564,7 @@ function releaseSlotWaiters(exceptUserId = null) {
             .notify(waiterId, "sync_slot", {
                 title: "You can sync your Ballsdex collection now",
                 body: "The sync that was running has finished.",
-                link: "#/ballsdex",
+                link: "/ballsdex",
                 dmText: "The Ballsdex sync slot is free: sync your collection now with `/ballsdex sync` or on the website.",
                 linkLabel: "Open the Ballsdex tab",
             })
@@ -1760,7 +1760,7 @@ function runSync(userId, { resume = null } = {}) {
                 .notify(userId, "sync_finished", {
                     title: "Ballsdex sync finished",
                     body: `${result.ballCount.toLocaleString("en-US")} balls synced. Your stats and raws are up to date.`,
-                    link: "#/ballsdex",
+                    link: "/ballsdex",
                     dmText: `Your Ballsdex collection sync is complete. ${result.ballCount.toLocaleString("en-US")} balls were updated.`,
                 })
                 .catch(() => {});
@@ -1781,7 +1781,7 @@ function runSync(userId, { resume = null } = {}) {
                     .notify(userId, "sync_finished", {
                         title: "Ballsdex sync paused",
                         body: `${error.reason || error.message} ${fetched} balls are saved; the sync continues by itself in about ${hours} h.`,
-                        link: "#/ballsdex",
+                        link: "/ballsdex",
                         noDm: true, // it continues by itself; the "finished" notification is the one worth a DM
                     })
                     .catch(() => {});
@@ -1792,7 +1792,7 @@ function runSync(userId, { resume = null } = {}) {
                     .notify(userId, "sync_finished", {
                         title: "Ballsdex sync failed",
                         body: state.error,
-                        link: "#/ballsdex",
+                        link: "/ballsdex",
                         dmText: `Your Ballsdex collection sync failed: ${state.error}`,
                     })
                     .catch(() => {});
@@ -1944,7 +1944,7 @@ async function sendDueSyncReminders() {
             .notify(userId, "sync_available", {
                 title: "Your Ballsdex sync is available again",
                 body: "24 hours have passed since your last sync.",
-                link: "#/ballsdex",
+                link: "/ballsdex",
                 dmText: "24 hours have passed: sync your collection again with `/ballsdex sync` or on the website.",
                 linkLabel: "Open the Ballsdex tab",
             })
