@@ -3,7 +3,7 @@
  * One message per user every COOLDOWN_MS, remembered in data.json so a restart doesn't reset it.
  */
 
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags } = require("discord.js");
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, LabelBuilder, StringSelectMenuBuilder, MessageFlags } = require("discord.js");
 const { getData, updateData } = require("./helpers");
 const notifications = require("./notifications");
 const { ADMIN_ID } = require("./constants");
@@ -120,20 +120,23 @@ async function handleOwnerReply(interaction, client) {
     if (!/^\d{17,20}$/.test(userId || "")) return ephemeral(interaction, "This message can't be answered.");
 
     if (interaction.isButton()) {
-        const canReply = new TextInputBuilder().setCustomId("canreply").setLabel("Can reply? (yes / no)").setStyle(TextInputStyle.Short).setMinLength(1).setMaxLength(3).setValue("yes").setRequired(true);
+        const text = new TextInputBuilder().setCustomId("text").setStyle(TextInputStyle.Paragraph).setMinLength(1).setMaxLength(REPLY_MAX).setRequired(true);
+        const canReply = new StringSelectMenuBuilder()
+            .setCustomId("canreply")
+            .setRequired(true)
+            .setOptions({ label: "Yes", value: "yes", description: "They get a Reply button (one use)", default: true }, { label: "No", value: "no", description: "They are told they can't reply" });
         const modal = new ModalBuilder()
             .setCustomId(`${REPLY_PREFIX}send:${userId}:${type}`)
             .setTitle("Answer the message")
-            .addComponents(paragraph("text", "Your answer", REPLY_MAX), new ActionRowBuilder().addComponents(canReply));
+            .addLabelComponents(new LabelBuilder().setLabel("Your answer").setTextInputComponent(text), new LabelBuilder().setLabel("Can reply?").setStringSelectMenuComponent(canReply));
         return interaction.showModal(modal);
     }
     if (action !== "send") return;
 
     const text = interaction.fields.getTextInputValue("text").trim();
-    const choice = interaction.fields.getTextInputValue("canreply").trim().toLowerCase();
+    const choice = interaction.fields.getStringSelectValues("canreply")[0] || "yes";
     if (!text) return ephemeral(interaction, "Write an answer first.");
-    if (!/^[yn]/.test(choice)) return ephemeral(interaction, `Type yes or no in "Can reply?". Your answer, to copy:\n${text.slice(0, 1800)}`);
-    const canReply = choice.startsWith("y");
+    const canReply = choice === "yes";
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     const original = interaction.message?.embeds?.[0];
@@ -159,7 +162,7 @@ async function handleOwnerReply(interaction, client) {
     if (original && interaction.message) {
         const note = delivered === "dm" ? (canReply ? " (they can reply)" : " (no reply option)") : " (sent as a website notification)";
         const marked = EmbedBuilder.from(original).addFields({ name: `✅ Your answer${note}`, value: text.slice(0, 1024) });
-        await interaction.message.edit({ embeds: [marked] }).catch(() => {});
+        await interaction.message.edit({ embeds: [marked], components: [] }).catch(() => {});
     }
     client.log?.("API", `📨 Contact answer sent to <@${userId}> (${delivered})`);
     await interaction.editReply(delivered === "dm" ? "✅ Answer sent." : "⚠️ Couldn't DM this user (the bot shares no server with them or their DMs are closed). The answer was sent as a notification on the website instead, without a reply option.");
