@@ -1144,7 +1144,7 @@ app.post("/api/users/:userId/profile", apiLimiter, verifySignature, async (req, 
         const { settings, discord, catchStats: catchInput } = req.body || {};
         if (!settings || typeof settings !== "object" || Array.isArray(settings)) return res.status(400).json({ error: "Invalid settings" });
         const wasPublic = profiles.isPublic(userId);
-        const result = profiles.saveSettings(userId, settings, discord);
+        const result = await profiles.saveSettings(userId, settings, discord);
         // Catch stats privacy (public / tracking) is saved with the profile; tracking off deletes the data
         if (catchInput && typeof catchInput === "object") {
             const before = catchStats.userSettings(userId);

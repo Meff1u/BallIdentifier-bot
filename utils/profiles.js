@@ -14,8 +14,8 @@ const catchStats = require("./catch-stats");
 
 const DEX_TO_KEY = DEX_KEY_BY_NAME;
 const KEY_TO_DEX = DEX_NAME_BY_KEY;
-const LIMITS = { bio: 300, pronouns: 24, showcase: 6, search: 60 };
-const DEFAULTS = { public: false, bio: "", pronouns: "", favoriteDex: null, showcase: [], showBallsdex: false, showCollections: true, showLastCatches: true };
+const LIMITS = { bio: 300, pronouns: 24, showcase: 6, search: 60, lookingFor: 10 };
+const DEFAULTS = { public: false, bio: "", pronouns: "", favoriteDex: null, showcase: [], showBallsdex: false, showCollections: true, showLastCatches: true, lookingFor: [] };
 
 let client = null;
 const setClient = (discordClient) => (client = discordClient);
@@ -29,7 +29,7 @@ function storedProfile(userId) {
 /** Saved settings with defaults filled in. */
 function settingsOf(userId) {
     const stored = storedProfile(userId) || {};
-    return { ...DEFAULTS, ...stored, showcase: Array.isArray(stored.showcase) ? stored.showcase : [] };
+    return { ...DEFAULTS, ...stored, showcase: Array.isArray(stored.showcase) ? stored.showcase : [], lookingFor: Array.isArray(stored.lookingFor) ? stored.lookingFor : [] };
 }
 
 /** Name and avatar: whichever is newer of the bot's cached Discord profile (refreshed weekly) and what the website last sent. */
@@ -62,7 +62,69 @@ function findBall(dex, name) {
     return match ? { dex, name: match, rarity: rarities[match]?.rarity ?? null } : null;
 }
 
-function validate(input) {
+/** A ball by its stable numeric id (Looking For stores ids, not names). */
+function ballById(dexKey, id) {
+    const rarities = client?.rarities?.[dexKey];
+    if (!rarities) return null;
+    for (const [name, ball] of Object.entries(rarities)) {
+        if (name !== "hashes" && ball?.id === id) return { name, rarity: ball.rarity ?? null };
+    }
+    return null;
+}
+
+const LF_VERSIONS = ["any", "regular", "anySpecial", "special"];
+const LF_PRIORITIES = ["high", "medium", "low"];
+const lfKey = (e) => `${e.dex}/${e.ballId}/${e.version}/${e.specialId}`;
+
+/**
+ * Looking For: [{ dex, ballId (null = any countryball, Ballsdex only), version, specialId, priority }].
+ * Entries identical to the stored ones are kept without re-checking the official specials list (it can be unavailable).
+ */
+async function validateLookingFor(list, userId) {
+    if (!Array.isArray(list) || list.length > LIMITS.lookingFor) throw httpError(400, `You can add up to ${LIMITS.lookingFor} entries to Looking For.`);
+    const stored = new Set(settingsOf(userId).lookingFor.map(lfKey));
+    const specialsApi = require("./specials");
+    const seen = new Set();
+    const result = [];
+    for (const item of list) {
+        const dex = item?.dex;
+        const dexKey = DEX_TO_KEY[dex];
+        if (!dexKey) throw httpError(400, "Looking For: unknown dex.");
+        const priority = item.priority;
+        if (!LF_PRIORITIES.includes(priority)) throw httpError(400, "Looking For: pick a priority.");
+        const isBallsdex = dexKey === "BD";
+        const ballId = item.ballId === null || item.ballId === undefined ? null : item.ballId;
+        if (ballId !== null && (!Number.isInteger(ballId) || !ballById(dexKey, ballId))) throw httpError(400, `Looking For: unknown ball in ${dex}.`);
+        let version = item.version ?? "any";
+        let specialId = null;
+        if (!isBallsdex) {
+            if (ballId === null) throw httpError(400, "Looking For: pick a ball.");
+            version = "any";
+        } else {
+            if (!LF_VERSIONS.includes(version)) throw httpError(400, "Looking For: unknown version.");
+            if (ballId === null && (version === "any" || version === "regular")) throw httpError(400, "Looking For: pick a ball, or a special for \"any countryball\".");
+            if (version === "special") {
+                specialId = item.specialId;
+                const { specials } = await specialsApi.getSpecials();
+                if (!Number.isInteger(specialId) || !specials.some((special) => special.id === specialId)) throw httpError(400, "Looking For: unknown special.");
+            }
+        }
+        const entry = { dex, ballId, version, specialId, priority };
+        const key = lfKey(entry);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (isBallsdex && ballId !== null && (version === "anySpecial" || version === "special") && !stored.has(key)) {
+            const available = await specialsApi.specialsForBall(ballId);
+            if (!available.loaded) throw httpError(503, "The official specials list isn't available right now. Try again in a moment.");
+            if (version === "anySpecial" && !available.specials.length) throw httpError(400, "Looking For: that ball has no specials.");
+            if (version === "special" && !available.specials.some((special) => special.id === specialId)) throw httpError(400, "Looking For: that ball can't have the chosen special.");
+        }
+        result.push(entry);
+    }
+    return result;
+}
+
+async function validate(input, userId) {
     const settings = {};
     if ("public" in input) settings.public = input.public === true;
     if ("showBallsdex" in input) settings.showBallsdex = input.showBallsdex === true;
@@ -87,6 +149,7 @@ function validate(input) {
             settings.showcase.push({ dex: ball.dex, name: ball.name });
         }
     }
+    if ("lookingFor" in input) settings.lookingFor = await validateLookingFor(input.lookingFor, userId);
     return settings;
 }
 
@@ -140,6 +203,33 @@ async function ballsdexOf(userId) {
     };
 }
 
+const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
+
+/** Looking For with names resolved from the ids (entries whose ball no longer exists stay stored but are hidden), top priority first. */
+async function lookingForOf(settings) {
+    if (!settings.lookingFor.length) return [];
+    const specials = settings.lookingFor.some((entry) => entry.specialId) ? (await require("./specials").getSpecials().catch(() => ({ specials: [] }))).specials : [];
+    const out = [];
+    for (const entry of settings.lookingFor) {
+        const dexKey = DEX_TO_KEY[entry.dex];
+        const ball = entry.ballId === null ? null : ballById(dexKey, entry.ballId);
+        if (entry.ballId !== null && !ball) continue;
+        const special = entry.specialId ? specials.find((item) => item.id === entry.specialId) : null;
+        out.push({
+            dex: entry.dex,
+            ballId: entry.ballId,
+            ballName: ball?.name ?? null,
+            rarity: ball?.rarity ?? null,
+            version: entry.version,
+            specialId: entry.specialId,
+            specialName: entry.specialId ? special?.alias || special?.name || `Special #${entry.specialId}` : null,
+            specialEmoji: special ? special.emoji || special.officialEmoji || null : null,
+            priority: entry.priority,
+        });
+    }
+    return out.sort((a, b) => PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority]);
+}
+
 /** The profile as others see it, or null when it's private, hidden or never set up. `self` also returns private ones. */
 async function getPublicProfile(userId, { self = false } = {}) {
     const stored = storedProfile(userId);
@@ -171,6 +261,7 @@ async function getPublicProfile(userId, { self = false } = {}) {
         pronouns: settings.pronouns,
         favoriteDex: settings.favoriteDex,
         showcase,
+        lookingFor: await lookingForOf(settings),
         identifyAmount: user.identifyAmount || 0,
         createdAt: settings.createdAt || null,
         updatedAt: settings.updatedAt || null,
@@ -193,6 +284,7 @@ function getSettings(userId) {
             pronouns: settings.pronouns,
             favoriteDex: settings.favoriteDex,
             showcase: settings.showcase,
+            lookingFor: settings.lookingFor,
             showBallsdex: settings.showBallsdex,
             showCollections: settings.showCollections,
             showLastCatches: settings.showLastCatches,
@@ -214,8 +306,8 @@ const cleanDiscord = (discord) =>
           }
         : null;
 
-function saveSettings(userId, input, discord) {
-    const changes = validate(input || {});
+async function saveSettings(userId, input, discord) {
+    const changes = await validate(input || {}, userId);
     const snapshot = cleanDiscord(discord);
     const now = new Date().toISOString();
     const result = updateData((data) => {
