@@ -12,7 +12,8 @@
 const fs = require("fs");
 const path = require("path");
 const { getDatabase } = require("./database");
-const { DATA_PATH } = require("./helpers");
+// The folder helpers.js keeps data.json in (mounted from bot-data/)
+const DATA_DIR = path.join(__dirname, "../assets");
 
 const FOLDER_CACHE_MS = 60 * 1000;
 const MAX_FILES = 20000;
@@ -81,7 +82,7 @@ function folderSize(dir) {
 }
 
 async function disk() {
-    const dir = path.dirname(DATA_PATH);
+    const dir = DATA_DIR;
     const out = { available: false, totalBytes: null, usedBytes: null, freeBytes: null, botDataBytes: null, botDataComplete: null };
     try {
         const stat = await fs.promises.statfs(dir);
