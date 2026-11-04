@@ -1525,7 +1525,50 @@ async function unlinkAccount(userId) {
 
 const syncStates = new Map(); // userId -> live state of the user's current/last sync this run
 let activeSync = null; // { userId, state }
-const slotWaiters = new Set(); // users to notify when the running sync ends
+const slotWaiters = new Set(); // users to notify when the running sync ends (insertion order = who asked first)
+// The list survives restarts: users[id].ballsdexSync.waitingSince (ISO) is the persistent copy of this set,
+// restored by restoreSlotWaiters() and cleared whenever a waiter is released or starts their own sync.
+const WAITER_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+function setWaiting(userId, waiting) {
+    updateData((data) => {
+        const record = ((data.users[userId] ??= {}).ballsdexSync ??= {});
+        if (waiting) record.waitingSince ??= new Date().toISOString();
+        else delete record.waitingSince;
+    });
+}
+
+/** After a restart: puts back (in the original order) the users who were turned away while a sync was running. */
+function restoreSlotWaiters() {
+    const users = getData().users || {};
+    const saved = Object.entries(users)
+        .filter(([, user]) => user.ballsdexSync?.waitingSince)
+        .map(([id, user]) => [id, new Date(user.ballsdexSync.waitingSince).getTime()])
+        .sort((a, b) => a[1] - b[1]);
+    for (const [id, since] of saved) {
+        if (!Number.isFinite(since) || Date.now() - since > WAITER_MAX_AGE_MS || !getSavedApiKey(id)) setWaiting(id, false);
+        else slotWaiters.add(id);
+    }
+}
+
+/** The slot is free: tells everyone who was turned away (in the order they asked) and forgets the list. */
+function releaseSlotWaiters(exceptUserId = null) {
+    const waiters = [...slotWaiters].filter((id) => id !== exceptUserId);
+    slotWaiters.clear();
+    for (const waiterId of waiters) {
+        setWaiting(waiterId, false);
+        if (!getSavedApiKey(waiterId) || cooldownLeftMs(waiterId) > 0 || syncBlocked(waiterId)) continue;
+        getNotifier()
+            .notify(waiterId, "sync_available", {
+                title: "You can sync your Ballsdex collection now",
+                body: "The sync that was running has finished.",
+                link: "#/ballsdex",
+                dmText: "The Ballsdex sync slot is free: sync your collection now with `/ballsdex sync` or on the website.",
+                linkLabel: "Open the Ballsdex tab",
+            })
+            .catch(() => {});
+    }
+}
 
 function getNotifier() {
     return require("./notifications");
@@ -1617,21 +1660,7 @@ function finishSync(userId, state, outcome) {
     state.finishedAt = Date.now();
     if (activeSync?.userId === userId) activeSync = null;
 
-    // The slot is free: tell everyone who was turned away
-    const waiters = [...slotWaiters].filter((id) => id !== userId);
-    slotWaiters.clear();
-    for (const waiterId of waiters) {
-        if (!getSavedApiKey(waiterId) || cooldownLeftMs(waiterId) > 0 || syncBlocked(waiterId)) continue;
-        getNotifier()
-            .notify(waiterId, "sync_available", {
-                title: "You can sync your Ballsdex collection now",
-                body: "The sync that was running has finished.",
-                link: "#/ballsdex",
-                dmText: "The Ballsdex sync slot is free: sync your collection now with `/ballsdex sync` or on the website.",
-                linkLabel: "Open the Ballsdex tab",
-            })
-            .catch(() => {});
-    }
+    releaseSlotWaiters(userId);
 }
 
 /**
@@ -1649,7 +1678,10 @@ function startSync(userId) {
     if (left > 0) return { started: false, reason: "COOLDOWN", retryAfterSec: Math.ceil(left / 1000) };
 
     if (activeSync) {
-        slotWaiters.add(userId);
+        if (!slotWaiters.has(userId)) {
+            slotWaiters.add(userId);
+            setWaiting(userId, true);
+        }
         return { started: false, reason: "BUSY" };
     }
 
@@ -1695,7 +1727,7 @@ function runSync(userId, { resume = null } = {}) {
     };
     syncStates.set(userId, state);
     activeSync = { userId, state };
-    slotWaiters.delete(userId);
+    if (slotWaiters.delete(userId)) setWaiting(userId, false);
     // a new sync replaces the pending "available" reminder
     updateData((data) => {
         if (data.users[userId]?.ballsdexSync) data.users[userId].ballsdexSync.notifyAvailableAt = null;
@@ -1808,7 +1840,13 @@ function clearPaused(userId) {
  * Jobs older than a day, or of users who unlinked, are dropped.
  * @returns {Promise<string[]>} user ids whose sync was resumed or queued
  */
+let waitersRestored = false;
+
 async function resumeInterruptedSyncs() {
+    if (!waitersRestored) {
+        waitersRestored = true;
+        restoreSlotWaiters();
+    }
     const { jobs } = await syncStorage();
     const found = await jobs.find({}).sort({ startedAt: 1 }).toArray();
     await removeOrphanCheckpoints(found.map((job) => job._id)).catch(() => {});
@@ -1828,6 +1866,8 @@ async function resumeInterruptedSyncs() {
         resumed.push(job._id);
     }
     resumeNext();
+    // Nothing is running (and nothing resumed): the users who were waiting before the restart can sync right away
+    if (!activeSync && slotWaiters.size) releaseSlotWaiters();
     return resumed;
 }
 
