@@ -39,7 +39,6 @@ const IP_MINUTE_BUSY_OTHERS = 4; // that many other requests in the current minu
 const SYNC_COOLDOWN_MS = 24 * 60 * 60 * 1000; // after a successful sync
 const SYNC_RETRY_COOLDOWN_MS = 5 * 60 * 1000; // after a failed or cancelled sync
 const TOP_ENTRIES = 5;
-const RECENT_SPECIALS = 5; // newest special catches kept in the collection summary (profile: Last special catches)
 
 // Raw value of one non-special ball per rarity tier (t19-t23 share 0.1). Tiers are the dex "rarity" rank.
 const RAW_TIER_VALUES = [
@@ -613,7 +612,6 @@ async function buildCollectionSummary(profile, balls, totals = null) {
     let oldestCaughtAt = null;
     let newestCaughtAt = null;
     const catchesByDay = new Map();
-    const recentSpecials = []; // newest first, at most RECENT_SPECIALS
 
     for await (const ball of balls) {
         listed += 1;
@@ -639,16 +637,6 @@ async function buildCollectionSummary(profile, balls, totals = null) {
             };
             current.count += 1;
             specialBallCounts.set(specialBallKey, current);
-        }
-
-        // Bronze/Silver/Gold are awards for owning many balls, not catches
-        if (special && country && ball.caught_at && nonSpecialWorth(ball) === 0) {
-            const time = Date.parse(ball.caught_at);
-            if (Number.isFinite(time) && (recentSpecials.length < RECENT_SPECIALS || time > recentSpecials[recentSpecials.length - 1].time)) {
-                recentSpecials.push({ time, name: country, special, caughtAt: ball.caught_at, selfCaught: Boolean(ball.self_caught) });
-                recentSpecials.sort((a, b) => b.time - a.time);
-                if (recentSpecials.length > RECENT_SPECIALS) recentSpecials.length = RECENT_SPECIALS;
-            }
         }
 
         if (ball.caught_at) {
@@ -731,7 +719,6 @@ async function buildCollectionSummary(profile, balls, totals = null) {
         topCountries: getTopEntries(countryCounts),
         topSpecials: getTopEntries(specialCounts),
         topSpecialBalls,
-        recentSpecials: recentSpecials.map(({ time, ...item }) => item),
     };
 }
 
@@ -1172,10 +1159,15 @@ function ballNameById(ballId) {
     return null;
 }
 
-async function loadRecentCatches(userId) {
+const recentSpecialCatches = new Map(); // user id -> { at, items }
+const recentSpecialLoading = new Map(); // user id -> Promise
+const SPECIAL_SCAN_LIMIT = 50; // newest specials looked at to find RECENT_LIMIT self-caught ones
+
+/** One /me/balls page, newest catch first (`filter`: the API's own filter, e.g. "only_specials"). */
+async function fetchNewestBalls(userId, { limit, filter }) {
     const cred = credentialFor(userId);
     const fetchPage = async (reverse) =>
-        (await ballsdexFetch(cred, "/me/balls", { limit: RECENT_LIMIT, sort: "catch_date", ...(reverse ? { reverse: "true" } : {}) }, { ...INTERACTIVE, retry: false })).data;
+        (await ballsdexFetch(cred, "/me/balls", { limit, sort: "catch_date", ...(filter ? { filter } : {}), ...(reverse ? { reverse: "true" } : {}) }, { ...INTERACTIVE, retry: false })).data;
     let items = getItems(await fetchPage(reverseIsNewest));
     const times = items.map((item) => Date.parse(item.caught_at || "") || 0);
     // Oldest first means catch_date sorts newest first: use it without reverse from now on
@@ -1183,42 +1175,71 @@ async function loadRecentCatches(userId) {
         reverseIsNewest = !reverseIsNewest;
         items = getItems(await fetchPage(reverseIsNewest));
     }
-    const list = items
-        .map((item) => {
-            const ballId = item.ball?.id ?? item.ball_id ?? null;
-            return {
-                name: item.ball?.country || ballNameById(ballId) || null,
-                special: item.special?.name || null,
-                caughtAt: item.caught_at || null,
-                selfCaught: Boolean(item.self_caught),
-            };
-        })
-        .filter((item) => item.name)
-        .sort((a, b) => (Date.parse(b.caughtAt || "") || 0) - (Date.parse(a.caughtAt || "") || 0));
+    return items;
+}
+
+function toRecentItem(item) {
+    const ballId = item.ball?.id ?? item.ball_id ?? null;
+    return {
+        name: item.ball?.country || ballNameById(ballId) || null,
+        special: item.special?.name || null,
+        caughtAt: item.caught_at || null,
+        selfCaught: Boolean(item.self_caught),
+    };
+}
+
+const newestFirst = (a, b) => (Date.parse(b.caughtAt || "") || 0) - (Date.parse(a.caughtAt || "") || 0);
+
+async function loadRecentCatches(userId) {
+    const items = await fetchNewestBalls(userId, { limit: RECENT_LIMIT, filter: "self_caught" });
+    const list = items.map(toRecentItem).filter((item) => item.name).sort(newestFirst);
     recentCatches.set(userId, { at: Date.now(), items: list });
     return list;
 }
 
-/** A player's newest catches for their profile, or null when unavailable. */
-async function getRecentCatches(userId) {
-    userId = String(userId);
-    if (!getGrant(userId)) return null;
-    const cached = recentCatches.get(userId);
-    const stale = !cached || Date.now() - cached.at > RECENT_TTL_MS;
-    if (stale && !recentLoading.has(userId)) {
-        const loading = loadRecentCatches(userId)
-            .catch((error) => {
-                // keep the old list (if any); try again in 5 min, or once the limit is over
-                recentCatches.set(userId, { items: cached?.items ?? null, at: Date.now() - RECENT_TTL_MS + Math.max(60, error.retryAfterSec || 300) * 1000 });
-                return null;
-            })
-            .finally(() => recentLoading.delete(userId));
-        recentLoading.set(userId, loading);
-    }
-    if (cached) return cached.items ? { items: cached.items, updatedAt: new Date(cached.at).toISOString() } : null;
-    const items = await recentLoading.get(userId);
-    return items ? { items, updatedAt: new Date().toISOString() } : null;
+/**
+ * Last special catches: /me/balls with filter=only_specials, newest first; only the ones the player caught
+ * themselves (self_caught: not received in a trade), and no Bronze/Silver/Gold (awards for owning many balls).
+ */
+async function loadRecentSpecialCatches(userId) {
+    const items = await fetchNewestBalls(userId, { limit: SPECIAL_SCAN_LIMIT, filter: "only_specials" });
+    const list = items
+        .filter((item) => item.self_caught && item.special && nonSpecialWorth(item) === 0)
+        .map(toRecentItem)
+        .filter((item) => item.name)
+        .sort(newestFirst)
+        .slice(0, RECENT_LIMIT);
+    recentSpecialCatches.set(userId, { at: Date.now(), items: list });
+    return list;
 }
+
+/** Cached getter for one kind of recent list: { items, updatedAt } or null when unavailable. */
+function recentGetter(cache, loadingMap, load) {
+    return async (userId) => {
+        userId = String(userId);
+        if (!getGrant(userId)) return null;
+        const cached = cache.get(userId);
+        const stale = !cached || Date.now() - cached.at > RECENT_TTL_MS;
+        if (stale && !loadingMap.has(userId)) {
+            const loading = load(userId)
+                .catch((error) => {
+                    // keep the old list (if any); try again in 5 min, or once the limit is over
+                    cache.set(userId, { items: cached?.items ?? null, at: Date.now() - RECENT_TTL_MS + Math.max(60, error.retryAfterSec || 300) * 1000 });
+                    return null;
+                })
+                .finally(() => loadingMap.delete(userId));
+            loadingMap.set(userId, loading);
+        }
+        if (cached) return cached.items ? { items: cached.items, updatedAt: new Date(cached.at).toISOString() } : null;
+        const items = await loadingMap.get(userId);
+        return items ? { items, updatedAt: new Date().toISOString() } : null;
+    };
+}
+
+/** A player's newest catches for their profile, or null when unavailable. */
+const getRecentCatches = recentGetter(recentCatches, recentLoading, loadRecentCatches);
+/** A player's newest self-caught special balls for their profile, or null when unavailable. */
+const getRecentSpecialCatches = recentGetter(recentSpecialCatches, recentSpecialLoading, loadRecentSpecialCatches);
 
 /*
  * Completion (Ballsdex tab + profile): which enabled balls a player owns and which are missing, straight
@@ -1294,8 +1315,11 @@ async function getCompletion(userId, { specialId = null, wait = true, refresh = 
     return completionLoading.get(key);
 }
 
-/** Forget a player's cached last catches (unlinked, or they turned the tile off). */
-const forgetRecentCatches = (userId) => recentCatches.delete(String(userId));
+/** Forget a player's cached last catches and special catches (unlinked, or they turned the tile off). */
+const forgetRecentCatches = (userId) => {
+    recentCatches.delete(String(userId));
+    recentSpecialCatches.delete(String(userId));
+};
 
 function oauthClient() {
     const id = process.env.BALLSDEX_CLIENT_ID;
@@ -2220,6 +2244,7 @@ module.exports = {
     connectOAuth,
     credentialFor,
     getRecentCatches,
+    getRecentSpecialCatches,
     forgetRecentCatches,
     getCompletion,
     isLinked,
