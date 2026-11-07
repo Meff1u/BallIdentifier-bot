@@ -103,7 +103,7 @@ const TYPES = {
     },
     update_dex: {
         label: "Dex updates",
-        description: "New spawn arts and dex data, from the changelog.",
+        description: "New collectibles and dex data, from the changelog.",
         defaults: { enabled: true, dm: false },
     },
     update_site: {

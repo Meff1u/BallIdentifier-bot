@@ -36,7 +36,7 @@ function textInput(id, label, { value, required = false, style = TextInputStyle.
 function buildModal(mode, dexKey, name, client) {
     const dex = KEY_TO_DEX[dexKey];
     const data = client.rarities?.[dexKey] || {};
-    const title = `${mode === "update" ? "Update entry" : "Add entry"} · ${dex}`.slice(0, 45);
+    const title = `${mode === "update" ? "Update collectible" : "Add collectible"} · ${dex}`.slice(0, 45);
     const modal = new ModalBuilder().setCustomId(`dexedit:modal:${mode}:${dexKey}`).setTitle(title);
 
     if (mode === "update") {
@@ -116,7 +116,7 @@ async function handleDexEdit(interaction, client) {
     const id = interaction.customId || "";
     if (!id.startsWith("dexedit:")) return false;
     if (interaction.user.id !== ADMIN_ID) {
-        await interaction.reply({ content: "Only the bot owner can edit dex entries.", flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: "Only the bot owner can edit dex collectibles.", flags: MessageFlags.Ephemeral });
         return true;
     }
     const [, action, ...rest] = id.split(":");

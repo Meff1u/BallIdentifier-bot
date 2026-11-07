@@ -36,11 +36,11 @@ function buildCommand() {
         slashBuilder.addSubcommand((subcommand) =>
             subcommand
                 .setName(toSubcommandName(botName))
-                .setDescription(`Get information about a ${botName} entry.`)
+                .setDescription(`Get information about a ${botName} collectible.`)
                 .addStringOption((option) =>
                     option
                         .setName("name")
-                        .setDescription("Name or ID of entry to get info about.")
+                        .setDescription("Name or ID of collectible to get info about.")
                         .setRequired(true)
                         .setAutocomplete(true),
                 ),
@@ -72,7 +72,7 @@ module.exports = {
 
         if (!rarities) {
             return interaction.reply({
-                content: `Entry **${ballName}** not found in ${dexName}.`,
+                content: `Collectible **${ballName}** not found in ${dexName}.`,
                 flags: MessageFlags.Ephemeral,
             });
         }
@@ -92,7 +92,7 @@ module.exports = {
 
         if (!ballData) {
             return interaction.reply({
-                content: `Entry **${ballName}** not found in ${dexName}.`,
+                content: `Collectible **${ballName}** not found in ${dexName}.`,
                 flags: MessageFlags.Ephemeral,
             });
         }

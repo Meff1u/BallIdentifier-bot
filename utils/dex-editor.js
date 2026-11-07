@@ -273,14 +273,14 @@ function applyLocally(dex, data, hashes) {
 /* ---------- Operations ---------- */
 
 /**
- * Add (no originalName) or update an entry.
+ * Add (no originalName) or update a collectible.
  * @param {object} options
  * @param {string} options.dex           dex name, e.g. "Ballsdex"
  * @param {string} [options.originalName] current name when editing (rename by passing a different name)
  * @param {string} options.name
  * @param {object} options.details       { rarity, artist, id, wave?, common_value?, demand?, cc? }
  * @param {Buffer} [options.image]       new spawn art (required when adding)
- * @param {string} [options.shift]       adding only: "higher" = every entry rarer than the new one moves 1 down,
+ * @param {string} [options.shift]       adding only: "higher" = every collectible rarer than the new one moves 1 down,
  *                                       "same" = the same rarity or rarer moves 1 down, anything else = no change
  * @param {boolean} [options.merge]      editing only: empty details keep their current values
  * @param {string} [options.previousAlt] Ballsdex, new art: optional alt text for the old art in Previous arts
@@ -293,7 +293,7 @@ function saveEntry({ dex, originalName = null, name, details, image = null, shif
     const newName = cleanName(name);
     const oldName = originalName ? cleanName(originalName) : null;
     const isNew = !oldName;
-    if (isNew && !image) throw userError("A new entry needs a spawn art.");
+    if (isNew && !image) throw userError("A new collectible needs a spawn art.");
     const processing = image ? processImage(image) : Promise.resolve(null);
     processing.catch(() => {}); // handled when the queued task awaits it
 
@@ -330,7 +330,7 @@ function saveEntry({ dex, originalName = null, name, details, image = null, shif
                 } else next[other] = e;
             }
             next[newName] = entry;
-            changes.push(`New spawn art: ${newName} (T${entry.rarity})`);
+            changes.push(`New collectible: ${newName} (T${entry.rarity})`);
             if (shifted) {
                 const which = shiftMode === "same" ? `from T${entry.rarity} on` : `rarer than T${entry.rarity}`;
                 changes.push(`${shifted} ball${shifted === 1 ? "" : "s"} ${which} moved one rarity down`);
@@ -403,7 +403,7 @@ function saveEntry({ dex, originalName = null, name, details, image = null, shif
     });
 }
 
-/** Remove an entry, its art, preview and hash. */
+/** Remove a collectible, its art, preview and hash. */
 function deleteEntry({ dex, name, actor = "owner" }) {
     checkDex(dex);
     const target = cleanName(name);

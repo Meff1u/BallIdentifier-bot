@@ -175,7 +175,7 @@ module.exports = {
                     container.addMediaGalleryComponents(
                         new MediaGalleryBuilder().addItems(
                             new MediaGalleryItemBuilder().setURL("attachment://spawn.png").setDescription("Detected Spawn Art"),
-                            new MediaGalleryItemBuilder().setURL("attachment://match.png").setDescription("Best Matching Entry"),
+                            new MediaGalleryItemBuilder().setURL("attachment://match.png").setDescription("Best Matching Collectible"),
                         ),
                     );
 

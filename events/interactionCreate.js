@@ -47,7 +47,7 @@ module.exports = {
             }
         }
 
-        // Dex entry editing from spawn art reports (owner only)
+        // Dex collectible editing from spawn art reports (owner only)
         if ((interaction.isButton() || interaction.isModalSubmit()) && interaction.customId.startsWith("dexedit:")) {
             try {
                 await handleDexEdit(interaction, client);
@@ -191,7 +191,7 @@ module.exports = {
 
                 if (!foundEntry) {
                     return interaction.reply({
-                        content: `No entry found for **${query}**.`,
+                        content: `No collectible found for **${query}**.`,
                         flags: MessageFlags.Ephemeral,
                     });
                 }
@@ -199,7 +199,7 @@ module.exports = {
                 const collectors = Array.isArray(foundEntry.data.collectors) ? foundEntry.data.collectors : [];
                 if (collectors.length === 0) {
                     return interaction.reply({
-                        content: `Entry **${foundEntry.name}** has no collectors.`,
+                        content: `Collectible **${foundEntry.name}** has no collectors.`,
                         flags: MessageFlags.Ephemeral,
                     });
                 }

@@ -815,11 +815,11 @@ app.post("/api/users/:userId/admin/sync/cancel", apiLimiter, verifySignature, re
 });
 
 // Reload dex data (arts, hashes, details) now instead of waiting for the hourly refresh
-// Dex entries (owner, Spawn Arts tab): add / update / remove, committed to the website repo
+// Dex collectibles (owner, Spawn Arts tab): add / update / remove, committed to the website repo
 const dexEditorError = (res, error) => {
     if (error.status) return res.status(error.status).json({ error: error.message });
     client?.logError?.("Dex editor failed", error);
-    return res.status(502).json({ error: error.message.startsWith("GitHub") ? error.message : "Couldn't save the entry. Check the Errors log." });
+    return res.status(502).json({ error: error.message.startsWith("GitHub") ? error.message : "Couldn't save the collectible. Check the Errors log." });
 };
 
 app.post("/api/users/:userId/dex/save", apiLimiter, jsonBody("8mb"), verifySignature, requireOwner, async (req, res) => {

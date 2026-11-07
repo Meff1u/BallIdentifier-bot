@@ -163,7 +163,7 @@ function buildCollectorsView(client, dataKey, selectedBallName, page = 0, sessio
 
     const selectMenu = new StringSelectMenuBuilder()
         .setCustomId(`collectors:${sessionId}:select`)
-        .setPlaceholder("Select an entry")
+        .setPlaceholder("Select a collectible")
         .addOptions(
             pageBalls.map(({ name, data }) => ({
                 label: name,
@@ -176,7 +176,7 @@ function buildCollectorsView(client, dataKey, selectedBallName, page = 0, sessio
     container.addActionRowComponents(new ActionRowBuilder().addComponents(selectMenu));
 
     container.addTextDisplayComponents(
-        new TextDisplayBuilder().setContent(`-# Entries with collectors: ${collectorBalls.length} | Page: ${currentPage + 1}/${pageCount}`),
+        new TextDisplayBuilder().setContent(`-# Collectibles with collectors: ${collectorBalls.length} | Page: ${currentPage + 1}/${pageCount}`),
     );
 
     const searchButton = new ButtonBuilder()
