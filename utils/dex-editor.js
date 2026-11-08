@@ -17,6 +17,11 @@ const FIELD_ORDER = ["rarity", "artist", "wave", "id", "common_value", "demand",
 const PREVIOUS_DEX = "Ballsdex";
 const PREVIOUS_JSON = "assets/jsons/previous-arts.json";
 const previousDir = (name) => `assets/dexes/${PREVIOUS_DEX}/previous/${name}`;
+// Ballsdex "Frame art": a temporary spawn art. The original (art, preview, artist, hash) waits here until it is restored.
+const FRAME_JSON = "assets/jsons/frame-arts.json";
+const frameArt = (name) => `assets/dexes/${PREVIOUS_DEX}/frame-original/${name}.png`;
+const framePreview = (name) => `assets/dexes/${PREVIOUS_DEX}/frame-original/${name}.webp`;
+const ART_TYPES = ["new", "fixed", "frame"]; // New spawn art | Fixed spawn art | Frame art (Ballsdex only)
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
 /** "October 2026": default "until" of a replaced art (the owner can type something else) */
@@ -31,6 +36,13 @@ async function previousFiles(name, base) {
     const list = await gh(`/contents/${encodePath(previousDir(name))}?ref=${base.commitSha}`, { allow404: true });
     return Array.isArray(list) ? list.filter((item) => item.type === "file").map((item) => ({ path: item.path, name: item.name, sha: item.sha })) : [];
 }
+
+/** The collectibles of Ballsdex that have a frame art now: { [name]: { artist, hash } } (read from the repo, so it is always current). */
+async function readFrames(base) {
+    const raw = await gh(`/contents/${encodePath(FRAME_JSON)}?ref=${base.commitSha}`, { raw: true, allow404: true });
+    return { data: raw ? JSON.parse(raw) : {} };
+}
+const serializeFrames = (data) => `${JSON.stringify(data, null, 4)}\n`;
 
 const FIELD_LABELS = { rarity: "rarity", artist: "artist", wave: "wave", id: "ID", common_value: "common value", demand: "demand", cc: "CC" };
 
@@ -284,13 +296,16 @@ function applyLocally(dex, data, hashes) {
  * @param {string} [options.shift]       adding only: "higher" = every collectible rarer than the new one moves 1 down,
  *                                       "same" = the same rarity or rarer moves 1 down, anything else = no change
  * @param {boolean} [options.merge]      editing only: empty details keep their current values
+ * @param {string} [options.artType]     with an image when editing: "new" (default) | "fixed" | "frame" (Ballsdex: temporary art, the original is kept)
  * @param {string} [options.previousAlt] Ballsdex, new art: optional alt text for the old art in Previous arts
  * @param {string} [options.previousUntil] Ballsdex, new art: "used until" of the old art (default: this month and year)
  * @param {string} [options.actor]       who did it, for the commit message
  * @param {string} [options.actorMention] the same person as a Discord mention (<@id>) for the Discord log
  */
-function saveEntry({ dex, originalName = null, name, details, image = null, shift = false, merge = false, previousAlt = "", previousUntil = "", actor = "owner", actorMention = null }) {
+function saveEntry({ dex, originalName = null, name, details, image = null, shift = false, merge = false, previousAlt = "", previousUntil = "", artType = "new", actor = "owner", actorMention = null }) {
     checkDex(dex);
+    const type = ART_TYPES.includes(artType) ? artType : "new";
+    if (image && type === "frame" && dex !== PREVIOUS_DEX) throw userError("Frame art is only for Ballsdex.");
     const newName = cleanName(name);
     const oldName = originalName ? cleanName(originalName) : null;
     const isNew = !oldName;
@@ -317,6 +332,9 @@ function saveEntry({ dex, originalName = null, name, details, image = null, shif
         const sameId = Object.entries(data).find(([other, e]) => other !== oldName && e.id === entry.id);
         if (sameId) throw userError(`ID ${entry.id} is already used by ${sameId[0]}.`, 409);
 
+        const frames = !isNew && dex === PREVIOUS_DEX ? await readFrames(base) : null;
+        const frameActive = Boolean(frames && oldName in frames.data);
+        if (art && frameActive) throw userError(`${oldName} has a frame art. Restore the original art first.`, 409);
         const changes = [];
         const parts = []; // everything changed on this one collectible (update) -> one changelog line (deploy.editLine)
         let next;
@@ -340,7 +358,7 @@ function saveEntry({ dex, originalName = null, name, details, image = null, shif
         } else {
             next = Object.fromEntries(Object.entries(data).map(([other, e]) => (other === oldName ? [newName, entry] : [other, e])));
             if (newName !== oldName) parts.push({ type: "rename", from: oldName });
-            if (art) parts.push({ type: "art" });
+            if (art) parts.push({ type: "art", kind: type });
             parts.push(...describeEdit(before, entry));
             if (!parts.length) throw userError("Nothing changed.");
         }
@@ -367,9 +385,24 @@ function saveEntry({ dex, originalName = null, name, details, image = null, shif
             nextHashes[newName] = art.hash;
             files.push({ path: artPath(newName), buffer: art.png }, { path: previewPath(newName), buffer: art.preview });
         }
+        // Frame art: the current art waits as the original; renaming a collectible with a frame art takes it along
+        if (art && type === "frame") {
+            if (!oldArt || !oldPreview) throw userError(`${oldName} has no current art to keep as the original.`, 409);
+            files.push({ path: frameArt(newName), sha: oldArt }, { path: framePreview(newName), sha: oldPreview });
+            frames.data[newName] = { artist: before.artist ?? null, hash: hashes[oldName] ?? null };
+            files.push({ path: FRAME_JSON, content: serializeFrames(frames.data) });
+        } else if (renamed && frameActive) {
+            const [backupArt, backupPreview] = await Promise.all([fileSha(frameArt(oldName), base), fileSha(framePreview(oldName), base)]);
+            if (backupArt) files.push({ path: frameArt(oldName), remove: true }, { path: frameArt(newName), sha: backupArt });
+            if (backupPreview) files.push({ path: framePreview(oldName), remove: true }, { path: framePreview(newName), sha: backupPreview });
+            frames.data[newName] = frames.data[oldName];
+            delete frames.data[oldName];
+            files.push({ path: FRAME_JSON, content: serializeFrames(frames.data) });
+        }
 
         // Ballsdex Previous arts: the replaced art goes there, and a rename moves the ball's previous arts along
-        if (dex === PREVIOUS_DEX && !isNew && ((art && oldPreview) || renamed)) {
+        const archive = Boolean(art) && type === "new"; // fixed and frame arts don't go to Previous arts
+        if (dex === PREVIOUS_DEX && !isNew && ((archive && oldPreview) || renamed)) {
             const rawPrevious = await readText(PREVIOUS_JSON, base);
             const previous = JSON.parse(rawPrevious);
             const list = [...(previous[oldName] || [])];
@@ -378,7 +411,7 @@ function saveEntry({ dex, originalName = null, name, details, image = null, shif
                     files.push({ path: file.path, remove: true }, { path: `${previousDir(newName)}/${file.name}`, sha: file.sha });
                 }
             }
-            if (art && oldPreview) {
+            if (archive && oldPreview) {
                 const alt = String(previousAlt || "").trim().slice(0, 200);
                 const until = String(previousUntil || "").trim().slice(0, 60) || untilDate();
                 list.push({ artist: before.artist || "Unknown", until, ...(alt ? { alt } : {}) });
@@ -403,6 +436,75 @@ function saveEntry({ dex, originalName = null, name, details, image = null, shif
         applyLocally(dex, next, nextHashes);
         client?.logGeneral?.(`Dex editor (${actorMention || actor}): ${dex} · ${changes.join(" · ")}`);
         return { dex, name: newName, entry: next[newName], shifted, shiftedFrom: shifted ? entry.rarity : null, shiftMode: shifted ? shiftMode : null, changes, commitUrl: commit.html_url || null };
+    });
+}
+
+/** Names of the Ballsdex collectibles that have a frame art now. */
+async function listFrames({ dex }) {
+    checkDex(dex);
+    if (dex !== PREVIOUS_DEX) return { names: [] };
+    const frames = await readFrames(await getBase());
+    return { names: Object.keys(frames.data) };
+}
+
+/**
+ * Ballsdex: puts the original art back. The frame art goes to Previous arts (with an optional alt text and "used until"),
+ * the artist and hash of the original come back too.
+ */
+function restoreFrameArt({ dex, name, previousAlt = "", previousUntil = "", actor = "owner", actorMention = null }) {
+    checkDex(dex);
+    if (dex !== PREVIOUS_DEX) throw userError("Frame art is only for Ballsdex.");
+    const target = cleanName(name);
+    return runExclusive(async () => {
+        const base = await getBase();
+        const dataPath = `assets/jsons/${dex}.json`;
+        const hashPath = `assets/jsons/${dex}Hashes.json`;
+        const [rawData, rawHashes, frames] = await Promise.all([readText(dataPath, base), readText(hashPath, base), readFrames(base)]);
+        const saved = frames.data[target];
+        if (!saved) throw userError(`${target} has no frame art to restore.`, 404);
+        const data = JSON.parse(rawData);
+        const hashes = JSON.parse(rawHashes);
+        if (!(target in data)) throw userError(`${target} isn't in ${dex}.`, 404);
+        const before = data[target];
+        const [backupArt, backupPreview, currentPreview] = await Promise.all([fileSha(frameArt(target), base), fileSha(framePreview(target), base), fileSha(`assets/dexes/${dex}/compressed/${target}.webp`, base)]);
+        if (!backupArt || !backupPreview) throw userError("The saved original art is missing from the repo.", 409);
+
+        const entry = saved.artist ? { ...before, artist: saved.artist } : { ...before };
+        const next = { ...data, [target]: entry };
+        const nextHashes = { ...hashes };
+        if (saved.hash) nextHashes[target] = saved.hash;
+
+        const files = [
+            { path: `assets/dexes/${dex}/${target}.png`, sha: backupArt },
+            { path: `assets/dexes/${dex}/compressed/${target}.webp`, sha: backupPreview },
+            { path: frameArt(target), remove: true },
+            { path: framePreview(target), remove: true },
+        ];
+        const parts = [{ type: "restore" }];
+        // The frame art that was live moves to Previous arts
+        const rawPrevious = await readText(PREVIOUS_JSON, base);
+        const previous = JSON.parse(rawPrevious);
+        const list = [...(previous[target] || [])];
+        if (currentPreview) {
+            const alt = String(previousAlt || "").trim().slice(0, 200);
+            const until = String(previousUntil || "").trim().slice(0, 60) || untilDate();
+            list.push({ artist: before.artist || "Unknown", until, ...(alt ? { alt } : {}) });
+            files.push({ path: `${previousDir(target)}/${list.length}.webp`, sha: currentPreview });
+            previous[target] = list;
+            files.push({ path: PREVIOUS_JSON, content: serializePrevious(sortKeys(previous), rawPrevious) });
+            parts.push({ type: "previous" });
+        }
+        parts.push(...describeEdit(before, entry));
+        delete frames.data[target];
+        files.push({ path: FRAME_JSON, content: serializeFrames(frames.data) });
+        files.push({ path: dataPath, content: serializeDex(next, detectFormat(rawData)) }, { path: hashPath, content: serializeHashes(nextHashes) });
+
+        const changes = [deploy.editLine(target, parts)];
+        const editItems = [{ name: target, line: changes[0], parts }];
+        const commit = await commitFiles(base, files, `${dex}: restore art of ${target} (${actor})`, changes, { changelog: { type: "dex", dex, changes, items: editItems } });
+        applyLocally(dex, next, nextHashes);
+        client?.logGeneral?.(`Dex editor (${actorMention || actor}): ${dex} · ${changes.join(" · ")}`);
+        return { dex, name: target, entry, changes, commitUrl: commit.html_url || null };
     });
 }
 
@@ -434,6 +536,13 @@ function deleteEntry({ dex, name, actor = "owner" }) {
                 files.push({ path: PREVIOUS_JSON, content: serializePrevious(previous, rawPrevious) });
             }
         }
+        if (dex === PREVIOUS_DEX) {
+            const frames = await readFrames(base);
+            if (target in frames.data) {
+                delete frames.data[target];
+                files.push({ path: frameArt(target), remove: true }, { path: framePreview(target), remove: true }, { path: FRAME_JSON, content: serializeFrames(frames.data) });
+            }
+        }
         const changes = [`Removed ${target}`];
         files.push(
             { path: dataPath, content: serializeDex(data, detectFormat(rawData)) },
@@ -454,6 +563,8 @@ module.exports = {
     setClient,
     saveEntry,
     deleteEntry,
+    restoreFrameArt,
+    listFrames,
     cleanDetails,
     // GitHub helpers (also used by utils/dexes.js)
     gh,

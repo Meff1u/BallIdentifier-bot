@@ -824,7 +824,7 @@ const dexEditorError = (res, error) => {
 
 app.post("/api/users/:userId/dex/save", apiLimiter, jsonBody("8mb"), verifySignature, requireOwner, async (req, res) => {
     try {
-        const { dex, originalName, name, details, image, shift, previousAlt, previousUntil } = req.body || {};
+        const { dex, originalName, name, details, image, shift, previousAlt, previousUntil, artType } = req.body || {};
         if (image !== undefined && image !== null && typeof image !== "string") return res.status(400).json({ error: "Invalid image" });
         const result = await dexEditor.saveEntry({
             dex,
@@ -835,9 +835,36 @@ app.post("/api/users/:userId/dex/save", apiLimiter, jsonBody("8mb"), verifySigna
             shift: shift === "same" || shift === "higher" ? shift : null,
             previousAlt: typeof previousAlt === "string" ? previousAlt : "",
             previousUntil: typeof previousUntil === "string" ? previousUntil : "",
+            artType: typeof artType === "string" ? artType : "new",
             actor: "website",
         });
         res.status(200).json(result);
+    } catch (error) {
+        dexEditorError(res, error);
+    }
+});
+
+// Ballsdex frame art: which collectibles have one, and putting the original back
+app.post("/api/users/:userId/dex/frames", apiLimiter, verifySignature, requireOwner, async (req, res) => {
+    try {
+        res.status(200).json(await dexEditor.listFrames({ dex: req.body?.dex }));
+    } catch (error) {
+        dexEditorError(res, error);
+    }
+});
+
+app.post("/api/users/:userId/dex/restore", apiLimiter, verifySignature, requireOwner, async (req, res) => {
+    try {
+        const { dex, name, previousAlt, previousUntil } = req.body || {};
+        res.status(200).json(
+            await dexEditor.restoreFrameArt({
+                dex,
+                name,
+                previousAlt: typeof previousAlt === "string" ? previousAlt : "",
+                previousUntil: typeof previousUntil === "string" ? previousUntil : "",
+                actor: "website",
+            }),
+        );
     } catch (error) {
         dexEditorError(res, error);
     }

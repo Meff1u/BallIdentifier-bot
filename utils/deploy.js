@@ -56,7 +56,8 @@ function status() {
 
 const PART_TEXT = {
     rename: (part) => `renamed from ${part.from}`,
-    art: () => "new spawn art",
+    art: (part) => (part.kind === "fixed" ? "fixed spawn art" : part.kind === "frame" ? "temporary frame art" : "new spawn art"),
+    restore: () => "original spawn art restored",
     previous: () => "the old art moved to Previous arts",
     diff: (part) => `${part.label} ${part.from} → ${part.to}`,
 };
@@ -67,8 +68,22 @@ function editLine(name, parts) {
 }
 
 /** Adds the parts of a later edit: the first "from" stays, the last "to" wins ("rarity T3 → T4" then "T4 → T5" is "T3 → T5"). */
+const ART_RANK = { fixed: 1, frame: 2, new: 3 };
 function mergeParts(into, parts) {
     for (const part of parts) {
+        if (part.type === "restore") {
+            // Frame art and its restore within one deploy cancel out
+            const frame = into.findIndex((item) => item.type === "art" && item.kind === "frame");
+            if (frame >= 0) into.splice(frame, 1);
+            else if (!into.some((item) => item.type === "restore")) into.push({ ...part });
+            continue;
+        }
+        if (part.type === "art") {
+            const art = into.find((item) => item.type === "art");
+            if (!art) into.push({ ...part });
+            else if ((ART_RANK[part.kind] || 3) > (ART_RANK[art.kind] || 3)) art.kind = part.kind;
+            continue;
+        }
         const same = into.find((item) => item.type === part.type && (part.type !== "diff" || item.label === part.label));
         if (!same) into.push({ ...part });
         else if (part.type === "diff") same.to = part.to;
