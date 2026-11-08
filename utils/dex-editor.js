@@ -6,6 +6,7 @@ const deploy = require("./deploy");
 const API = "https://api.github.com";
 const PREVIEW_WIDTH = 200;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const MAX_ARTIST_LENGTH = 500;
 
 // Every dex on the list, turned-off ones too, so a new dex can be filled before it goes live (utils/dexes.js)
 const DEX_KEYS = DEX_KEY_BY_NAME_ALL;
@@ -211,7 +212,9 @@ function cleanDetails(input = {}, existing = {}) {
             }
         } else {
             value = String(value).trim();
-            if (value.length > 100) throw userError(`${FIELD_LABELS[field]} is too long.`);
+            // Artists can be many ("A, B, C & D"), so that field gets more room
+            const max = field === "artist" ? MAX_ARTIST_LENGTH : 100;
+            if (value.length > max) throw userError(`${FIELD_LABELS[field]} is too long (${max} characters max).`);
         }
         out[field] = value;
     }
