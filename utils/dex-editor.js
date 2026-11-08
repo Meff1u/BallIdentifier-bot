@@ -96,7 +96,7 @@ async function fileSha(path, base) {
  * files: [{ path, content } | { path, buffer } | { path, sha } | { path, remove: true }]
  * The website picks the commit up on Deploy; until then it is listed as waiting (utils/deploy.js).
  * details: human-readable changes shown in that list.
- * changelog: { type, dex?, changes } note for changelog.json. While deploys are deferred it waits with the commit and is
+ * changelog: { type, dex?, changes, items? } note for changelog.json. While deploys are deferred it waits with the commit and is
  *   written once per deploy (utils/deploy.js); otherwise it goes into this commit.
  * track: false for commits that must not appear in the deploy list (the changelog commit itself).
  */
@@ -104,7 +104,8 @@ async function commitFiles(base, files, message, details = [], { changelog = nul
     const { branch } = githubConfig();
     const deferred = Boolean(changelog) && deploy.enabled();
     if (changelog && !deferred) {
-        const entry = { timestamp: String(Math.floor(Date.now() / 1000)), ...changelog };
+        const { items, ...note } = changelog; // items only help deploys merge edits of the same collectible
+        const entry = { timestamp: String(Math.floor(Date.now() / 1000)), ...note };
         files = [...files, { path: "changelog.json", content: withChangelog(await readText("changelog.json", base), [entry]) }];
     }
     const tree = await Promise.all(
@@ -232,11 +233,11 @@ async function processImage(buffer) {
 
 const show = (field, value) => (value === undefined ? "none" : field === "rarity" ? `T${value}` : String(value));
 
-function describeEdit(name, before, after) {
-    const diffs = Object.keys(FIELDS)
+/** The changed fields ({ label, from, to }, shown as "rarity T3 → T4"), part of the one changelog line of an edit. */
+function describeEdit(before, after) {
+    return Object.keys(FIELDS)
         .filter((field) => before[field] !== after[field])
-        .map((field) => `${FIELD_LABELS[field]} ${show(field, before[field])} → ${show(field, after[field])}`);
-    return diffs.length ? `${name}: ${diffs.join(", ")}` : null;
+        .map((field) => ({ type: "diff", label: FIELD_LABELS[field], from: show(field, before[field]), to: show(field, after[field]) }));
 }
 
 /** changelog.json with the entries (newest first) added on top. */
@@ -317,6 +318,7 @@ function saveEntry({ dex, originalName = null, name, details, image = null, shif
         if (sameId) throw userError(`ID ${entry.id} is already used by ${sameId[0]}.`, 409);
 
         const changes = [];
+        const parts = []; // everything changed on this one collectible (update) -> one changelog line (deploy.editLine)
         let next;
         let shifted = 0;
         const shiftMode = shift === true ? "same" : shift === "same" || shift === "higher" ? shift : null;
@@ -337,11 +339,10 @@ function saveEntry({ dex, originalName = null, name, details, image = null, shif
             }
         } else {
             next = Object.fromEntries(Object.entries(data).map(([other, e]) => (other === oldName ? [newName, entry] : [other, e])));
-            if (newName !== oldName) changes.push(`${oldName} is now called ${newName}`);
-            if (art) changes.push(`New spawn art for ${newName}`);
-            const edit = describeEdit(newName, before, entry);
-            if (edit) changes.push(edit);
-            if (!changes.length) throw userError("Nothing changed.");
+            if (newName !== oldName) parts.push({ type: "rename", from: oldName });
+            if (art) parts.push({ type: "art" });
+            parts.push(...describeEdit(before, entry));
+            if (!parts.length) throw userError("Nothing changed.");
         }
         if (sorted) next = sortByRarity(next);
 
@@ -382,7 +383,7 @@ function saveEntry({ dex, originalName = null, name, details, image = null, shif
                 const until = String(previousUntil || "").trim().slice(0, 60) || untilDate();
                 list.push({ artist: before.artist || "Unknown", until, ...(alt ? { alt } : {}) });
                 files.push({ path: `${previousDir(newName)}/${list.length}.webp`, sha: oldPreview });
-                changes.push(`The old art of ${newName} is now in Previous arts`);
+                parts.push({ type: "previous" });
             }
             if (list.length) {
                 delete previous[oldName];
@@ -396,7 +397,9 @@ function saveEntry({ dex, originalName = null, name, details, image = null, shif
             { path: hashPath, content: serializeHashes(nextHashes) },
         );
 
-        const commit = await commitFiles(base, files, `${dex}: ${isNew ? "add" : "update"} ${newName} (${actor})`, changes, { changelog: { type: "dex", dex, changes } });
+        const editItems = parts.length ? [{ name: newName, line: deploy.editLine(newName, parts), parts }] : [];
+        if (editItems.length) changes.unshift(editItems[0].line);
+        const commit = await commitFiles(base, files, `${dex}: ${isNew ? "add" : "update"} ${newName} (${actor})`, changes, { changelog: { type: "dex", dex, changes, ...(editItems.length ? { items: editItems } : {}) } });
         applyLocally(dex, next, nextHashes);
         client?.logGeneral?.(`Dex editor (${actorMention || actor}): ${dex} · ${changes.join(" · ")}`);
         return { dex, name: newName, entry: next[newName], shifted, shiftedFrom: shifted ? entry.rarity : null, shiftMode: shifted ? shiftMode : null, changes, commitUrl: commit.html_url || null };

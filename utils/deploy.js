@@ -40,7 +40,7 @@ function userError(message, status = 400) {
 /** Commit message of a bot commit (the marker tells the website's GitHub webhook not to deploy it). */
 const commitMessage = (message) => `${message} ${SKIP_MARKER}`;
 
-/** entry: { title, changes: string[], actor, sha, url, changelog?: { type, dex?, changes } } */
+/** entry: { title, changes: string[], actor, sha, url, changelog?: { type, dex?, changes, items? } } */
 function record(entry) {
     if (!enabled()) return;
     updateData((data) => {
@@ -54,20 +54,75 @@ function status() {
     return { enabled: enabled(), deploying, pending: deploy.pending || [], lastDeployAt: deploy.lastDeployAt || null };
 }
 
-/** Pending changelog notes -> one entry per dex (type "dex") and one for website notes, newest first. */
+const PART_TEXT = {
+    rename: (part) => `renamed from ${part.from}`,
+    art: () => "new spawn art",
+    previous: () => "the old art moved to Previous arts",
+    diff: (part) => `${part.label} ${part.from} → ${part.to}`,
+};
+
+/** One changelog line for everything changed on one collectible in an edit: "Name: new spawn art, artist A → B". */
+function editLine(name, parts) {
+    return `${name}: ${parts.map((part) => PART_TEXT[part.type](part)).join(", ")}`;
+}
+
+/** Adds the parts of a later edit: the first "from" stays, the last "to" wins ("rarity T3 → T4" then "T4 → T5" is "T3 → T5"). */
+function mergeParts(into, parts) {
+    for (const part of parts) {
+        const same = into.find((item) => item.type === part.type && (part.type !== "diff" || item.label === part.label));
+        if (!same) into.push({ ...part });
+        else if (part.type === "diff") same.to = part.to;
+    }
+}
+
+/**
+ * Pending changelog notes -> one entry per dex (type "dex") and one for website notes, newest first.
+ * Edits of the same collectible (note.items) become one line, also across several saves and renames.
+ */
 function mergeChangelog(items) {
     const groups = new Map();
+    const names = new Map(); // group key -> Map(collectible name -> its merged edit)
     for (const item of items) {
         const note = item.changelog;
         if (!note?.changes?.length) continue;
         const type = note.type || "dex";
         const key = `${type}|${note.dex || ""}`;
-        if (!groups.has(key)) groups.set(key, { type, ...(note.dex ? { dex: note.dex } : {}), changes: [] });
+        if (!groups.has(key)) {
+            groups.set(key, { type, ...(note.dex ? { dex: note.dex } : {}), changes: [] });
+            names.set(key, new Map());
+        }
         const group = groups.get(key);
-        for (const line of note.changes) if (!group.changes.includes(line)) group.changes.push(line);
+        const byName = names.get(key);
+        const edits = note.items || [];
+        for (const line of note.changes) if (!edits.some((edit) => edit.line === line) && !group.changes.includes(line)) group.changes.push(line);
+        for (const edit of edits) {
+            const rename = edit.parts.find((part) => part.type === "rename");
+            let merged = rename ? byName.get(rename.from) : null;
+            if (merged) byName.delete(rename.from);
+            else merged = byName.get(edit.name);
+            if (!merged) {
+                merged = { parts: [] };
+                group.changes.push(merged);
+            }
+            merged.name = edit.name;
+            byName.set(edit.name, merged);
+            mergeParts(merged.parts, edit.parts);
+        }
     }
     const now = Math.floor(Date.now() / 1000);
-    return [...groups.values()].map((group, index) => ({ timestamp: String(now - index), ...group }));
+    const lines = (group) =>
+        group.changes
+            .map((line) => {
+                if (typeof line === "string") return line;
+                // Changes that cancel out (artist A → B → A, a rename back) are left out
+                const parts = line.parts.filter((part) => !(part.type === "diff" && part.from === part.to) && !(part.type === "rename" && part.from === line.name));
+                return parts.length ? editLine(line.name, parts) : null;
+            })
+            .filter(Boolean);
+    return [...groups.values()]
+        .map((group) => ({ ...group, changes: lines(group) }))
+        .filter((group) => group.changes.length)
+        .map((group, index) => ({ timestamp: String(now - index), ...group }));
 }
 
 /** The website pulls the repo as it is now; the changes listed so far are then live (in a few seconds). */
@@ -115,4 +170,4 @@ async function trigger() {
     }
 }
 
-module.exports = { setClient, enabled, commitMessage, record, status, trigger, SKIP_MARKER };
+module.exports = { setClient, enabled, commitMessage, editLine, record, status, trigger, SKIP_MARKER };
