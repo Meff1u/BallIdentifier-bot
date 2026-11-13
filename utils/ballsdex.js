@@ -27,7 +27,11 @@ function notePageSize(profile) {
 // v2 launched; read from the headers, never hardcoded). A sync stops when the shared daily quota gets down to
 // this share of it, so the rest of the bot keeps working.
 const IP_DAY_RESERVE_SHARE = 0.2;
-// A sync stopped by the quota keeps its progress and continues by itself once the quota resets
+// A paused sync waits until this share of the daily limit (or what's left of the sync, if less) is free above the reserve
+const IP_RESUME_MIN_SHARE = 0.05;
+const IP_RESUME_FALLBACK_MS = 15 * 60 * 1000; // when the own request log can't tell
+// A sync stopped by the quota keeps its progress and continues by itself as soon as enough requests have come back
+// (the daily limit is a rolling window, see ipQuotaResumeAt), not only after a full reset.
 const PAUSED_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // Sync pacing (see syncPageDelay): pages go as fast as the per-minute limits allow, but part of the bot's
 // shared per-IP minute limit always stays free for everything else, more of it while others are using it.
@@ -275,12 +279,12 @@ function remainingToday(snapshot, name) {
  * Stops a sync before the next page when today's quota runs out: the bot's shared IP keeps
  * IP_DAY_RESERVE requests for everyone else, and the user's own key must have a request left.
  */
-function assertQuota(cred) {
+function assertQuota(cred, pagesLeft = Infinity) {
     const ipDay = unlimitedKeys.has(hashKey(cred)) ? null : viewRateLimits(ipRateLimits)?.limits.find((entry) => entry.name === "ip_day");
     const ipLeft = ipDay ? ipDay.remaining : null;
     if (ipLeft !== null && ipLeft <= Math.ceil(ipDay.limit * IP_DAY_RESERVE_SHARE)) {
         const error = syncError("BallIdentifier has used most of today's Ballsdex API requests.", "QUOTA");
-        error.resumeAt = resetTime(ipRateLimits, "ip_day");
+        error.resumeAt = ipQuotaResumeAt(pagesLeft);
         throw error;
     }
     const keySnapshot = keyRateLimits.get(hashKey(cred));
@@ -290,6 +294,37 @@ function assertQuota(cred) {
         error.resumeAt = resetTime(keySnapshot, "day");
         throw error;
     }
+}
+
+// The bot's own log of Ballsdex requests (ms timestamps, oldest first). The daily limit is a rolling window:
+// each request comes back one window after it was made, so the log shows when budget above the reserve returns.
+const ipRequestLog = [];
+const IP_REQUEST_LOG_MAX = 20000;
+
+function noteIpRequest(cred) {
+    if (unlimitedKeys.has(hashKey(cred))) return; // doesn't count toward the shared IP limit
+    const now = Date.now();
+    ipRequestLog.push(now);
+    while (ipRequestLog.length && (now - ipRequestLog[0] > 25 * 3600 * 1000 || ipRequestLog.length > IP_REQUEST_LOG_MAX)) ipRequestLog.shift();
+}
+
+/**
+ * When a sync stopped by the shared daily limit can go on (ms timestamp): once the requests above the reserve that
+ * the sync needs (`pagesLeft`, but at least a few and at most IP_RESUME_MIN_SHARE of the limit) have come back.
+ * Without enough entries in the log (restart) the check is repeated soon; the next response shows the real state.
+ */
+function ipQuotaResumeAt(pagesLeft = Infinity) {
+    const raw = ipRateLimits?.limits.find((entry) => entry.name === "ip_day");
+    const day = viewRateLimits(ipRateLimits)?.limits.find((entry) => entry.name === "ip_day");
+    if (!raw || !day) return Date.now() + 3600 * 1000;
+    const reserve = Math.ceil(day.limit * IP_DAY_RESERVE_SHARE);
+    const want = Math.min(Math.max(1, pagesLeft), Math.max(1, Math.ceil(day.limit * IP_RESUME_MIN_SHARE)));
+    const missing = Math.max(1, reserve + want - day.remaining); // requests that must come back
+    const windowMs = (raw.windowSec || 86400) * 1000;
+    const now = Date.now();
+    const live = ipRequestLog.filter((time) => now - time < windowMs);
+    if (live.length >= missing) return live[missing - 1] + windowMs + 60 * 1000;
+    return Math.min(resetTime(ipRateLimits, "ip_day"), now + IP_RESUME_FALLBACK_MS);
 }
 
 /** When a limit resets (ms timestamp, with a minute to spare); an hour from now when unknown. */
@@ -458,6 +493,7 @@ async function ballsdexFetch(cred, path, query = {}, { retry = true, maxWaitMs =
             throw apiError(503, { detail: error.name === "TimeoutError" || error.name === "AbortError" ? "timeout" : error.message });
         }
         recordRateLimits(cred, response.headers);
+        noteIpRequest(cred);
         noteLockouts(cred, path, response);
         if (response.ok) {
             if (hasNoRateLimits(response.headers)) unlimitedKeys.add(hashKey(cred));
@@ -614,6 +650,10 @@ async function buildCollectionSummary(profile, balls, totals = null) {
     let oldestCaughtAt = null;
     let newestCaughtAt = null;
     const catchesByDay = new Map();
+    // Self-caught catch times of the last 31 days, per UTC day and ball: [count, totalMs, bestMs].
+    // Catch stats rankings and the profile's Recent catch stats are computed from this (see catch-stats.js).
+    const catchDayCutoff = Date.now() - 31 * 86400000;
+    const catchDayBalls = new Map();
 
     for await (const ball of balls) {
         listed += 1;
@@ -679,6 +719,19 @@ async function buildCollectionSummary(profile, balls, totals = null) {
                     slowestCatch = catchRecord;
                 }
                 timedCatchCount += 1;
+
+                const caughtMs = new Date(ball.caught_at).getTime();
+                if (catchTimeMs > 0 && caughtMs >= catchDayCutoff) {
+                    const day = new Date(caughtMs).toISOString().slice(0, 10);
+                    const dayBalls = catchDayBalls.get(day) || new Map();
+                    const name = ball.ball?.country || "Unknown";
+                    const entry = dayBalls.get(name) || [0, 0, Infinity];
+                    entry[0] += 1;
+                    entry[1] += catchTimeMs;
+                    entry[2] = Math.min(entry[2], catchTimeMs);
+                    dayBalls.set(name, entry);
+                    catchDayBalls.set(day, dayBalls);
+                }
             }
         }
     }
@@ -715,6 +768,7 @@ async function buildCollectionSummary(profile, balls, totals = null) {
         newestCaughtAt,
         mostActiveCatchDay,
         mostActiveCatchCount: mostActiveCatchStats?.count || 0,
+        catchDays: [...catchDayBalls.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([d, dayBalls]) => ({ d, b: [...dayBalls.entries()].map(([name, entry]) => [name, ...entry]) })),
         averageCatchIntervalMs: mostActiveCatchStats?.count > 1
             ? Math.round((mostActiveCatchStats.lastCaughtAt - mostActiveCatchStats.firstCaughtAt) / (mostActiveCatchStats.count - 1))
             : null,
@@ -781,6 +835,16 @@ async function countNonSpecial(balls) {
     return [...counts.values()];
 }
 
+/** Exact number of instances per ball id (a Bronze/Silver/Gold counts as one), for crafting. */
+async function countInstances(balls) {
+    const counts = {};
+    for await (const ball of balls) {
+        const id = ball.ball?.id ?? ball.ball_id;
+        if (id !== undefined && id !== null) counts[id] = (counts[id] || 0) + 1;
+    }
+    return counts;
+}
+
 /** Instances owned per ball id (specials included), for the Ballsdex collector check. */
 async function countOwned(balls) {
     const counts = {};
@@ -790,6 +854,64 @@ async function countOwned(balls) {
         if (id !== undefined && id !== null) counts[id] = (counts[id] || 0) + Math.max(1, nonSpecialWorth(ball));
     }
     return counts;
+}
+
+/*
+ * Crafting (website: Ballsdex -> Crafting), from the last sync. Names are Ballsdex.json names / special names.
+ *   ball recipe     the result is made from one of each ingredient ball (any instance)
+ *   special recipe  the result special is made from `requirements` (special x count) on the same ball
+ */
+const CRAFTING = {
+    kievanRus: { result: "Kievan Rus'", ingredients: ["Novgorod", "Kiev"] },
+    dragon: { result: "Dragon", requirements: [["Blood", 6], ["Candy", 3], ["Skull", 1], ["Wolf", 1]], anchor: "Wolf" },
+};
+
+/**
+ * What the player can craft: Kievan Rus' (ingredient counts) and the Dragon special per ball.
+ * `mode` "wolf" lists the balls they have the anchor special (Wolf) on, "any" every ball with any ingredient;
+ * `ball` shows just that ball. `rarityData` is Ballsdex.json.
+ */
+async function getCrafting(userId, rarityData, { mode = "wolf", ball = null } = {}) {
+    const stored = await getStoredCollection(userId);
+    if (!stored) return { available: false, reason: "NO_DATA" };
+    if (!stored.instanceCounts) return { available: false, reason: "RESYNC" };
+
+    const recipe = CRAFTING.kievanRus;
+    const ingredients = recipe.ingredients.map((name) => {
+        const id = rarityData?.[name]?.id ?? null;
+        return { name, id, owned: id === null ? 0 : stored.instanceCounts[id] || 0 };
+    });
+
+    const dragon = CRAFTING.dragon;
+    const database = await getDatabase();
+    const rows = await database
+        .collection("ballsdexSpecials")
+        .aggregate([{ $match: { user_id: String(userId), special: { $in: dragon.requirements.map(([special]) => special) } } }, { $group: { _id: { name: "$name", special: "$special" }, count: { $sum: 1 } } }])
+        .toArray();
+    const haveByBall = new Map();
+    for (const row of rows) {
+        const have = haveByBall.get(row._id.name) || {};
+        have[row._id.special] = row.count;
+        haveByBall.set(row._id.name, have);
+    }
+    const progress = (name) => {
+        const have = haveByBall.get(name) || {};
+        const items = dragon.requirements.map(([special, need]) => ({ special, need, have: have[special] || 0 }));
+        const done = items.reduce((sum, item) => sum + Math.min(item.have, item.need), 0);
+        const total = items.reduce((sum, item) => sum + item.need, 0);
+        return { ball: name, id: rarityData?.[name]?.id ?? null, items, ratio: done / total, craftable: Math.min(...items.map((item) => Math.floor(item.have / item.need))) };
+    };
+    let balls;
+    if (ball) balls = rarityData?.[ball] ? [progress(ball)] : [];
+    else balls = [...haveByBall.keys()].filter((name) => rarityData?.[name] && (mode === "any" || (haveByBall.get(name)[dragon.anchor] || 0) > 0)).map(progress);
+    balls.sort((a, b) => b.craftable - a.craftable || b.ratio - a.ratio || a.ball.localeCompare(b.ball));
+
+    return {
+        available: true,
+        lastSyncedAt: stored.lastSyncedAt,
+        kievanRus: { result: recipe.result, craftable: Math.min(...ingredients.map((item) => item.owned)), ingredients },
+        dragon: { result: dragon.result, requirements: dragon.requirements.map(([special, need]) => ({ special, need })), mode, ball, balls },
+    };
 }
 
 function rawValueForTier(tier) {
@@ -967,7 +1089,7 @@ function compactBall(ball) {
     };
 }
 
-async function fetchBallsResumable(userId, cred, onPage, shouldStop) {
+async function fetchBallsResumable(userId, cred, onPage, shouldStop, expected = null) {
     const { jobs } = await syncStorage();
     const job = (await jobs.findOne({ _id: userId })) || {};
     let cursor = job.cursor || undefined;
@@ -989,7 +1111,7 @@ async function fetchBallsResumable(userId, cred, onPage, shouldStop) {
             await saving;
             throw new SyncCancelled();
         }
-        assertQuota(cred);
+        assertQuota(cred, expected ? Math.max(1, Math.ceil((expected - fetched) / collectionPageSize)) : Infinity);
         let response;
         try {
             response = await ballsdexFetch(cred, "/me/balls", { limit: collectionPageSize, cursor });
@@ -1037,7 +1159,7 @@ async function syncCollection(discordUserId, cred, onProgress, shouldStop) {
 
 
     onProgress?.({ phase: "balls", fetched: 0, total: expected });
-    const { balls, count } = await fetchBallsResumable(discordUserId, cred, (fetched) => onProgress?.({ phase: "balls", fetched, total: expected }), shouldStop);
+    const { balls, count } = await fetchBallsResumable(discordUserId, cred, (fetched) => onProgress?.({ phase: "balls", fetched, total: expected }), shouldStop, expected);
     if (shouldStop()) throw new SyncCancelled(); // e.g. unlinked while the last page was loading
     onProgress?.({ phase: "saving", fetched: count, total: expected });
     return saveCollection(discordUserId, profile, balls, totals);
@@ -1051,6 +1173,9 @@ async function saveCollection(discordUserId, profile, balls, totals = null, { so
     const specialsCollection = database.collection("ballsdexSpecials");
 
     const summary = await buildCollectionSummary(profile, balls, totals);
+    // Kept next to the summary (not in it): the summary is sent to the website, this is only for catch stats
+    const catchDays = source === "file" ? [] : summary.catchDays;
+    delete summary.catchDays;
     await database.collection("ballsdexFileInstances").deleteMany({ userId: String(discordUserId) });
     if (source === "file") {
         // Ballsdex exports have no favorites, frames or spawn times: leave those stats empty instead of 0
@@ -1070,6 +1195,8 @@ async function saveCollection(discordUserId, profile, balls, totals = null, { so
                 summary,
                 nonSpecial: await countNonSpecial(balls),
                 ownedCounts: await countOwned(balls),
+                instanceCounts: await countInstances(balls),
+                catchDays,
                 ballCount: summary.totalBalls,
                 lastSyncedAt: syncedAt,
             },
@@ -1775,12 +1902,13 @@ function runSync(userId, { resume = null } = {}) {
                     error.resumeAt ||
                     Math.max(cred ? exhaustedResetTime(cred) : 0, error.retryAfterSec ? Date.now() + (error.retryAfterSec + 60) * 1000 : 0) ||
                     Date.now() + 3600 * 1000;
-                const hours = Math.max(1, Math.round((state.resumeAt - Date.now()) / 3600000));
+                const minutes = Math.max(1, Math.round((state.resumeAt - Date.now()) / 60000));
+                const when = minutes < 90 ? `${minutes} min` : `${Math.round(minutes / 60)} h`;
                 const fetched = (state.progress?.fetched || 0).toLocaleString("en-US");
                 getNotifier()
                     .notify(userId, "sync_finished", {
                         title: "Ballsdex sync paused",
-                        body: `${error.reason || error.message} ${fetched} balls are saved; the sync continues by itself in about ${hours} h.`,
+                        body: `${error.reason || error.message} ${fetched} balls are saved; the sync continues by itself in about ${when}.`,
                         link: "/ballsdex",
                         noDm: true, // it continues by itself; the "finished" notification is the one worth a DM
                     })
@@ -2316,6 +2444,7 @@ module.exports = {
     getAllMyBalls,
     getSavedApiKey,
     getStoredCollection,
+    getCrafting,
     removeApiKey,
     syncCollection,
 };

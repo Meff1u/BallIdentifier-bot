@@ -407,30 +407,72 @@ async function getServerRecord(guildId) {
     return best ? { ms: best.ms, userId: best.userId, ball: best.ball, dex: DEX_NAMES[best.dexKey] || best.dexKey, at: best.at || null } : null;
 }
 
-/** Everything about one user: the last 30 / 7 days (from the history) and the permanent records. */
-async function getUserStats(userId) {
-    const { stats } = await collections();
-    const [doc, rows30, rows7] = await Promise.all([stats.findOne({ _id: userId }), windowRows(userId, STATS_DAYS), windowRows(userId, 7)]);
-    return { settings: userSettings(userId), last30: summarizeWindow(rows30), last7: totalsOf(rows7), records: recordsOf(doc) };
+/* ----- From the Ballsdex sync (rankings and the profile's Recent catch stats) ----- */
+
+const SYNC_DEX_KEY = "BD"; // synced collections are Ballsdex only
+
+/** Rows like windowRows(), from the daily aggregates a sync saved: the last `days` calendar days including today. */
+function syncedRows(catchDays, days) {
+    const cutoff = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+    const byBall = new Map();
+    for (const { d, b } of catchDays || []) {
+        if (d <= cutoff) continue;
+        for (const [ball, count, totalMs, bestMs] of b) {
+            const row = byBall.get(ball) || { _id: { dexKey: SYNC_DEX_KEY, ball }, count: 0, totalMs: 0, bestMs: Infinity };
+            row.count += count;
+            row.totalMs += totalMs;
+            row.bestMs = Math.min(row.bestMs, bestMs);
+            byBall.set(ball, row);
+        }
+    }
+    return [...byBall.values()];
 }
 
-/** Rankings of users with public catch stats over the last 30 or 7 days: fastest single catch and best average. */
-async function leaderboard({ period = "30d", guildId = null, limit = 10 } = {}) {
+/**
+ * The last 30 / 7 days from the user's last Ballsdex sync (same shape as getUserStats' last30 / last7), plus when
+ * that sync was. null when they never synced, or synced before catch days were saved (the next sync adds them).
+ */
+async function getSyncedRecent(userId) {
+    const db = await getDatabase();
+    const doc = await db.collection("ballsdexCollections").findOne({ discordUserId: userId }, { projection: { catchDays: 1, lastSyncedAt: 1 } });
+    if (!doc || !Array.isArray(doc.catchDays)) return null;
+    return { last30: summarizeWindow(syncedRows(doc.catchDays, STATS_DAYS)), last7: totalsOf(syncedRows(doc.catchDays, 7)), syncedAt: doc.lastSyncedAt || null };
+}
+
+/**
+ * Everything about one user: the last 30 / 7 days (from their last Ballsdex sync; `synced` false and empty windows
+ * when they have no usable sync yet) and the permanent records (live, from the bot's own tracking).
+ */
+async function getUserStats(userId) {
+    const { stats } = await collections();
+    const [doc, synced] = await Promise.all([stats.findOne({ _id: userId }), getSyncedRecent(userId)]);
+    return {
+        settings: userSettings(userId),
+        synced: Boolean(synced),
+        syncedAt: synced?.syncedAt || null,
+        last30: synced?.last30 || summarizeWindow([]),
+        last7: synced?.last7 || totalsOf([]),
+        records: recordsOf(doc),
+    };
+}
+
+/** Rankings of users with public catch stats over the last 30 or 7 days (from their last Ballsdex sync): fastest single catch and best average. */
+async function leaderboard({ period = "30d", limit = 10 } = {}) {
     if (!Object.hasOwn(PERIODS, period)) period = "30d";
     const ids = publicUserIds();
     const minCount = MIN_FOR_AVERAGE[period];
-    if (!ids.length) return { period, guildId, minCount, fastest: [], average: [] };
-    const { events } = await collections();
-
-    const match = { userId: { $in: ids }, at: { $gte: new Date(Date.now() - PERIODS[period] * 86400000) } };
-    if (guildId) match.guildId = guildId;
-    const rows = (await events.aggregate([{ $match: match }, { $sort: { ms: 1 } }, { $group: { _id: "$userId", count: { $sum: 1 }, avg: { $avg: "$ms" }, best: { $first: "$ms" }, bestBall: { $first: "$ball" } } }]).toArray()).map((row) => ({
-        userId: row._id,
-        count: row.count,
-        averageMs: Math.round(row.avg),
-        bestMs: row.best,
-        best: { ball: row.bestBall },
-    }));
+    if (!ids.length) return { period, minCount, fastest: [], average: [] };
+    // From each person's last Ballsdex sync
+    const db = await getDatabase();
+    const docs = await db.collection("ballsdexCollections").find({ discordUserId: { $in: ids } }, { projection: { discordUserId: 1, catchDays: 1 } }).toArray();
+    const rows = [];
+    for (const doc of docs) {
+        const synced = syncedRows(doc.catchDays, PERIODS[period]);
+        if (!synced.length) continue;
+        const best = synced.reduce((fastest, row) => (row.bestMs < fastest.bestMs ? row : fastest));
+        const count = synced.reduce((sum, row) => sum + row.count, 0);
+        rows.push({ userId: doc.discordUserId, count, averageMs: Math.round(synced.reduce((sum, row) => sum + row.totalMs, 0) / count), bestMs: best.bestMs, best: { ball: best._id.ball } });
+    }
 
     const people = require("./collector-store");
     const withPerson = (row) => {
@@ -446,7 +488,6 @@ async function leaderboard({ period = "30d", guildId = null, limit = 10 } = {}) 
     };
     return {
         period,
-        guildId,
         minCount,
         fastest: [...rows].sort((a, b) => a.bestMs - b.bestMs).slice(0, limit).map(withPerson),
         average: rows.filter((row) => row.count >= minCount).sort((a, b) => a.averageMs - b.averageMs).slice(0, limit).map(withPerson),
@@ -474,6 +515,7 @@ module.exports = {
     userSettings,
     setUserSettings,
     getUserStats,
+    getSyncedRecent,
     getServerRecord,
     leaderboard,
     PERIODS,

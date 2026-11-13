@@ -248,9 +248,9 @@ async function getPublicProfile(userId, { self = false } = {}) {
     const catchSettings = catchStats.userSettings(userId);
     let catches = null;
     if (catchSettings.tracking && (catchSettings.public || self)) {
-        const result = await catchStats.getUserStats(userId).catch(() => null);
-        // Only the last 30 days (Recent Catch Stats); the permanent records are not part of the profile
-        catches = result ? { public: catchSettings.public, last30: result.last30, last7: result.last7 } : { public: catchSettings.public, last30: null };
+        // From the last Ballsdex sync, only the last 30 days (Recent Catch Stats); the permanent records are not part of the profile
+        const result = await catchStats.getSyncedRecent(userId).catch(() => null);
+        catches = result ? { public: catchSettings.public, last30: result.last30, last7: result.last7, syncedAt: result.syncedAt } : { public: catchSettings.public, last30: null };
     }
     return {
         id: userId,
@@ -290,7 +290,7 @@ async function getProfileCard(userId) {
     const catchSettings = catchStats.userSettings(userId);
     let catches = null;
     if (catchSettings.tracking && catchSettings.public) {
-        const last30 = (await catchStats.getUserStats(userId).catch(() => null))?.last30;
+        const last30 = (await catchStats.getSyncedRecent(userId).catch(() => null))?.last30;
         if (last30?.count) catches = { count: last30.count, averageMs: last30.averageMs };
     }
     return {

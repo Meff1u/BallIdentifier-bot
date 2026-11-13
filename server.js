@@ -14,6 +14,7 @@ const {
     needsReconnect,
     unlinkAccount,
     getStoredCollection,
+    getCrafting,
     getSyncState,
     getRateLimits,
     getCompletion,
@@ -654,6 +655,22 @@ app.get("/api/users/:userId/ballsdex/raws", apiLimiter, verifySignature, async (
     }
 });
 
+// Crafting: Kievan Rus' ingredients and Dragon special progress per ball, from the last sync
+app.get("/api/users/:userId/ballsdex/crafting", apiLimiter, verifySignature, async (req, res) => {
+    const { userId } = req.params;
+    if (!isLinked(userId)) return res.status(200).json({ available: false, reason: "NOT_LINKED" });
+    try {
+        const rarityData = client?.rarities?.BD;
+        if (!rarityData) return res.status(503).json({ error: "Dex data is still loading. Try again in a moment." });
+        const mode = req.query.mode === "any" ? "any" : "wolf";
+        const ball = typeof req.query.ball === "string" && req.query.ball ? req.query.ball.slice(0, 100) : null;
+        res.status(200).json(await getCrafting(userId, rarityData, { mode, ball }));
+    } catch (error) {
+        console.error("[API] Crafting failed:", error.message);
+        res.status(503).json({ error: "Collection storage is unavailable right now." });
+    }
+});
+
 // Completion: owned and missing Ballsdex balls (all, or for one special), from /me/completion
 app.get("/api/users/:userId/ballsdex/completion", apiLimiter, verifySignature, async (req, res) => {
     const { userId } = req.params;
@@ -1211,8 +1228,7 @@ const catchError = (res, error, what) => {
 app.get("/api/catch-stats/leaderboard", profileLimiter, verifySignature, async (req, res) => {
     try {
         const period = Object.hasOwn(catchStats.PERIODS, req.query.period) ? req.query.period : "30d";
-        const guildId = /^\d{17,20}$/.test(String(req.query.guildId || "")) ? String(req.query.guildId) : null;
-        res.status(200).json(await catchStats.leaderboard({ period, guildId, limit: 15 }));
+        res.status(200).json(await catchStats.leaderboard({ period, limit: 15 }));
     } catch (error) {
         catchError(res, error, "Catch leaderboard failed");
     }
