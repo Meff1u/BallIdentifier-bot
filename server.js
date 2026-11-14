@@ -25,7 +25,8 @@ const {
     computeRaws,
     getSyncOverview,
     cancelActiveSync,
-    startFastSync,
+    previewFastSync,
+    confirmFastSync,
 } = require("./utils/ballsdex");
 const notifications = require("./utils/notifications");
 const collectorStore = require("./utils/collector-store");
@@ -74,11 +75,15 @@ const contactJson = jsonBody("8kb");
 // Dex settings (catch phrase lists)
 const DEX_SETTINGS_PATH = /^\/api\/users\/\d{17,20}\/admin\/dexes\/(update|delete)$/;
 const dexSettingsJson = jsonBody("16kb");
+// Fast Sync: the whole export file
+const FAST_SYNC_BODY_PATH = /^\/api\/users\/\d{17,20}\/ballsdex\/fast-sync$/;
+const fastSyncJson = jsonBody("17mb");
 app.use((req, res, next) => {
     if (BIG_BODY_PATH.test(req.path)) return next();
     if (PROFILE_BODY_PATH.test(req.path)) return profileJson(req, res, next);
     if (CONTACT_BODY_PATH.test(req.path)) return contactJson(req, res, next);
     if (DEX_SETTINGS_PATH.test(req.path)) return dexSettingsJson(req, res, next);
+    if (FAST_SYNC_BODY_PATH.test(req.path)) return fastSyncJson(req, res, next);
     return smallJson(req, res, next);
 });
 
@@ -617,11 +622,23 @@ app.post("/api/users/:userId/ballsdex/sync", apiLimiter, verifySignature, (req, 
     res.status(202).json({ success: true, sync: getSyncState(userId) });
 });
 
-// Fast Sync: import the /player settings export from its Discord link (downloaded and checked by the bot)
-app.post("/api/users/:userId/ballsdex/fast-sync", apiLimiter, verifySignature, (req, res) => {
+// Fast Sync, step 1: check the dropped export file against the account (nothing is saved yet)
+app.post("/api/users/:userId/ballsdex/fast-sync", apiLimiter, verifySignature, async (req, res) => {
     try {
-        const sync = startFastSync(req.params.userId, { url: req.body?.url });
-        client?.log?.("BALLSDEX", `<@${req.params.userId}> started a Fast Sync from an export link (website)`);
+        const preview = await previewFastSync(req.params.userId, req.body);
+        res.status(200).json({ success: true, preview });
+    } catch (error) {
+        if (error.status) return res.status(error.status).json({ error: error.message, code: error.code, checks: error.checks ?? null, retryAfterSec: error.retryAfterSec ?? null });
+        console.error("[API] Fast Sync check failed:", error);
+        res.status(500).json({ error: "Couldn't check the file. Try again." });
+    }
+});
+
+// Fast Sync, step 2: the user confirmed the preview, save it
+app.post("/api/users/:userId/ballsdex/fast-sync/confirm", apiLimiter, verifySignature, (req, res) => {
+    try {
+        const sync = confirmFastSync(req.params.userId, { token: req.body?.token });
+        client?.log?.("BALLSDEX", `<@${req.params.userId}> confirmed a Fast Sync from an export file (website)`);
         res.status(202).json({ success: true, sync });
     } catch (error) {
         if (error.status) return res.status(error.status).json({ error: error.message, code: error.code, retryAfterSec: error.retryAfterSec ?? null });
@@ -629,7 +646,6 @@ app.post("/api/users/:userId/ballsdex/fast-sync", apiLimiter, verifySignature, (
         res.status(500).json({ error: "Couldn't start the Fast Sync. Try again." });
     }
 });
-
 // Cancel the user's running sync (stops after the current page)
 app.post("/api/users/:userId/ballsdex/cancel", apiLimiter, verifySignature, (req, res) => {
     const { userId } = req.params;

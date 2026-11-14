@@ -1174,13 +1174,16 @@ async function saveCollection(discordUserId, profile, balls, totals = null, { so
 
     const summary = await buildCollectionSummary(profile, balls, totals);
     // Kept next to the summary (not in it): the summary is sent to the website, this is only for catch stats
-    const catchDays = source === "file" ? [] : summary.catchDays;
+    const previous = source === "file" ? await collectionsCollection.findOne({ discordUserId }, { projection: { summary: 1, catchDays: 1 } }) : null;
+    const catchDays = source === "file" ? previous?.catchDays || [] : summary.catchDays;
     delete summary.catchDays;
     await database.collection("ballsdexFileInstances").deleteMany({ userId: String(discordUserId) });
     if (source === "file") {
-        // Ballsdex exports have no favorites, frames or spawn times: leave those stats empty instead of 0
-        for (const key of ["favoriteCount", "frameCount", "timedCatchCount", "fastestCatchMs", "slowestCatchMs", "fastestCatch", "slowestCatch", "averageCatchMs"]) {
-            delete summary[key];
+        // The export has no frames or spawn times: keep the last normal sync's values, or leave them empty instead of 0
+        for (const key of ["frameCount", "timedCatchCount", "fastestCatchMs", "slowestCatchMs", "fastestCatch", "slowestCatch", "averageCatchMs"]) {
+            // not in the file: keep what the last normal sync saved
+            if (previous?.summary?.[key] !== undefined) summary[key] = previous.summary[key];
+            else delete summary[key];
         }
         summary.source = "file";
     }
@@ -2080,28 +2083,27 @@ async function sendDueSyncReminders() {
     }
 }
 
-/* ----- Fast Sync: import the export of Ballsdex's /player settings from its Discord link -----
- * Ballsdex sends player_data.zip (with <discord id>_countryball.csv inside) in the user's DMs. The user pastes
- * that file's link and the bot downloads it from Discord's CDN itself, so it reads exactly what Discord stores.
- * Checks, in order: a cdn.discordapp.com / media.discordapp.net attachment link to player_data.zip, uploaded
- * in the last FAST_SYNC_MAX_AGE_MS (the attachment id is a timestamp); the CSV inside is named with the user's
- * Discord id and every row is consistent (id = hex id, dates, stats, no repeats); then the file is checked
- * against the account with the user's own key: /me, the ball total, and FAST_SYNC_SAMPLES random balls looked
- * up by id. The link alone doesn't prove Ballsdex posted the file (a user can upload into the same DM), so
- * collector claims based on it are checked again per ball (verifyFileBall).
+/* ----- Fast Sync: import the JSON export from ballsdex.com/account (Data & privacy -> JSON) -----
+ * Two steps. 1) The user drops collection-<discord id>-<YYYYMMDD>.json: previewFastSync checks it and keeps it
+ * in memory for FAST_PENDING_MS, nothing is saved yet. The file name must hold the user's Discord id and a
+ * date of today or yesterday (UTC); the browser's "last modified" date must be that day; every item is
+ * validated (hex id, names, stats, dates, no repeats, newest catch not after the file's date). Then it's
+ * checked against the account with the user's own key: /me, the ball total, FAST_SYNC_SAMPLES random balls
+ * looked up by id, and the newest ball (sorted by catch date). 2) The user sees what was read next to what
+ * the last syncs saved and confirms: confirmFastSync saves it (in the background, shown as a sync).
+ * A file alone doesn't prove Ballsdex made it, so collector claims based on it are checked again per ball
+ * (verifyFileBall).
  */
 const FAST_SYNC_COOLDOWN_MS = 30 * 60 * 1000;
-const FAST_SYNC_RETRY_MS = 5 * 60 * 1000; // after a file that didn't pass the checks
-const FAST_SYNC_MAX_ROWS = 3000000;
-const FAST_SYNC_MAX_BYTES = 200 * 1024 * 1024; // the zip
-const FAST_SYNC_MAX_CSV_BYTES = 800 * 1024 * 1024; // the CSV inside it
-const FAST_SYNC_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const FAST_SYNC_RETRY_MS = 5 * 60 * 1000; // after a file that didn't match the account
+const FAST_PENDING_MS = 15 * 60 * 1000;
+const FAST_SYNC_MAX_ROWS = 400000;
+const FAST_SYNC_MAX_CHARS = 16 * 1024 * 1024;
 const FAST_SYNC_SAMPLES = 12;
 const FILE_CHECK_SAMPLES = 10; // per ball, when a collector claim rests on Fast Sync data
-const FAST_SYNC_FILE = /^(\d{17,20})_countryball(?: ?\(\d+\))?\.csv$/i;
-const EXPORT_HEADER = "id,catch_date,health_bonus,attack_bonus,attack,health,hex_id,traded_with,special_card,countryball";
-const DISCORD_EPOCH = 1420070400000n;
+const FAST_SYNC_FILE = /^collection-(\d{17,20})-(\d{4})(\d{2})(\d{2})\.json$/i;
 const catalogCache = { at: 0, balls: null, specials: null };
+const pendingFast = new Map(); // user id -> { token, at, rows, profile, fileName }
 
 function fastCooldownLeftMs(userId) {
     if (userId === ADMIN_ID) return 0;
@@ -2109,8 +2111,8 @@ function fastCooldownLeftMs(userId) {
     return Math.max(0, until - Date.now());
 }
 
-function fastError(message, status = 400, code = "INVALID_FILE") {
-    return Object.assign(new Error(message), { status, code });
+function fastError(message, status = 400, code = "INVALID_FILE", extra = {}) {
+    return Object.assign(new Error(message), { status, code }, extra);
 }
 
 let fileIndexReady = null;
@@ -2141,131 +2143,7 @@ async function getCatalog(cred) {
     return catalogCache;
 }
 
-/** A Discord attachment link to player_data.zip -> { url, uploadedAt }. */
-function parseExportLink(link) {
-    let url;
-    try {
-        url = new URL(String(link || "").trim());
-    } catch {
-        throw fastError("Paste the link of player_data.zip from your DMs with Ballsdex.");
-    }
-    const match = /^\/attachments\/(\d{17,20})\/(\d{17,20})\/player_data\.zip$/i.exec(url.pathname);
-    if (url.protocol !== "https:" || !["cdn.discordapp.com", "media.discordapp.net"].includes(url.hostname) || !match) {
-        throw fastError("That isn't a Discord link to player_data.zip. Right-click the file in your DMs with Ballsdex and choose Copy Link.");
-    }
-    if (!url.searchParams.get("ex") || !url.searchParams.get("hm")) {
-        throw fastError("The link is incomplete. Copy it again from Discord: it ends with ?ex=…&is=…&hm=….");
-    }
-    const uploadedAt = Number((BigInt(match[2]) >> 22n) + DISCORD_EPOCH);
-    return { url: `https://cdn.discordapp.com${url.pathname}${url.search}`, uploadedAt };
-}
-
-async function downloadExport(url) {
-    const response = await fetch(url, { redirect: "error" });
-    if ([403, 404, 410].includes(response.status)) throw fastError("Discord says this link has expired. Copy the file's link again.", 400, "LINK_EXPIRED");
-    if (!response.ok) throw fastError(`Couldn't download the file from Discord (HTTP ${response.status}). Try again in a moment.`, 502, "DOWNLOAD_FAILED");
-    if (Number(response.headers.get("content-length")) > FAST_SYNC_MAX_BYTES) throw fastError("The file is too big.");
-    const buffer = Buffer.from(await response.arrayBuffer());
-    if (buffer.length > FAST_SYNC_MAX_BYTES) throw fastError("The file is too big.");
-    return buffer;
-}
-
-/** player_data.zip -> the text of <userId>_countryball.csv inside it. */
-function unzipExport(zip, userId) {
-    let end = -1;
-    for (let i = zip.length - 22; i >= Math.max(0, zip.length - 65557); i--) {
-        if (zip.readUInt32LE(i) === 0x06054b50) {
-            end = i;
-            break;
-        }
-    }
-    if (end < 0) throw fastError("player_data.zip is damaged. Export it again.");
-    const count = zip.readUInt16LE(end + 10);
-    let offset = zip.readUInt32LE(end + 16);
-    for (let n = 0; n < count && offset + 46 <= zip.length; n++) {
-        if (zip.readUInt32LE(offset) !== 0x02014b50) break;
-        const method = zip.readUInt16LE(offset + 10);
-        const size = zip.readUInt32LE(offset + 20);
-        const unpacked = zip.readUInt32LE(offset + 24);
-        const nameLength = zip.readUInt16LE(offset + 28);
-        const name = zip.toString("utf8", offset + 46, offset + 46 + nameLength).split("/").pop();
-        const local = zip.readUInt32LE(offset + 42);
-        offset += 46 + nameLength + zip.readUInt16LE(offset + 30) + zip.readUInt16LE(offset + 32);
-        const match = FAST_SYNC_FILE.exec(name);
-        if (!match) continue;
-        if (match[1] !== userId) throw fastError("This export belongs to another Discord account.", 403, "WRONG_ACCOUNT");
-        if (unpacked > FAST_SYNC_MAX_CSV_BYTES) throw fastError("The file is too big.");
-        if (zip.readUInt32LE(local) !== 0x04034b50) break;
-        const start = local + 30 + zip.readUInt16LE(local + 26) + zip.readUInt16LE(local + 28);
-        const data = zip.subarray(start, start + size);
-        if (method === 0) return data.toString("utf8");
-        if (method === 8) return zlib.inflateRawSync(data, { maxOutputLength: FAST_SYNC_MAX_CSV_BYTES }).toString("utf8");
-        throw fastError("player_data.zip uses a compression the bot can't read.");
-    }
-    throw fastError(`No ${userId}_countryball.csv in player_data.zip. Is it the export from /player settings?`);
-}
-
-function parseCsvLine(line) {
-    const out = [];
-    let field = "";
-    let quoted = false;
-    for (let i = 0; i < line.length; i++) {
-        const c = line[i];
-        if (quoted) {
-            if (c === '"' && line[i + 1] === '"') {
-                field += '"';
-                i++;
-            } else if (c === '"') quoted = false;
-            else field += c;
-        } else if (c === ",") {
-            out.push(field);
-            field = "";
-        } else if (c === '"' && !field) quoted = true;
-        else field += c;
-    }
-    out.push(field);
-    return out;
-}
-
-/** "2023-05-18 08:03:12.31984+00" -> unix seconds, or NaN */
-function exportDate(value) {
-    const iso = value.trim().replace(" ", "T").replace(/(\.\d{3})\d+/, "$1").replace(/([+-]\d{2})$/, "$1:00");
-    return Math.floor(Date.parse(iso) / 1000);
-}
-
-/** The CSV -> rows [instance id, ball name, special name or "", caught at (unix s), traded 0/1], every row checked. */
-function parseExport(text) {
-    const lines = text.replace(/^﻿/, "").split(/\r?\n/).filter((line) => line.trim());
-    if (lines.length < 2) throw fastError("The export has no balls in it.");
-    if (lines.length - 1 > FAST_SYNC_MAX_ROWS) throw fastError("The export is too big.");
-    if (parseCsvLine(lines[0]).map((name) => name.trim()).join(",") !== EXPORT_HEADER) throw fastError("The file's columns don't match a Ballsdex export.");
-
-    const rows = [];
-    const ids = new Set();
-    const now = Date.now() / 1000;
-    const isInt = (value) => /^-?\d+$/.test(value);
-    for (let i = 1; i < lines.length; i++) {
-        const fields = parseCsvLine(lines[i]);
-        const bad = (what) => fastError(`Row ${i + 1} of the export ${what}.`);
-        if (fields.length !== 10) throw bad("has the wrong number of columns");
-        const [id, catchDate, healthBonus, attackBonus, attack, health, hexId, tradedWith, special, country] = fields;
-        if (!/^\d{1,20}$/.test(id)) throw bad("has an invalid ball id");
-        if (BigInt(id).toString(16).toUpperCase() !== hexId.trim().toUpperCase()) throw bad("has an id that doesn't match its hex id");
-        if (ids.has(id)) throw bad("repeats a ball");
-        const caughtAt = exportDate(catchDate);
-        if (!Number.isFinite(caughtAt) || caughtAt < 1500000000 || caughtAt > now + 86400) throw bad("has an invalid catch date");
-        if (![healthBonus, attackBonus, attack, health].every(isInt) || Math.abs(Number(healthBonus)) > 100 || Math.abs(Number(attackBonus)) > 100) throw bad("has invalid stats");
-        if (tradedWith && !/^\d{17,20}$/.test(tradedWith)) throw bad("has an invalid trade partner");
-        if (!country.trim() || country.length > 100 || special.length > 100) throw bad("has an invalid ball name");
-        ids.add(id);
-        rows.push([id, country, special, caughtAt, tradedWith ? 1 : 0]);
-    }
-    return rows;
-}
-
-/** Download, check and save an export from its Discord link (in the background, shown as a sync). */
-function startFastSync(userId, { url } = {}) {
-    userId = String(userId);
+function assertFastAllowed(userId) {
     if (!getGrant(userId)) {
         throw needsReconnect(userId)
             ? fastError("Sign in with Ballsdex again first: Fast Sync checks the file against your account.", 400, "RECONNECT")
@@ -2274,9 +2152,214 @@ function startFastSync(userId, { url } = {}) {
     if (fastSyncBlocked(userId)) throw fastError("Fast Sync is temporarily disabled by the administrators.", 403, "DISABLED");
     if (syncStates.get(userId)?.inProgress) throw fastError("Your collection is already being synchronized.", 409, "IN_PROGRESS");
     const left = fastCooldownLeftMs(userId);
-    if (left > 0) throw Object.assign(fastError(`You can use Fast Sync again in ${Math.ceil(left / 60000)} min.`, 429, "COOLDOWN"), { retryAfterSec: Math.ceil(left / 1000) });
-    const link = parseExportLink(url);
-    if (Date.now() - link.uploadedAt > FAST_SYNC_MAX_AGE_MS) throw fastError("This export is more than a day old. Run /player settings again and use the new file.", 400, "TOO_OLD");
+    if (left > 0) throw fastError(`You can use Fast Sync again in ${Math.ceil(left / 60000)} min.`, 429, "COOLDOWN", { retryAfterSec: Math.ceil(left / 1000) });
+}
+
+function setFastCooldown(userId, ms, outcome) {
+    updateData((data) => {
+        data.users[userId] ??= {};
+        data.users[userId].ballsdexSync ??= {};
+        const record = data.users[userId].ballsdexSync;
+        record.fastNextAt = new Date(Date.now() + (userId === ADMIN_ID ? 0 : ms)).toISOString();
+        record.lastFastAt = new Date().toISOString();
+        record.lastFastOutcome = outcome;
+        if (outcome === "success") record.lastFinishedAt = record.lastSuccessAt = new Date().toISOString();
+    });
+}
+
+/** The export's JSON -> rows [instance id (decimal), ball, special or "", caught at (unix s), traded 0/1, favorite 0/1], every item checked. */
+function parseExport(text) {
+    let items;
+    try {
+        items = JSON.parse(text);
+    } catch {
+        throw fastError("The file isn't valid JSON. Download it again from ballsdex.com/account.");
+    }
+    if (!Array.isArray(items) || !items.length) throw fastError("The export has no balls in it.");
+    if (items.length > FAST_SYNC_MAX_ROWS) throw fastError("The export is too big.");
+
+    const rows = [];
+    const ids = new Set();
+    const now = Date.now() / 1000;
+    const isInt = (value) => Number.isInteger(value);
+    for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const bad = (what) => fastError(`Item ${i + 1} of the export ${what}.`);
+        if (!item || typeof item !== "object") throw bad("isn't a ball");
+        const { id, countryball, special, attack, health, attack_bonus: attackBonus, health_bonus: healthBonus, caught_at: caughtAtText, obtained, favorite } = item;
+        if (typeof id !== "string" || !/^[0-9a-f]{1,16}$/i.test(id)) throw bad("has an invalid ball id");
+        const decimal = BigInt(`0x${id}`).toString();
+        if (ids.has(decimal)) throw bad("repeats a ball");
+        const caughtAt = Math.floor(Date.parse(caughtAtText) / 1000);
+        if (typeof caughtAtText !== "string" || !Number.isFinite(caughtAt) || caughtAt < 1500000000 || caughtAt > now + 86400) throw bad("has an invalid catch date");
+        if (![attack, health, attackBonus, healthBonus].every(isInt) || Math.abs(attackBonus) > 100 || Math.abs(healthBonus) > 100) throw bad("has invalid stats");
+        if (obtained !== "caught" && obtained !== "traded") throw bad("has an invalid way of obtaining");
+        if (typeof countryball !== "string" || !countryball.trim() || countryball.length > 100) throw bad("has an invalid ball name");
+        if (special !== undefined && special !== null && (typeof special !== "string" || special.length > 100)) throw bad("has an invalid special");
+        ids.add(decimal);
+        rows.push([decimal, countryball, special || "", caughtAt, obtained === "traded" ? 1 : 0, favorite === true ? 1 : 0]);
+    }
+    return rows;
+}
+
+const dayText = (ms) => new Date(ms).toISOString().slice(0, 10);
+
+/** Check a dropped file and keep it for confirmation. Nothing is saved here. */
+async function previewFastSync(userId, { file, fileName, lastModified, tzOffset } = {}) {
+    userId = String(userId);
+    assertFastAllowed(userId);
+    const checks = [];
+    const check = (label, ok, detail = "") => checks.push({ label, ok, detail });
+    const fail = (message, code = "INVALID_FILE") => {
+        throw fastError(message, 400, code, { checks });
+    };
+
+    // 1) the file's name and dates
+    const nameMatch = FAST_SYNC_FILE.exec(String(fileName || "").replace(/ ?\(\d+\)(?=\.json$)/i, ""));
+    if (!nameMatch) fail("The file name should look like collection-<your Discord id>-<date>.json. Download it from ballsdex.com/account.");
+    if (nameMatch[1] !== userId) fail("This export belongs to another Discord account.", "WRONG_ACCOUNT");
+    check("File name has your Discord id", true);
+    const nameDay = `${nameMatch[2]}-${nameMatch[3]}-${nameMatch[4]}`;
+    const today = dayText(Date.now());
+    const yesterday = dayText(Date.now() - 86400000);
+    const fresh = nameDay === today || nameDay === yesterday;
+    check("Export is from today or yesterday", fresh, `File name date: ${nameDay}`);
+    if (!fresh) fail("This export is more than a day old. Download a fresh one from ballsdex.com/account.", "TOO_OLD");
+
+    const modified = Number(lastModified);
+    const offset = Number.isFinite(Number(tzOffset)) ? Math.max(-840, Math.min(840, Number(tzOffset))) : 0;
+    if (!Number.isFinite(modified) || modified <= 0) fail("Couldn't read the file's modification date. Drop the file again.");
+    const modifiedDays = new Set([dayText(modified), dayText(modified - offset * 60000)]);
+    const dateMatches = modifiedDays.has(nameDay) && modified <= Date.now() + 5 * 60000;
+    check("File's modification date matches the date in its name", dateMatches, `Modified: ${[...modifiedDays].join(" / ")}`);
+    if (!dateMatches) fail("The file's modification date doesn't match the date in its name. Use the file as downloaded, without editing or renaming it.", "DATE_MISMATCH");
+
+    // 2) the content
+    if (typeof file !== "string" || file.length > FAST_SYNC_MAX_CHARS) fail("The file is too big.");
+    const rows = parseExport(file);
+    check("Every ball in the file is valid", true, `${rows.length.toLocaleString("en-US")} balls, no repeats`);
+    let newest = 0;
+    let oldest = Infinity;
+    for (const row of rows) {
+        newest = Math.max(newest, row[3]);
+        oldest = Math.min(oldest, row[3]);
+    }
+    const endOfDay = Date.parse(`${nameDay}T23:59:59Z`) / 1000;
+    const timeline = newest <= endOfDay;
+    check("No catch is newer than the file's date", timeline);
+    if (!timeline) fail("The file has catches from after its own date. It was changed.", "FILE_EDITED");
+
+    // 3) against the account
+    const cred = credentialFor(userId);
+    let verdict = null;
+    let profileForSave = null;
+    try {
+        const profile = await ballsdexRequest(cred, "/me");
+        notePageSize(profile);
+        if (profile?.discord_id && String(profile.discord_id) !== userId) throw fastError("Your linked Ballsdex key belongs to another account.", 403);
+
+        const totals = await getPlayerTotals(cred, userId);
+        if (totals) {
+            const accountTotal = listedTotal(totals);
+            const drift = Math.abs(accountTotal - rows.length);
+            const ok = drift <= Math.max(25, rows.length * 0.01);
+            check("Ball total matches your account", ok, `File: ${rows.length.toLocaleString("en-US")}, account: ${accountTotal.toLocaleString("en-US")}`);
+            if (!ok) verdict = "The file has a different number of balls than your account. Download a fresh one and drop it right away.";
+        }
+
+        const byId = new Map(rows.map((row) => [row[0], row]));
+        if (!verdict) {
+            const samples = [...new Set(Array.from({ length: Math.min(FAST_SYNC_SAMPLES, rows.length) }, () => rows[crypto.randomInt(rows.length)]))];
+            let matches = 0;
+            for (const row of samples) {
+                try {
+                    const ball = await ballsdexRequest(cred, `/me/balls/${row[0]}`);
+                    const apiTime = Math.floor(Date.parse(ball?.caught_at || "") / 1000);
+                    if (ball?.ball?.country === row[1] && (ball.special?.name || "") === row[2] && Math.abs(apiTime - row[3]) <= 2) matches += 1;
+                } catch (error) {
+                    if (error.status !== 404 && error.status !== 403) throw error;
+                }
+            }
+            const ok = matches >= samples.length - 1;
+            check("Random balls match your account", ok, `${matches} of ${samples.length}: name, special and catch time`);
+            if (!ok) verdict = "This file doesn't match the balls in your Ballsdex account. Download a fresh one.";
+        }
+
+        if (!verdict) {
+            // the newest ball of the account (sorted by catch date) must be in the file, unless it was caught after the export
+            const [latest] = await fetchNewestBalls(userId, { limit: 1 });
+            const latestTime = latest ? Math.floor(Date.parse(latest.caught_at || "") / 1000) : 0;
+            const inFile = latest && byId.has(String(latest.id));
+            const ok = !latest || inFile || latestTime > newest;
+            check("Latest ball matches your account", ok, inFile ? "Found in the file" : latest && latestTime > newest ? "Caught after the file was made" : "");
+            if (!ok) verdict = "Your newest ball isn't in the file. Download a fresh one.";
+        }
+        profileForSave = profile;
+    } catch (error) {
+        if (error.code === "RATE_LIMITED" && error.retryAfterSec) throw error;
+        if (error.status && !error.checks) throw fastError(error.message, error.status, error.code, { checks, retryAfterSec: error.retryAfterSec });
+        throw error;
+    }
+    if (verdict) {
+        setFastCooldown(userId, FAST_SYNC_RETRY_MS, "failed");
+        fail(verdict, "NO_MATCH");
+    }
+
+    // 4) what was read and what changes
+    let specials = 0;
+    let caught = 0;
+    let favorites = 0;
+    const kinds = new Set();
+    for (const row of rows) {
+        if (row[2]) specials += 1;
+        if (!row[4]) caught += 1;
+        if (row[5]) favorites += 1;
+        kinds.add(row[1]);
+    }
+    const stored = await getStoredCollection(userId);
+    const summary = stored?.summary;
+    const current = summary
+        ? {
+              source: summary.source === "file" ? "Fast Sync" : "sync",
+              syncedAt: stored.lastSyncedAt ? new Date(stored.lastSyncedAt).toISOString() : null,
+              totalBalls: summary.listedBalls ?? summary.totalBalls ?? 0,
+              uniqueBalls: summary.uniqueBalls ?? null,
+              specialCount: summary.specialCount ?? 0,
+              selfCaughtCount: summary.selfCaughtCount ?? null,
+              favoriteCount: summary.favoriteCount ?? null,
+              newestCaughtAt: summary.newestCaughtAt ?? null,
+          }
+        : null;
+    const token = crypto.randomBytes(16).toString("hex");
+    pendingFast.set(userId, { token, at: Date.now(), rows, profile: profileForSave, fileName });
+    return {
+        token,
+        expiresAt: new Date(Date.now() + FAST_PENDING_MS).toISOString(),
+        checks,
+        file: {
+            totalBalls: rows.length,
+            uniqueBalls: kinds.size,
+            specialCount: specials,
+            selfCaughtCount: caught,
+            tradedCount: rows.length - caught,
+            favoriteCount: favorites,
+            oldestCaughtAt: new Date(oldest * 1000).toISOString(),
+            newestCaughtAt: new Date(newest * 1000).toISOString(),
+        },
+        current,
+    };
+}
+
+/** Save the previewed file (in the background, shown as a sync). */
+function confirmFastSync(userId, { token } = {}) {
+    userId = String(userId);
+    assertFastAllowed(userId);
+    const pending = pendingFast.get(userId);
+    if (!pending || pending.token !== token || Date.now() - pending.at > FAST_PENDING_MS) {
+        pendingFast.delete(userId);
+        throw fastError("The check expired. Drop the file again.", 410, "EXPIRED");
+    }
+    pendingFast.delete(userId);
 
     const state = {
         inProgress: true,
@@ -2287,53 +2370,24 @@ function startFastSync(userId, { url } = {}) {
         cancelRequested: false,
         ballCount: null,
         source: "file",
-        progress: { phase: "downloading", fetched: 0, total: null },
+        progress: { phase: "saving", fetched: pending.rows.length, total: pending.rows.length },
     };
     syncStates.set(userId, state);
 
     void (async () => {
         let outcome = "failed";
-        let retryWaitMs = FAST_SYNC_RETRY_MS;
         try {
-            const rows = parseExport(unzipExport(await downloadExport(link.url), userId));
-            state.progress = { phase: "verifying", fetched: rows.length, total: rows.length };
-
-            // Does the file belong to this account and match it now?
             const cred = credentialFor(userId);
-            const profile = await ballsdexRequest(cred, "/me");
-            notePageSize(profile);
-            if (profile?.discord_id && String(profile.discord_id) !== userId) throw fastError("Your linked Ballsdex key belongs to another account.", 403);
-            const totals = await getPlayerTotals(cred, userId);
-            if (totals) {
-                // The export lists every card once, like /me/balls (compressed cards are one row)
-                const accountTotal = listedTotal(totals);
-                const drift = Math.abs(accountTotal - rows.length);
-                if (drift > Math.max(25, rows.length * 0.01)) {
-                    throw fastError(`The export has ${rows.length.toLocaleString("en-US")} balls but your account has ${accountTotal.toLocaleString("en-US")}. Export a fresh one and paste its link right away.`);
-                }
-            }
-            const samples = [...new Set(Array.from({ length: Math.min(FAST_SYNC_SAMPLES, rows.length) }, () => rows[crypto.randomInt(rows.length)]))];
-            let matches = 0;
-            for (const row of samples) {
-                try {
-                    const ball = await ballsdexRequest(cred, `/me/balls/${row[0]}`);
-                    if (ball?.ball?.country === row[1] && (ball.special?.name || "") === row[2]) matches += 1;
-                } catch (error) {
-                    if (error.status !== 404 && error.status !== 403) throw error;
-                }
-            }
-            if (matches < samples.length - 1) throw fastError("This export doesn't match the balls in your Ballsdex account. Export a fresh one with /player settings.");
-
-            state.progress = { phase: "saving", fetched: rows.length, total: rows.length };
             const { balls: ballIds, specials: specialIds } = await getCatalog(cred);
-            const balls = rows.map(([id, country, special, caughtAt, traded]) => ({
+            const balls = pending.rows.map(([id, country, special, caughtAt, traded, favorite]) => ({
                 id,
                 ball: { id: ballIds.get(country.toLowerCase()), country },
                 special: special ? { id: specialIds.get(special.toLowerCase()) ?? special, name: special } : null,
                 self_caught: traded === 0,
+                favorite: favorite === 1,
                 caught_at: new Date(caughtAt * 1000).toISOString(),
             }));
-            const result = await saveCollection(userId, profile, balls, null, { source: "file" });
+            const result = await saveCollection(userId, pending.profile, balls, null, { source: "file" });
             // instance ids per ball, so collector claims can be checked against the API later
             const idsByBall = new Map();
             for (const ball of balls) {
@@ -2357,19 +2411,8 @@ function startFastSync(userId, { url } = {}) {
         } catch (error) {
             if (!error.status) console.error("[BALLSDEX] Fast Sync failed:", error);
             state.error = error.message;
-            // Out of API requests: the next try only makes sense once they're back
-            if (error.code === "RATE_LIMITED" && error.retryAfterSec) retryWaitMs = Math.min(24 * 3600 * 1000, Math.max(FAST_SYNC_RETRY_MS, error.retryAfterSec * 1000));
         } finally {
-            const wait = userId === ADMIN_ID ? 0 : outcome === "success" ? FAST_SYNC_COOLDOWN_MS : retryWaitMs;
-            updateData((data) => {
-                data.users[userId] ??= {};
-                data.users[userId].ballsdexSync ??= {};
-                const record = data.users[userId].ballsdexSync;
-                record.fastNextAt = new Date(Date.now() + wait).toISOString();
-                record.lastFastAt = new Date().toISOString();
-                record.lastFastOutcome = outcome;
-                if (outcome === "success") record.lastFinishedAt = record.lastSuccessAt = new Date().toISOString();
-            });
+            setFastCooldown(userId, outcome === "success" ? FAST_SYNC_COOLDOWN_MS : FAST_SYNC_RETRY_MS, outcome);
             state.inProgress = false;
             state.finishedAt = Date.now();
         }
@@ -2413,7 +2456,8 @@ module.exports = {
     setClient: (client) => (logClient = client),
     SYNC_COOLDOWN_MS,
     verifyFileBall,
-    startFastSync,
+    previewFastSync,
+    confirmFastSync,
     cancelSync,
     computeRaws,
     sendDueSyncReminders,
