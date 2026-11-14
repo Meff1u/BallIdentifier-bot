@@ -628,7 +628,7 @@ app.post("/api/users/:userId/ballsdex/fast-sync", apiLimiter, verifySignature, a
         const preview = await previewFastSync(req.params.userId, req.body);
         res.status(200).json({ success: true, preview });
     } catch (error) {
-        if (error.status) return res.status(error.status).json({ error: error.message, code: error.code, checks: error.checks ?? null, retryAfterSec: error.retryAfterSec ?? null });
+        if (error.status) return res.status(error.status).json({ error: error.message, code: error.code, retryAfterSec: error.retryAfterSec ?? null });
         console.error("[API] Fast Sync check failed:", error);
         res.status(500).json({ error: "Couldn't check the file. Try again." });
     }

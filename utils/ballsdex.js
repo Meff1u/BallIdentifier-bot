@@ -2208,10 +2208,10 @@ const dayText = (ms) => new Date(ms).toISOString().slice(0, 10);
 async function previewFastSync(userId, { file, fileName, lastModified, tzOffset } = {}) {
     userId = String(userId);
     assertFastAllowed(userId);
-    const checks = [];
-    const check = (label, ok, detail = "") => checks.push({ label, ok, detail });
+    // what was checked and which check failed is deliberately not reported back
+    const check = () => {};
     const fail = (message, code = "INVALID_FILE") => {
-        throw fastError(message, 400, code, { checks });
+        throw fastError(message, 400, code);
     };
 
     // 1) the file's name and dates
@@ -2232,7 +2232,7 @@ async function previewFastSync(userId, { file, fileName, lastModified, tzOffset 
     const modifiedDays = new Set([dayText(modified), dayText(modified - offset * 60000)]);
     const dateMatches = modifiedDays.has(nameDay) && modified <= Date.now() + 5 * 60000;
     check("File's modification date matches the date in its name", dateMatches, `Modified: ${[...modifiedDays].join(" / ")}`);
-    if (!dateMatches) fail("The file's modification date doesn't match the date in its name. Use the file as downloaded, without editing or renaming it.", "DATE_MISMATCH");
+    if (!dateMatches) fail("The file didn't pass the verification. Download a fresh one from ballsdex.com/account and drop it without changing it.", "DATE_MISMATCH");
 
     // 2) the content
     if (typeof file !== "string" || file.length > FAST_SYNC_MAX_CHARS) fail("The file is too big.");
@@ -2247,7 +2247,7 @@ async function previewFastSync(userId, { file, fileName, lastModified, tzOffset 
     const endOfDay = Date.parse(`${nameDay}T23:59:59Z`) / 1000;
     const timeline = newest <= endOfDay;
     check("No catch is newer than the file's date", timeline);
-    if (!timeline) fail("The file has catches from after its own date. It was changed.", "FILE_EDITED");
+    if (!timeline) fail("The file didn't pass the verification. Download a fresh one from ballsdex.com/account and drop it without changing it.", "FILE_EDITED");
 
     // 3) against the account
     const cred = credentialFor(userId);
@@ -2264,7 +2264,7 @@ async function previewFastSync(userId, { file, fileName, lastModified, tzOffset 
             const drift = Math.abs(accountTotal - rows.length);
             const ok = drift <= Math.max(25, rows.length * 0.01);
             check("Ball total matches your account", ok, `File: ${rows.length.toLocaleString("en-US")}, account: ${accountTotal.toLocaleString("en-US")}`);
-            if (!ok) verdict = "The file has a different number of balls than your account. Download a fresh one and drop it right away.";
+            if (!ok) verdict = "The file didn't pass the verification. Download a fresh one from ballsdex.com/account and drop it without changing it.";
         }
 
         const byId = new Map(rows.map((row) => [row[0], row]));
@@ -2282,7 +2282,7 @@ async function previewFastSync(userId, { file, fileName, lastModified, tzOffset 
             }
             const ok = matches >= samples.length - 1;
             check("Random balls match your account", ok, `${matches} of ${samples.length}: name, special and catch time`);
-            if (!ok) verdict = "This file doesn't match the balls in your Ballsdex account. Download a fresh one.";
+            if (!ok) verdict = "The file didn't pass the verification. Download a fresh one from ballsdex.com/account and drop it without changing it.";
         }
 
         if (!verdict) {
@@ -2292,12 +2292,12 @@ async function previewFastSync(userId, { file, fileName, lastModified, tzOffset 
             const inFile = latest && byId.has(String(latest.id));
             const ok = !latest || inFile || latestTime > newest;
             check("Latest ball matches your account", ok, inFile ? "Found in the file" : latest && latestTime > newest ? "Caught after the file was made" : "");
-            if (!ok) verdict = "Your newest ball isn't in the file. Download a fresh one.";
+            if (!ok) verdict = "The file didn't pass the verification. Download a fresh one from ballsdex.com/account and drop it without changing it.";
         }
         profileForSave = profile;
     } catch (error) {
         if (error.code === "RATE_LIMITED" && error.retryAfterSec) throw error;
-        if (error.status && !error.checks) throw fastError(error.message, error.status, error.code, { checks, retryAfterSec: error.retryAfterSec });
+        if (error.status && !error.checks) throw fastError(error.message, error.status, error.code, { retryAfterSec: error.retryAfterSec });
         throw error;
     }
     if (verdict) {
@@ -2335,7 +2335,6 @@ async function previewFastSync(userId, { file, fileName, lastModified, tzOffset 
     return {
         token,
         expiresAt: new Date(Date.now() + FAST_PENDING_MS).toISOString(),
-        checks,
         file: {
             totalBalls: rows.length,
             uniqueBalls: kinds.size,
